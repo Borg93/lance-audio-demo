@@ -277,6 +277,120 @@ ds.create_index("frame_embedding", index_type="IVF_HNSW_SQ",
                 num_partitions=256, replace=True)
 ```
 
+## vLLM performance — observed slow embeddings
+
+A single `POST /v1/embeddings` against Qwen3-VL-Embedding-8B takes 100–300 ms
+(plus ~5 ms localhost RTT). For a hybrid search this fires once per query;
+combined with the index search itself, it's the bulk of the visible latency.
+Items below are ordered by impact-per-effort.
+
+### 📋 Switch to **Qwen3-VL-Embedding-2B** (biggest single win)
+
+Qwen ships a 2B-parameter sibling to the 8B model — same architecture, same
+1024-d MRL output space, ~4× faster forward pass, ~4× lower memory.
+Per the Qwen3-VL release page, quality on retrieval benchmarks is within
+1–2 points of 8B for most languages.
+
+Change in `Makefile`:
+
+```diff
+- vllm/vllm-openai:latest --model Qwen/Qwen3-VL-Embedding-8B …
++ vllm/vllm-openai:latest --model Qwen/Qwen3-VL-Embedding-2B …
+```
+
+⚠️ Caveat: re-running `embed-chunks` is required because the embedding
+spaces aren't compatible across model sizes. ~5–7 min instead of 25 min on
+the same hardware (it's faster too).
+
+### 📋 Verify `--enable-prefix-caching` is active (default in v1)
+
+Our chat-template sends the same system instruction every query
+(`"Represent the user's input."`). Prefix caching reuses the KV cache for
+that prefix across queries, saving ~10 ms per call. Should already be on
+in vLLM 0.20+ but worth confirming in the startup log:
+
+```
+INFO  …  enable_prefix_caching=True  …
+```
+
+If for any reason it's not, add `--enable-prefix-caching` to
+`embed-server-docker` in the Makefile.
+
+### 📋 Make the backend's vLLM client async
+
+`backend/app.py` opens an `httpx.Client` (sync) wrapped in a
+`ThreadPoolExecutor`. Each search blocks one FastAPI worker until vLLM
+responds. Two improvements:
+
+1. Switch the embedding HTTP call to `httpx.AsyncClient`. The vLLM call
+   then awaits at the FastAPI event-loop level, freeing the worker to
+   handle other connections concurrently.
+2. For `mode=hybrid` and `mode=all`, fire FTS + vector queries
+   concurrently with `asyncio.gather`. (Already mentioned in the
+   search-perf section above — the same change benefits both.)
+
+Code path: `src/raudio/embeddings.py` `VLLMClient._post_embeddings(...)`.
+Concurrent-batch path (`embed-chunks`) already uses `ThreadPoolExecutor` —
+keep that for the CLI batch case; only swap to async for the per-query
+serving path.
+
+### 📋 Use vLLM's `/metrics` endpoint to find the actual bottleneck
+
+vLLM exposes Prometheus metrics on the same port:
+
+```bash
+curl -s http://127.0.0.1:8001/metrics | grep -E "vllm_(time_to_first_token|e2e_request_latency|gpu_cache_usage)"
+```
+
+Key metrics to watch while running searches:
+- `vllm_e2e_request_latency_seconds_*` — end-to-end per request
+- `vllm_time_to_first_token_seconds_*` — TTFT, dominated by KV-cache miss
+- `vllm_gpu_cache_usage_perc` — should be > 0 if prefix caching helps
+- `vllm_request_queue_time_seconds_*` — queue contention; should be ~0
+  for a single-user demo
+
+If TTFT is much larger than total latency minus a few ms, prefix caching
+isn't being hit. If GPU cache usage stays at 0, prefix caching is off.
+
+### 📋 Make sure the embed server is truly using GPU 2 alone
+
+Earlier in this project the rerank server occasionally landed on the same
+GPU as embed during memory profiling, slowing both. Confirm with:
+
+```bash
+nvidia-smi --query-gpu=index,memory.used --format=csv,noheader
+```
+
+GPU 2 should sit at ~25 GB (model + KV cache); if it's < 18 GB, vLLM is
+under-utilized and `--gpu-memory-utilization 0.85` may not be applying
+correctly inside the container.
+
+### 📋 (Stretch) FP8 quantization
+
+vLLM 0.20+ supports FP8 weight loading on Hopper / Blackwell. If/when an
+FP8 checkpoint of Qwen3-VL-Embedding-2B (or 8B) is published on HF, swap
+in the model and pass `--quantization fp8`. Roughly 2× throughput on
+sm_120 vs bf16, no quality loss for embeddings (which only care about
+the pooled hidden state).
+
+Not actionable today — listed for the future.
+
+### 📋 (Stretch) Run vLLM with `--async-scheduling`
+
+Docs note: *"Specifying `--async-scheduling` improves the overall system
+performance by overlapping scheduling overhead with the decoding process."*
+Default is off in our current container start. Try adding it after other
+items are validated — it can interact poorly with structured output and
+sampling penalties, neither of which we use here.
+
+```diff
+  --max-model-len 8192 \
++ --async-scheduling \
+  --limit-mm-per-prompt.image 1 \
+```
+
+---
+
 ### Quick benchmarking recipe
 
 Before/after any of the above:
