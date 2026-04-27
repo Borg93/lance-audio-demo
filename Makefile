@@ -328,7 +328,10 @@ embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ i
 # Full multimodal indexing chain. Existing `pipeline` runs first, then the
 # three new stages add the multimodal columns + indexes. Resumable: each
 # new stage skips already-populated rows via `WHERE … IS NULL`.
-pipeline-multimodal: pipeline embed-chunks extract-chunk-frames embed-chunk-frames
+pipeline-multimodal: pipeline embed-chunks extract-chunk-frames embed-chunk-frames compact
+
+compact:               ## Compact fragments and rebuild IVF_PQ indexes (run after bulk writes).
+	uv run raudio --db $(DB) compact
 	@echo "── multimodal indexing complete ────────────────────────────────"
 
 dev:                  ## Run backend + frontend together (tmux or two terminals).

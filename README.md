@@ -16,19 +16,32 @@ multimodal search via Qwen3-VL embeddings.
 ```
 input/sv/*.mp4                 ← source videos
         │
-   transcribe                  → output/sv/alignments/*.json   (easytranscriber)
+   transcribe                  → output/sv/alignments/*.json    (easytranscriber)
         │
-   thumbnail                   → thumbnails/{stem}.jpg          (one per doc)
+   thumbnail                   → thumbnails/{stem}.jpg           (one per doc)
         │
-   ingest-full                 → transcripts.lance/             (Lance: chunks + documents)
+   ingest-full                 → transcripts.lance/chunks        (FTS + metadata)
+                                 transcripts.lance/documents     (media blobs)
         │
-   embed-chunks                → chunks.text_embedding          (Qwen3-VL → 1024 dims)
-   extract-chunk-frames        → chunks.frame_blob              (ffmpeg @ chunk.start)
-   embed-chunk-frames          → chunks.frame_embedding         (Qwen3-VL on each frame)
+   embed-chunks                → chunks.text_embedding           (Qwen3-VL → 1024 dims)
+   extract-chunk-frames        → transcripts.lance/chunk_frames  (NEW table, append-only)
+                                   ↳ frame_blob (Blob V2 inline ~50 KB JPEG)
+                                   ↳ frame_mime, frame_width, frame_height
+   embed-chunk-frames          → chunk_frames.frame_embedding    (Qwen3-VL on each frame,
+                                                                  via dataset.add_columns)
         │
    make backend                → FastAPI on :8000 (/api/*)
    make frontend               → SvelteKit + Bun proxy on :3000
 ```
+
+**Why a separate `chunk_frames` table?** Lance 4.0's `merge_insert` crashes its
+encoder when filling blob columns post-hoc on a wide schema with multiple
+extension types (`lance.blob.v2` + `lance.json` + fixed-size-list embedding).
+The Lance file format 2.2 docs explicitly recommend the two-step
+"append + add_columns" pattern for data evolution; we follow it exactly:
+`extract-chunk-frames` writes a new fragment per batch, and
+`embed-chunk-frames` adds the `frame_embedding` column via
+`dataset.add_columns(...)` — no JOIN, no `merge_insert`.
 
 Search modes the API supports:
 
@@ -193,17 +206,31 @@ backend  →  documents table → media_blob (Blob V2 External URI → MP4 on di
 ## Inspect the dataset directly
 
 ```bash
+# chunks table (text + metadata)
 uv run python -c "
 import lancedb
 t = lancedb.connect('./transcripts.lance').open_table('chunks')
-print('rows           :', t.count_rows())
-print('text emb null  :', t.count_rows('text_embedding IS NULL'))
-print('frame mime null:', t.count_rows('frame_mime IS NULL'))
-print('frame emb null :', t.count_rows('frame_embedding IS NULL'))
+print('chunks rows         :', t.count_rows())
+print('text_embedding NULL :', t.count_rows('text_embedding IS NULL'))
+"
+
+# chunk_frames table (per-chunk JPEG + frame embedding, NEW since Phase 2 v2)
+uv run python -c "
+import lance, pathlib
+p = pathlib.Path('./transcripts.lance/chunk_frames.lance')
+if not p.exists():
+    print('chunk_frames not yet created — run extract-chunk-frames first.')
+else:
+    ds = lance.dataset(str(p))
+    print('chunk_frames rows :', ds.count_rows())
+    print('schema cols       :', ds.schema.names)
+    print('has frame_embedding:', 'frame_embedding' in ds.schema.names)
 "
 ```
 
-(`frame_mime` is the safe NULL sentinel — Lance 4.0 panics on `IS NULL` against `lance.blob.v2` columns.)
+(Note: Lance 4.0 panics on `IS NULL` against `lance.blob.v2` columns. We avoid
+the issue entirely by making `chunk_frames` append-only — no nullable blob
+column to query against.)
 
 ---
 

@@ -218,6 +218,22 @@ def create_app(db_path: str | Path) -> FastAPI:
     if "documents" in names:
         docs_ds = lance.dataset(str(db_path / "documents.lance"))
 
+    # `chunk_frames` is the post-Phase-2 home for per-chunk video frames
+    # (separate from `chunks` because Lance 4.0 merge_insert crashes on the
+    # wide chunks schema). Optional — only present after `extract-chunk-frames`.
+    chunk_frames_ds = None
+    chunk_frames_tbl = None
+    chunk_frames_path = db_path / "chunk_frames.lance"
+    if chunk_frames_path.exists():
+        chunk_frames_ds = lance.dataset(str(chunk_frames_path))
+        if "chunk_frames" in names:
+            chunk_frames_tbl = db.open_table("chunk_frames")
+        logger.info(
+            "opened chunk_frames (%d row(s); has_embeddings=%s)",
+            chunk_frames_ds.count_rows(),
+            "frame_embedding" in chunk_frames_ds.schema.names,
+        )
+
     # Lazy-init container for the embedding client. We don't connect at
     # startup so the API stays usable for FTS-only workflows even when
     # vLLM isn't running. First semantic-mode call will try to connect
@@ -362,8 +378,47 @@ def create_app(db_path: str | Path) -> FastAPI:
     # ── /api/chunk-frame/:doc_id/:speech_id/:chunk_id ────────────────────
     @app.get("/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}")
     def chunk_frame(doc_id: str, speech_id: int, chunk_id: int) -> Response:
-        """Per-chunk representative frame, captured at chunk.start."""
+        """Per-chunk representative frame, captured at chunk.start.
+
+        Reads from the new `chunk_frames` table if present; falls back to
+        the legacy `chunks.frame_blob` column for older datasets.
+        """
         _valid_doc_id(doc_id)
+
+        if chunk_frames_ds is not None:
+            # Filter chunk_frames directly by composite key. Row IDs aren't
+            # stable across appends here, so we look up via `with_row_id=True`
+            # then `take_blobs(ids=[…])`.
+            keyed = chunk_frames_ds.to_table(
+                columns=["frame_mime"],
+                filter=(
+                    f"doc_id = '{doc_id}' AND speech_id = {int(speech_id)} "
+                    f"AND chunk_id = {int(chunk_id)}"
+                ),
+                with_row_id=True,
+                limit=1,
+            )
+            if keyed.num_rows == 0:
+                raise HTTPException(status_code=404, detail="frame not extracted yet")
+            rowid = keyed.column("_rowid")[0].as_py()
+            mime = "image/jpeg"
+            if keyed.column("frame_mime")[0].is_valid:
+                mime = keyed.column("frame_mime")[0].as_py()
+            try:
+                blob = chunk_frames_ds.take_blobs("frame_blob", ids=[rowid])[0]
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(status_code=404, detail=f"no frame: {e}")
+            with blob as f:
+                data = f.read()
+            if not data:
+                raise HTTPException(status_code=404, detail="frame body empty")
+            return Response(
+                content=data,
+                media_type=mime,
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+
+        # Legacy fallback: read from chunks.frame_blob (pre-Phase-2-v2 datasets).
         idx = _index_for_chunk(chunks_ds, doc_id, speech_id, chunk_id)
         if idx is None:
             raise HTTPException(status_code=404, detail="chunk not found")
@@ -375,7 +430,6 @@ def create_app(db_path: str | Path) -> FastAPI:
             data = f.read()
         if not data:
             raise HTTPException(status_code=404, detail="frame not extracted yet")
-        # frame_mime is a per-row column; cheap second probe.
         mime_row = chunks_ds.to_table(
             columns=["frame_mime"],
             filter=(

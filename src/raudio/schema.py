@@ -152,3 +152,37 @@ DOC_SCHEMA: pa.Schema = pa.schema(
 
 #: Lance file format version required for Blob V2.
 DOC_STORAGE_VERSION: str = "2.2"
+
+
+# ─────────────────────── Chunk-frames table (Phase 2 v2) ────────────────────
+# A NEW separate table, keyed by (doc_id, speech_id, chunk_id), built via
+# append-only writes during `extract-chunk-frames`. We keep it separate from
+# `chunks` because Lance 4.0's `merge_insert` crashes on wide schemas with
+# multiple extension types when filling blob columns post-hoc:
+#   `Invalid user input: there were more fields in the schema than provided
+#    column indices / infos` (decoder.rs:438) — confirmed at row counts 1,
+#   100, and 145k. Lance docs explicitly recommend a separate table + append
+#   for "data evolution"-style workloads (Lance file format 2.2 docs):
+#   "Adding a column with backfilled data writes new data alongside existing
+#    files; the original data is never touched."
+#
+# The frame_embedding column is added later via `dataset.add_columns(...)`
+# from the embed-chunk-frames step — also append-only at the column level,
+# bypasses the merge_insert join entirely.
+CHUNK_FRAMES_SCHEMA: pa.Schema = pa.schema(
+    [
+        pa.field("doc_id", pa.string(), nullable=False),
+        pa.field("speech_id", pa.int32(), nullable=False),
+        pa.field("chunk_id", pa.int32(), nullable=False),
+        # ~50 KB JPEG → goes into Blob V2 Inline tier (≤64 KB threshold)
+        # per the file format 2.2 spec. Read via `ds.take_blobs("frame_blob")`.
+        blob_field("frame_blob", nullable=False),
+        pa.field("frame_mime", pa.string(), nullable=False),
+        pa.field("frame_width", pa.int32(), nullable=False),
+        pa.field("frame_height", pa.int32(), nullable=False),
+    ]
+)
+
+
+#: Lance file format version required for chunk_frames (blob_field).
+CHUNK_FRAMES_STORAGE_VERSION: str = "2.2"

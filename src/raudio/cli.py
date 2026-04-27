@@ -547,12 +547,22 @@ def cmd_extract_chunk_frames(
             ),
         ),
     ] = 0,
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            help="Debug: extract only the first N chunks (0 = no limit).",
+        ),
+    ] = 0,
 ) -> None:
-    """Extract one JPEG per chunk at chunk.start → `chunks.frame_blob`.
+    """Extract one JPEG per chunk at chunk.start → `chunk_frames.lance` (NEW table).
 
-    Resumable: only rows where `frame_blob IS NULL` are processed.
-    Failed extractions are logged to stderr and skipped (the row stays NULL).
+    Per the Lance 2.2 docs (Blob v2 + data evolution), this writes a separate
+    append-only `chunk_frames` table keyed by (doc_id, speech_id, chunk_id).
+    No `merge_insert` against the wide `chunks` schema (which crashes the
+    decoder in Lance 4.0). Resumable via key dedup against existing rows.
     """
+    import lance
     import lancedb
     import pyarrow as pa
     from lance import blob_array
@@ -560,28 +570,57 @@ def cmd_extract_chunk_frames(
 
     from .audio import resolve_source
     from .frames import extract_chunk_frames_parallel
+    from .schema import CHUNK_FRAMES_SCHEMA, CHUNK_FRAMES_STORAGE_VERSION
 
     db = lancedb.connect(str(_Ctx.db))
     if _Ctx.table not in db.table_names():
         raise typer.Exit(f"Table '{_Ctx.table}' not found in {_Ctx.db}.")
-    table = db.open_table(_Ctx.table)
+    chunks_tbl = db.open_table(_Ctx.table)
 
-    # Lance 4.0 panics on `IS NULL` against lance.blob.v2 columns. Filter on
-    # `frame_mime` (regular string, populated atomically with frame_blob) instead.
-    where = "frame_mime IS NULL" if only_null else None
-    total = table.count_rows(filter=where) if where else table.count_rows()
-    if total == 0:
-        typer.echo("Nothing to extract (all rows already have frame_blob).", err=True)
+    frames_path = _Ctx.db / "chunk_frames.lance"
+    frames_table_name = "chunk_frames"
+    frames_exists = frames_table_name in db.table_names()
+
+    # Build the set of already-extracted (doc_id, speech_id, chunk_id) keys
+    # so we can skip them on resume. Cheap: ~4 MB for 145k keys.
+    existing_keys: set[tuple[str, int, int]] = set()
+    if frames_exists and only_null:
+        ds = lance.dataset(str(frames_path))
+        if ds.count_rows() > 0:
+            tbl = ds.to_table(columns=["doc_id", "speech_id", "chunk_id"])
+            existing_keys = {
+                (d, int(s), int(c))
+                for d, s, c in zip(
+                    tbl["doc_id"].to_pylist(),
+                    tbl["speech_id"].to_pylist(),
+                    tbl["chunk_id"].to_pylist(),
+                )
+            }
+            typer.echo(
+                f"  {len(existing_keys):,} chunk(s) already have frames in {frames_table_name}.",
+                err=True,
+            )
+
+    # Source rows come from the chunks table (we just need the keys + start time).
+    cursor = chunks_tbl.search().select(["doc_id", "speech_id", "chunk_id", "audio_path", "start"])
+    rows = cursor.limit(chunks_tbl.count_rows()).to_list()
+    if existing_keys:
+        rows = [
+            r for r in rows
+            if (r["doc_id"], int(r["speech_id"]), int(r["chunk_id"])) not in existing_keys
+        ]
+    if limit > 0:
+        rows = rows[:limit]
+        typer.echo(f"  --limit {limit} → restricting to first {len(rows)} chunk(s).", err=True)
+
+    if not rows:
+        typer.echo("Nothing to extract.", err=True)
         return
+
     typer.echo(
-        f"Extracting frames for {total} chunk(s) from {audio_root} (jobs={jobs}).",
+        f"Extracting frames for {len(rows)} chunk(s) from {audio_root} (jobs={jobs}).",
         err=True,
     )
-
-    cursor = table.search().select(["doc_id", "speech_id", "chunk_id", "audio_path", "start"])
-    if where:
-        cursor = cursor.where(where, prefilter=False)
-    rows = cursor.limit(total).to_list()
 
     # Resolve source path once per audio_path.
     src_cache: dict[str, Path | None] = {}
@@ -604,16 +643,19 @@ def cmd_extract_chunk_frames(
         return
 
     pbar = tqdm(total=len(work), unit="frame", smoothing=0.05)
-    pending: list = []  # buffer ExtractedFrame results before a merge_insert
+    pending: list = []
     n_ok = 0
     n_fail = 0
 
+    # Append-only flush — `lance.write_dataset(mode="append")` adds new rows
+    # without touching existing ones. No JOIN, no schema realignment, no
+    # decoder bugs. Each call writes one or more new fragments.
     def _flush(buf: list) -> None:
-        nonlocal n_ok
+        nonlocal n_ok, frames_exists
         good = [f for f in buf if f.jpeg_bytes]
         if not good:
             return
-        update = pa.table(
+        new_rows = pa.table(
             {
                 "doc_id":       pa.array([f.doc_id for f in good], pa.string()),
                 "speech_id":    pa.array([f.speech_id for f in good], pa.int32()),
@@ -622,37 +664,41 @@ def cmd_extract_chunk_frames(
                 "frame_mime":   pa.array(["image/jpeg"] * len(good), pa.string()),
                 "frame_width":  pa.array([f.width for f in good], pa.int32()),
                 "frame_height": pa.array([f.height for f in good], pa.int32()),
-            }
+            },
+            schema=CHUNK_FRAMES_SCHEMA,
         )
-        (
-            table.merge_insert(["doc_id", "speech_id", "chunk_id"])
-            .when_matched_update_all()
-            .execute(update)
+        mode = "append" if frames_exists else "overwrite"
+        lance.write_dataset(
+            new_rows,
+            str(frames_path),
+            mode=mode,
+            data_storage_version=CHUNK_FRAMES_STORAGE_VERSION,
         )
+        frames_exists = True
         n_ok += len(good)
 
+    # batch_size default 0 here means: flush every 2000 frames during extraction.
+    # Append is cheap (~100 ms per call), so we don't risk losing 30+ min of
+    # work to a crash mid-flush like with merge_insert.
+    APPEND_BATCH = batch_size if batch_size > 0 else 2000
     for frame in extract_chunk_frames_parallel(
         work, width=width, jpeg_quality=jpeg_quality, timeout=timeout, jobs=jobs,
     ):
         if frame.error:
             n_fail += 1
             if n_fail <= 5:
-                typer.echo(f"  ffmpeg failed: {frame.doc_id}@{frame.time_sec:.2f}s — {frame.error}", err=True)
+                typer.echo(
+                    f"  ffmpeg failed: {frame.doc_id}@{frame.time_sec:.2f}s — {frame.error}",
+                    err=True,
+                )
         pending.append(frame)
-        # batch_size==0 means accumulate everything and flush once at the end —
-        # avoids re-rewriting the same multi-GB fragments per batch.
-        if batch_size > 0 and len(pending) >= batch_size:
+        if len(pending) >= APPEND_BATCH:
             _flush(pending)
             pending = []
         pbar.update(1)
-    pbar.close()
     if pending:
-        typer.echo(
-            f"Writing {len(pending):,} frames to Lance via single merge_insert "
-            f"(this may take several minutes on a large table)…",
-            err=True,
-        )
         _flush(pending)
+    pbar.close()
     typer.echo(f"  ok={n_ok}  failed={n_fail}", err=True)
 
 
@@ -666,80 +712,96 @@ def cmd_embed_chunk_frames(
     num_partitions: Annotated[int, typer.Option("--num-partitions")] = 256,
     num_sub_vectors: Annotated[int, typer.Option("--num-sub-vectors")] = 64,
 ) -> None:
-    """Embed each chunk's frame → `chunks.frame_embedding` (Qwen3-VL, MRL=1024).
+    """Embed each chunk's frame → `chunk_frames.frame_embedding` (Qwen3-VL, MRL=1024).
 
-    Reads `frame_blob` for chunks where the frame exists but no embedding
-    has been computed yet. Resumable; builds IVF_PQ cosine index on completion.
+    Reads from the new `chunk_frames` table written by `extract-chunk-frames`.
+    Computes 1024-d vectors for every row in dataset order, then attaches them
+    via `dataset.add_columns(...)` — the Lance-idiomatic "data evolution"
+    path that bypasses merge_insert entirely.
     """
-    import io
-
     import lance
     import lancedb
+    import numpy as np
     import pyarrow as pa
     from tqdm import tqdm
 
     from .embeddings import make_client
 
-    db = lancedb.connect(str(_Ctx.db))
-    if _Ctx.table not in db.table_names():
-        raise typer.Exit(f"Table '{_Ctx.table}' not found in {_Ctx.db}.")
-    table = db.open_table(_Ctx.table)
+    frames_path = _Ctx.db / "chunk_frames.lance"
+    if not frames_path.exists():
+        raise typer.Exit(
+            f"chunk_frames table missing at {frames_path}. "
+            "Run `raudio extract-chunk-frames` first."
+        )
+    ds = lance.dataset(str(frames_path))
 
-    # We need raw lance.LanceDataset for take_blobs() — chunks lives at
-    # <db>/<table>.lance/.
-    ds = lance.dataset(str(_Ctx.db / f"{_Ctx.table}.lance"))
-
-    # Lance 4.0 panics on `IS [NOT] NULL` against lance.blob.v2 columns.
-    # `frame_mime` is the sibling regular string column populated atomically
-    # with frame_blob, so it's a safe proxy for "has a frame".
-    if only_null:
-        where = "frame_embedding IS NULL AND frame_mime IS NOT NULL"
-    else:
-        where = "frame_mime IS NOT NULL"
-    total = table.count_rows(filter=where)
-    if total == 0:
-        typer.echo("Nothing to embed (no chunks have frame_blob without frame_embedding).", err=True)
-        if create_index:
-            _ensure_vector_index(table, "frame_embedding", num_partitions, num_sub_vectors)
+    # If frame_embedding already exists, we're done (this is a one-shot op).
+    if "frame_embedding" in ds.schema.names and only_null:
+        typer.echo(
+            "frame_embedding column already exists in chunk_frames — nothing to do. "
+            "(Pass --all to overwrite.)",
+            err=True,
+        )
         return
-    typer.echo(f"Embedding {total} frame(s) via {backend} at {embed_url}.", err=True)
+
+    total = ds.count_rows()
+    typer.echo(
+        f"Embedding {total} frame(s) via {backend} at {embed_url}.",
+        err=True,
+    )
 
     client = make_client(backend=backend, embed_url=embed_url)
 
-    # We use take_blobs() against the raw dataset, so we need _rowid for
-    # the rows that match `where`. lancedb's Table doesn't expose row ids
-    # directly, but `lance.LanceDataset.to_table(..., with_row_id=True)`
-    # does — and the filter syntax is the same.
-    keyed = ds.to_table(
-        columns=["doc_id", "speech_id", "chunk_id"],
-        filter=where,
-        with_row_id=True,
-    )
-    rowids = keyed.column("_rowid").to_pylist()
-    doc_ids = keyed.column("doc_id").to_pylist()
-    speech_ids = keyed.column("speech_id").to_pylist()
-    chunk_ids = keyed.column("chunk_id").to_pylist()
-
-    pbar = tqdm(total=len(rowids), unit="frame", smoothing=0.05)
-    for start in range(0, len(rowids), batch_size):
-        end = start + batch_size
-        batch_rowids = rowids[start : end]
+    # Stream frames in dataset order, embed in batches, accumulate vectors.
+    # `add_columns` will then write a column aligned with existing row order.
+    all_vectors = np.zeros((total, 1024), dtype=np.float32)
+    pbar = tqdm(total=total, unit="frame", smoothing=0.05)
+    cursor = 0
+    # Fetch _rowid + frame_blob in scan order, embed, place into all_vectors.
+    for batch in ds.to_batches(columns=[], with_row_id=True, batch_size=batch_size):
+        rowids = batch.column("_rowid").to_pylist()
         jpeg_bytes_list: list[bytes] = []
-        for b in ds.take_blobs("frame_blob", indices=batch_rowids):
+        for b in ds.take_blobs("frame_blob", ids=rowids):
             with b as f:
                 jpeg_bytes_list.append(f.read())
         vectors = client.embed_image(jpeg_bytes_list)
-        _merge_insert_vectors(
-            table,
-            keys=list(zip(doc_ids[start:end], speech_ids[start:end], chunk_ids[start:end])),
-            column="frame_embedding",
-            vectors=vectors,
-        )
-        pbar.update(len(batch_rowids))
+        all_vectors[cursor : cursor + len(rowids)] = vectors
+        cursor += len(rowids)
+        pbar.update(len(rowids))
     pbar.close()
 
+    typer.echo(
+        f"Attaching frame_embedding column ({total} × 1024 float32) via add_columns…",
+        err=True,
+    )
+
+    # Build an Arrow column aligned with the dataset's row order.
+    # We pass a callable + read_columns=[] so Lance streams fragment by
+    # fragment and we slice into the precomputed `all_vectors` array.
+    def _frame_embedding_for_fragment(batch: pa.RecordBatch) -> pa.RecordBatch:
+        # Slice the matching block of vectors. `to_batches` above traversed
+        # in the same order, so cursor positions line up.
+        n = len(batch)
+        nonlocal _cursor_state
+        start = _cursor_state
+        _cursor_state = start + n
+        slice_arr = pa.FixedSizeListArray.from_arrays(
+            pa.array(all_vectors[start:start + n].reshape(-1), pa.float32()),
+            list_size=1024,
+        )
+        return pa.RecordBatch.from_arrays([slice_arr], names=["frame_embedding"])
+
+    _cursor_state = 0
+    new_schema = pa.schema([
+        pa.field("frame_embedding", pa.list_(pa.float32(), 1024), nullable=True),
+    ])
+    ds.add_columns(_frame_embedding_for_fragment, read_columns=[], reader_schema=new_schema)
+
     if create_index:
-        _ensure_vector_index(table, "frame_embedding", num_partitions, num_sub_vectors)
+        # Re-open as lancedb.Table so _ensure_vector_index can call create_index.
+        db = lancedb.connect(str(_Ctx.db))
+        frames_tbl = db.open_table("chunk_frames")
+        _ensure_vector_index(frames_tbl, "frame_embedding", num_partitions, num_sub_vectors)
 
 
 def _merge_insert_vectors(
@@ -774,6 +836,76 @@ def _merge_insert_vectors(
         .when_matched_update_all()
         .execute(update)
     )
+
+
+@app.command("compact")
+def cmd_compact(
+    target_rows_per_fragment: Annotated[
+        int,
+        typer.Option(
+            "--target-rows",
+            help="Compaction target. Smaller fragments will be merged up to this size.",
+        ),
+    ] = 1024 * 1024,
+    rebuild_indexes: Annotated[
+        bool,
+        typer.Option(
+            "--rebuild-indexes/--no-rebuild-indexes",
+            help="After compaction, rebuild IVF_PQ indexes that compaction invalidated.",
+        ),
+    ] = True,
+    num_partitions: Annotated[int, typer.Option("--num-partitions")] = 256,
+    num_sub_vectors: Annotated[int, typer.Option("--num-sub-vectors")] = 64,
+) -> None:
+    """Compact small fragments and (by default) rebuild IVF_PQ indexes.
+
+    The Lance docs explicitly recommend running compaction *before*
+    rebuilding indexes after bulk writes. Many small merge_inserts (e.g.
+    `extract-chunk-frames`, `embed-chunk-frames`) leave the table with a
+    long tail of small fragments and partly-stale ANN indexes. One pass
+    here puts everything back in shape.
+    """
+    import lance
+    import lancedb
+
+    db = lancedb.connect(str(_Ctx.db))
+    if _Ctx.table not in db.table_names():
+        raise typer.Exit(f"Table '{_Ctx.table}' not found in {_Ctx.db}.")
+    table = db.open_table(_Ctx.table)
+    ds = lance.dataset(str(_Ctx.db / f"{_Ctx.table}.lance"))
+
+    before = len(ds.get_fragments())
+    typer.echo(
+        f"Compacting {before} fragment(s) into target_rows_per_fragment={target_rows_per_fragment:,} …",
+        err=True,
+    )
+    metrics = ds.optimize.compact_files(target_rows_per_fragment=target_rows_per_fragment)
+    typer.echo(
+        f"  done. fragments_removed={metrics.fragments_removed} "
+        f"fragments_added={metrics.fragments_added} "
+        f"files_removed={metrics.files_removed} "
+        f"files_added={metrics.files_added}",
+        err=True,
+    )
+
+    if not rebuild_indexes:
+        return
+
+    # Rebuild whichever vector indexes already have data populated.
+    for column in ("text_embedding", "frame_embedding"):
+        if column not in table.schema.names:
+            continue
+        try:
+            null_count = table.count_rows(filter=f"{column} IS NULL")
+        except Exception:
+            null_count = -1  # column may not be filterable; skip safely
+        if null_count == 0:
+            _ensure_vector_index(table, column, num_partitions, num_sub_vectors)
+        else:
+            typer.echo(
+                f"  skipping reindex on {column}: {null_count} NULL row(s).",
+                err=True,
+            )
 
 
 def _ensure_vector_index(
