@@ -161,6 +161,147 @@ or move to a `tests/fixtures/` dir for use in unit tests.
 
 ---
 
+## Search performance — observed slow, prioritized fixes
+
+Multimodal / vector search currently feels sluggish (a few hundred ms to
+seconds per query). Most of that latency is fixable. Items roughly ordered
+by impact-per-effort.
+
+### 📋 Boost recall *and* speed of vector queries with `nprobes` + `refine_factor`
+
+The IVF_PQ index defaults to `nprobes=1` (touches one of 256 partitions →
+fast but poor recall, which forces a re-query reflex). Lance docs:
+
+> "Search with the index … `nprobes`: Number of partitions to search."
+
+Concrete change in `backend/app.py` `_vector_search(...)`:
+
+```python
+chunks.query()
+    .nearest_to(vec)
+    .distance_type("cosine")
+    .nprobes(20)            # up from default ~1 — visit 20/256 partitions
+    .refine_factor(3)       # re-score top-K * 3 with full-precision vectors
+    .limit(n)
+```
+
+`nprobes=20` is the sweet spot for `num_partitions=256` (≈ √n). Adds maybe
+20–30 ms but recall jumps dramatically — fewer "feels broken" misses.
+`refine_factor=3` re-checks the top results with un-quantized vectors,
+costs ~5 ms, big quality win.
+
+### 📋 Stop fetching `alignments_json` in the search results projection
+
+`alignments_json` is a multi-KB blob per chunk; the search list only needs
+text + start/end + metadata. Currently `_run_search` projects all columns,
+which means each hit pulls a big JSON payload that the list view doesn't
+even render. Move that fetch to **playback time** — the player pane already
+re-fetches when a hit is clicked.
+
+In `backend/app.py`, change the search projection from `select(["…", "alignments_json"])`
+to omit `alignments_json`. Add a `/api/chunk-alignments/{doc_id}/{speech_id}/{chunk_id}`
+endpoint that returns it on demand. **Estimated win: 30–60% on result-set
+serialization for large queries**, especially on hybrid/all where 30+ rows
+come back.
+
+### 📋 Cache the embedding client + keep a query-vector LRU
+
+Two cheap wins inside `backend/app.py` `_get_client()`:
+
+1. The vLLM client object is already cached at app startup ✅ — but each
+   query rebuilds the chat-message wrapper. That's negligible; ignore.
+2. Add an LRU cache on `client.embed_text(query)` keyed by the exact query
+   string. Repeated searches (same query, different filters) skip the
+   ~50 ms vLLM RTT. `functools.lru_cache(maxsize=512)` is enough.
+
+For images, no caching — every uploaded image is unique. Just embed once.
+
+### 📋 Run `make compact` after extract+embed completes
+
+145 small fragments after `extract-chunk-frames` means scans pay metadata
+overhead. Lance docs:
+
+> "Many small appends will lead to a large number of small fragments…
+> queries [become] slower due to the need to filter out deleted rows."
+
+After both extract + embed steps land:
+
+```bash
+make compact     # consolidates fragments, rebuilds IVF_PQ
+```
+
+Expected ~5–10% scan-time improvement on a fragmented table.
+
+### 📋 Async parallel branches for `mode=hybrid` and `mode=all`
+
+`mode=hybrid` runs FTS *then* vector search sequentially before RRF. They're
+independent. Same for `mode=all` (FTS + text-vector + frame-vector — three
+independent calls). Wrap each branch in `asyncio.gather(...)` to overlap.
+Native Lance is sync, so use `loop.run_in_executor(...)`. **Cuts hybrid
+latency by ~40% on cold cache.**
+
+### 📋 Drop the rerank cross-encoder for typical queries
+
+`Qwen3-VL-Reranker-8B` adds 200–500 ms when toggled on — that's the bulk of
+the user-visible slowness when "rerank" is checked. Two mitigations:
+
+1. **Frontend default off**: the toggle is currently easy to leave on; default
+   it off and label clearly that it's for "best quality, slower."
+2. **Cap top-K at 30**: the reranker only re-orders the top results returned
+   by the underlying search. We already do this; verify no path passes a
+   larger candidate set.
+
+If quality at default-off feels weak, the IVF_PQ `nprobes`/`refine_factor`
+improvements above usually close the gap without needing the cross-encoder.
+
+### 📋 Frontend: debounce the search input + show pending state
+
+In `frontend/src/lib/components/search-bar.svelte`, the form submits on
+Enter — fine. But fast typers + auto-search-on-pause would feel faster
+than waiting for an explicit submit. Add a 300 ms debounce on text input
+and dispatch a search if the input is non-empty. Combine with the
+loading-spinner state that already exists in `+page.svelte`.
+
+### 📋 (Stretch) Try `IVF_HNSW_SQ` for the frame-embedding index
+
+Lance docs:
+
+> "IVF_HNSW_SQ offers better recall at the cost of more memory."
+
+For `frame_embedding` (145 k × 1024 dims, ~600 MB raw → ~150 MB SQ-quantized),
+the better recall might let you keep `nprobes` low and end up faster overall.
+Worth a one-shot benchmark after the basic IVF_PQ implementation lands.
+
+```python
+ds.create_index("frame_embedding", index_type="IVF_HNSW_SQ",
+                num_partitions=256, replace=True)
+```
+
+### Quick benchmarking recipe
+
+Before/after any of the above:
+
+```bash
+uv run python -c "
+import time, lancedb, numpy as np
+t = lancedb.connect('./transcripts.lance').open_table('chunks')
+q = np.random.randn(1024).astype('float32')
+# warmup
+t.query().nearest_to(q).limit(20).to_list()
+# measure
+n, total = 50, 0
+for _ in range(n):
+    s = time.perf_counter()
+    t.query().nearest_to(q).distance_type('cosine').nprobes(20).limit(20).to_list()
+    total += time.perf_counter() - s
+print(f'avg {total/n*1000:.1f} ms / query')
+"
+```
+
+Compare to the same loop without `nprobes(20)` to see the impact.
+
+---
+
 ## Backup plan (if `chunk_frames` fails for any reason)
 
 If Lance keeps misbehaving, fall back to plain disk:
