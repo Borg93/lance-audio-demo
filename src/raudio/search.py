@@ -19,6 +19,22 @@ import lancedb
 _QUERY_STOPWORDS: frozenset[str] = frozenset({"and", "or", "not", "near"})
 
 
+def parse_alignments_json(raw: Any) -> list[dict[str, Any]]:
+    """Decode the ``alignments_json`` JSONB column to a Python list.
+
+    Returns an empty list on null, missing, or malformed input. Used by
+    both the FTS word-match path and the API hit-postprocessing path.
+    """
+    if not raw:
+        return []
+    if not isinstance(raw, str):
+        return raw  # already decoded by Lance
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+
+
 def extract_query_terms(query: str) -> list[str]:
     """Return the lowercased content words from a Tantivy-style query.
 
@@ -38,11 +54,7 @@ def iter_matching_words(chunk_row: dict, terms: list[str]) -> list[dict]:
     """
     if not terms:
         return []
-    raw = chunk_row.get("alignments_json") or "[]"
-    try:
-        alignments = json.loads(raw) if isinstance(raw, str) else raw
-    except json.JSONDecodeError:
-        return []
+    alignments = parse_alignments_json(chunk_row.get("alignments_json"))
     wanted = set(terms)
     hits: list[dict] = []
     for alignment in alignments or []:

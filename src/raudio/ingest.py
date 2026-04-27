@@ -34,7 +34,12 @@ from lance import blob_array
 
 from .audio import compose_media_uri, guess_mime, resolve_source
 from .datamodel import AlignmentSegment, AudioMetadata
-from .schema import CHUNK_SCHEMA, DOC_SCHEMA, DOC_STORAGE_VERSION
+from .schema import (
+    CHUNK_SCHEMA,
+    CHUNK_STORAGE_VERSION,
+    DOC_SCHEMA,
+    DOC_STORAGE_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -268,27 +273,28 @@ def _build_chunks_table(rows: list[dict[str, Any]]) -> pa.Table:
     backed by large_string). Lance's append refuses the schema mismatch.
     Building each column with its declared field type promotes the JSON
     strings into the extension array.
+
+    Also critical for Phase 2: ``frame_blob`` is a Lance ``blob_field``
+    extension that cannot be constructed via ``pa.array(values, type=...)``.
+    We wrap that column with :func:`lance.blob_array` (mirrors
+    :func:`_write_documents_table`). On the create-from-empty path every
+    chunk's frame is ``None``; ``embed-chunk-frames`` populates it later.
     """
+    # Names of all blob-extension columns that need ``blob_array`` wrapping.
+    blob_cols = {"frame_blob"}
+
     cols: dict[str, list[Any]] = {name: [] for name in CHUNK_SCHEMA.names}
     for r in rows:
         for k in cols:
             cols[k].append(r.get(k))
-    arrays: list[pa.Array] = [
-        pa.array(cols[f.name], type=f.type) for f in CHUNK_SCHEMA
-    ]
-    return pa.Table.from_arrays(arrays, schema=CHUNK_SCHEMA)
 
-    dataset_path = str(Path(db_path) / "documents.lance")
-    lance.write_dataset(
-        table,
-        dataset_path,
-        mode=mode,
-        data_storage_version=DOC_STORAGE_VERSION,
-        # Required because our URIs (file://…, hf://…) don't map to registered
-        # base paths yet. TODO: register base paths for true multi-base layout
-        # lifecycle governance per the blog.
-        allow_external_blob_outside_bases=True,
-    )
+    arrays: list[pa.Array] = []
+    for f in CHUNK_SCHEMA:
+        if f.name in blob_cols:
+            arrays.append(blob_array(cols[f.name]))
+        else:
+            arrays.append(pa.array(cols[f.name], type=f.type))
+    return pa.Table.from_arrays(arrays, schema=CHUNK_SCHEMA)
 
 
 def ingest_many(
@@ -349,7 +355,24 @@ def ingest_many(
         table = db.open_table(table_name)
         table.add(chunks_table)
     else:
-        table = db.create_table(table_name, data=chunks_table, schema=CHUNK_SCHEMA)
+        # Phase 2 added a Blob V2 Inline column (`frame_blob`) to
+        # CHUNK_SCHEMA, which requires Lance file format 2.2. lancedb's
+        # `create_table` doesn't expose the storage version directly, so
+        # we write the dataset via `lance.write_dataset(...)` (mirroring
+        # `_write_documents_table`) and re-open it through lancedb.
+        chunks_path = str(Path(db_path) / f"{table_name}.lance")
+        lance.write_dataset(
+            chunks_table,
+            chunks_path,
+            mode="create",
+            data_storage_version=CHUNK_STORAGE_VERSION,
+            # Blob V2 Inline (frame_blob) is on a chunks-relative path,
+            # but external blob columns may show up later (e.g. if we
+            # ever spill very large frames). Match the documents-table
+            # behaviour for safety.
+            allow_external_blob_outside_bases=True,
+        )
+        table = db.open_table(table_name)
 
     # `with_position=True` is required for phrase queries.
     # `remove_stop_words=False` keeps "of", "the", etc. in the index so phrases

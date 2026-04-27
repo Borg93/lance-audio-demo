@@ -3,12 +3,32 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Bun static server + /api/* proxy for the raudio FastAPI backend.",
   "scripts": {
-    "dev": "bun run --watch server.ts",
-    "start": "bun run server.ts"
+    "dev": "vite dev --port 5173 --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --host 127.0.0.1",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "prepare": "svelte-kit sync"
+  },
+  "dependencies": {
+    "bits-ui": "^2.0.0",
+    "clsx": "^2.1.1",
+    "lucide-svelte": "^0.468.0",
+    "svelte": "^5.36.0",
+    "tailwind-merge": "^2.5.5",
+    "tailwind-variants": "^0.3.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@sveltejs/adapter-static": "^3.0.8",
+    "@sveltejs/kit": "^2.27.0",
+    "@sveltejs/vite-plugin-svelte": "^6.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/bun": "^1.2.0",
+    "svelte-check": "^4.1.4",
+    "tailwindcss": "^4.0.0",
+    "tslib": "^2.8.1",
+    "typescript": "^5.7.2",
+    "vite": "^7.0.0"
   }
 }

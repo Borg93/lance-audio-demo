@@ -1,0 +1,152 @@
+@import 'tailwindcss';
+
+/* The `dark` class on <html> toggles dark mode for descendant elements. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Design tokens.
+ *
+ * Light is the default. The :root values are used until <html> gains the
+ * `.dark` class, at which point the .dark overrides take effect.
+ *
+ * Palette: low-saturation neutral surfaces + a single accent (oklch
+ * blue/violet) used for hits-active state, primary buttons, and focus
+ * rings. Highlight (warm amber) marks search matches.
+ */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+}
+
+/* ── Light theme (default) ───────────────────────────────────────────── */
+:root {
+  --color-background:           oklch(0.99   0.002 264);
+  --color-foreground:           oklch(0.22   0.012 264);
+
+  --color-card:                 oklch(1.00   0.000 264);
+  --color-card-foreground:      oklch(0.22   0.012 264);
+
+  --color-muted:                oklch(0.96   0.005 264);
+  --color-muted-foreground:     oklch(0.50   0.015 264);
+
+  --color-border:               oklch(0.91   0.006 264);
+  --color-input:                oklch(0.98   0.004 264);
+  --color-ring:                 oklch(0.62   0.18  256);
+
+  --color-primary:              oklch(0.55   0.20  256);
+  --color-primary-foreground:   oklch(0.99   0.002 264);
+
+  --color-secondary:            oklch(0.95   0.006 264);
+  --color-secondary-foreground: oklch(0.22   0.012 264);
+
+  --color-accent:               oklch(0.55   0.20  256);
+  --color-accent-foreground:    oklch(0.99   0.002 264);
+
+  --color-destructive:          oklch(0.55   0.22   27);
+  --color-destructive-foreground: oklch(0.99 0.002 264);
+
+  --color-highlight:            oklch(0.85   0.16   80);
+}
+
+/* ── Dark theme overrides ────────────────────────────────────────────── */
+:where(.dark) {
+  --color-background:           oklch(0.13   0.005 264);
+  --color-foreground:           oklch(0.96   0.005 264);
+
+  --color-card:                 oklch(0.16   0.006 264);
+  --color-card-foreground:      oklch(0.96   0.005 264);
+
+  --color-muted:                oklch(0.22   0.010 264);
+  --color-muted-foreground:     oklch(0.68   0.015 264);
+
+  --color-border:               oklch(0.25   0.010 264);
+  --color-input:                oklch(0.18   0.008 264);
+  --color-ring:                 oklch(0.72   0.16  256);
+
+  --color-primary:              oklch(0.72   0.16  256);
+  --color-primary-foreground:   oklch(0.13   0.005 264);
+
+  --color-secondary:            oklch(0.24   0.010 264);
+  --color-secondary-foreground: oklch(0.96   0.005 264);
+
+  --color-accent:               oklch(0.72   0.16  256);
+  --color-accent-foreground:    oklch(0.13   0.005 264);
+
+  --color-destructive:          oklch(0.62   0.22   27);
+  --color-destructive-foreground: oklch(0.96 0.005 264);
+
+  --color-highlight:            oklch(0.78   0.13   90);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html, body {
+    height: 100%;
+  }
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* shadcn-style scrollbar */
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--color-muted-foreground);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * Karaoke cursor styling for the transcript player.
+ *
+ * Uses raw CSS (not utility classes) because the cursor is toggled via
+ * direct .classList.add/remove in a RAF loop — applying many small
+ * Tailwind classes from JS produces noisy diffs every frame.
+ *
+ * - .cursor-word     : the currently-spoken word
+ * - .cursor-sentence : the currently-spoken sentence (parent of word)
+ * Both are designed to be visible in light AND dark themes.
+ * ──────────────────────────────────────────────────────────────────── */
+.cursor-word {
+  /* Subtle wash — still clearly marks the active word but doesn't blast
+     the eye on every karaoke step. */
+  background: color-mix(in oklch, var(--color-highlight) 45%, transparent);
+  color: var(--color-foreground);
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 1px 2px;
+  margin: 0 -2px;
+}
+.cursor-sentence {
+  background: color-mix(in oklch, var(--color-highlight) 12%, transparent);
+  border-left: 2px solid color-mix(in oklch, var(--color-highlight) 70%, transparent);
+  padding-left: 6px;
+  margin-left: -8px;
+  border-radius: 3px;
+}
+
+/*
+ * bits-ui Popover.Content gets a class via animations that bleeds opacity
+ * during enter/exit. Pin all popovers to solid background + visible border.
+ * `data-state` is set by bits-ui; using it lets us override their styling
+ * without fighting their animation classes elsewhere.
+ */
+[data-popover-content][data-state='open'],
+[data-popover-content][data-state='closed'] {
+  background-color: var(--color-card) !important;
+  opacity: 1 !important;
+  box-shadow:
+    0 0 0 1px var(--color-border),
+    0 10px 30px -8px rgba(0, 0, 0, 0.18),
+    0 4px 8px -2px rgba(0, 0, 0, 0.08);
+}

@@ -33,3 +33,18 @@ thumbnails/
 output/
 models/
 */node_modules/
+
+# Process logs go to logs/ (see Makefile $(LOG_DIR)). Keep the folder
+# tracked via .gitkeep but never commit the rotating log files.
+logs/*
+!logs/.gitkeep
+
+# SvelteKit build artifacts
+frontend/.svelte-kit/
+frontend/build/
+node_modules/
+
+# Stray local artifacts
+images_per.jpg
+trocr-test/results/
+nohup.out

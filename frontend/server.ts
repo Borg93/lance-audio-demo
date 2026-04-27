@@ -2,16 +2,17 @@
  * Bun static server + reverse proxy for /api/* → FastAPI backend.
  *
  *   bun install
- *   bun run server.ts --api http://127.0.0.1:8000 --port 3000
+ *   bun run server.ts --root ./build --api http://127.0.0.1:8000 --port 3000
  *
  * The Python backend owns Lance. This process only:
- *   - serves index.html / gallery.html / static assets
+ *   - serves the static SvelteKit build from --root
+ *   - falls back to 200.html for unknown paths so client-side routing works
  *   - forwards /api/* requests (including HTTP Range for video streaming)
  *     to the backend, preserving headers both ways.
  */
 
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, dirname, join, extname } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve, dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -27,6 +28,9 @@ const args = Object.fromEntries(
 );
 const API_BASE = (args.api ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 const PORT = Number(args.port ?? 3000);
+// Default to the SvelteKit build dir adjacent to this file.
+const ROOT = resolve(here, args.root ?? "./build");
+const SPA_FALLBACK = resolve(ROOT, "200.html");
 
 // ─── MIME helper ────────────────────────────────────────────────────────
 const MIME: Record<string, string> = {
@@ -48,14 +52,29 @@ function contentType(path: string): string {
     return MIME[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
 
-function serveStatic(relativePath: string): Response {
-    const safe = relativePath.replace(/^\/+/, "").replace(/\.\./g, "");
-    const abs = resolve(here, safe);
-    if (!abs.startsWith(here)) return new Response("forbidden", { status: 403 });
-    if (!existsSync(abs)) return new Response("not found", { status: 404 });
+function fileResponse(abs: string): Response {
     return new Response(Bun.file(abs), {
         headers: { "Content-Type": contentType(abs) },
     });
+}
+
+function serveStatic(pathname: string): Response {
+    // Prevent path traversal — confine resolved paths to ROOT.
+    const safe = pathname.replace(/^\/+/, "").replace(/\.\./g, "");
+    const abs = resolve(ROOT, safe);
+    if (!abs.startsWith(ROOT)) {
+        return new Response("forbidden", { status: 403 });
+    }
+    if (existsSync(abs)) return fileResponse(abs);
+
+    // Try the prerendered route variant SvelteKit emits (e.g. /gallery → /gallery.html).
+    const htmlVariant = `${abs.replace(/\/+$/, "")}.html`;
+    if (existsSync(htmlVariant)) return fileResponse(htmlVariant);
+
+    // SPA fallback for client-side routes.
+    if (existsSync(SPA_FALLBACK)) return fileResponse(SPA_FALLBACK);
+
+    return new Response("not found", { status: 404 });
 }
 
 // ─── /api/* proxy (streams requests + responses; Range headers flow through) ──
@@ -63,7 +82,6 @@ async function proxy(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const target = `${API_BASE}${url.pathname}${url.search}`;
 
-    // Strip headers that shouldn't be forwarded by a proxy.
     const headers = new Headers(req.headers);
     headers.delete("host");
 
@@ -73,8 +91,6 @@ async function proxy(req: Request): Promise<Response> {
         body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
     });
 
-    // Stream the response back. Range, Content-Length, Content-Type etc.
-    // pass through unchanged.
     return new Response(upstream.body, {
         status: upstream.status,
         headers: upstream.headers,
@@ -89,17 +105,12 @@ Bun.serve({
 
         if (url.pathname.startsWith("/api/")) return proxy(req);
 
-        if (url.pathname === "/" || url.pathname === "/index.html") {
-            return serveStatic("index.html");
-        }
-        if (url.pathname === "/gallery" || url.pathname === "/gallery.html") {
-            return serveStatic("gallery.html");
-        }
+        if (url.pathname === "/") return serveStatic("index.html");
 
-        // Any other path → static file under this dir.
         return serveStatic(url.pathname);
     },
 });
 
 console.log(`→ frontend:  http://localhost:${PORT}`);
+console.log(`  serving:   ${ROOT}`);
 console.log(`  proxying /api/*  →  ${API_BASE}`);

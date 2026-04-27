@@ -84,8 +84,31 @@ CHUNK_SCHEMA: pa.Schema = pa.schema(
         #    "end": float, "score": float}, ...]}
         pa.field("alignments_json", pa.json_()),
         pa.field("metadata", pa.string()),
+        # ── Multimodal embeddings (Phase 1+2) ─────────────────────────────
+        # `text_embedding` is the Qwen3-VL-Embedding-8B vector for `text`,
+        # MRL-truncated to 1024 dims and L2-normalized. Lance vector index
+        # (IVF_PQ, cosine) is built on this column by `raudio embed-chunks`.
+        # Nullable so existing ingest paths produce all-null vectors that
+        # `embed-chunks` then populates batch-by-batch.
+        pa.field("text_embedding", pa.list_(pa.float32(), 1024), nullable=True),
+        # ── One representative video frame per chunk (Phase 2) ───────────
+        # Captured at `chunk.start` via ffmpeg, JPEG ~50–80 KB. Stored Blob
+        # V2 Inline (auto-routes <64 KB into the main data page). Read via
+        # `chunks_ds.take_blobs("frame_blob", indices=[idx])`.
+        blob_field("frame_blob", nullable=True),
+        pa.field("frame_mime", pa.string()),
+        pa.field("frame_width", pa.int32()),
+        pa.field("frame_height", pa.int32()),
+        # Qwen3-VL-Embedding-8B vector for the frame, same MRL=1024 space
+        # as text_embedding so cross-modal search is a direct cosine compare.
+        pa.field("frame_embedding", pa.list_(pa.float32(), 1024), nullable=True),
     ]
 )
+
+
+#: Lance file format version required for Blob V2 columns on `chunks`.
+#: Bumped from the LanceDB default once we added `frame_blob` (Phase 2).
+CHUNK_STORAGE_VERSION: str = "2.2"
 
 
 # ───────────────────────────── Document-centric schema ──────────────────────
