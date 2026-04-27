@@ -1,0 +1,35 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Lance table + transcription pipeline outputs
+*.lance/
+output/
+models/
+
+# Media: don't commit audio/video — examples/ is for JSON only
+examples/*.mp3
+examples/*.mp4
+examples/*.wav
+examples/*.ogg
+examples/*.m4a
+examples/*.flac
+examples/*.mov
+examples/*.webm
+
+
+transcripts.lance/
+video_batcher.csv
+*.log*
+input/
+thumbnails/
+output/
+models/
+*/node_modules/

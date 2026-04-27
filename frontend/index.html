@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>raudio viewer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e0f13;
+    --panel: #15171d;
+    --border: #272a33;
+    --muted: #9aa0a8;
+    --text: #e8e9ee;
+    --accent: #6ca6ff;
+    --hit-bg: #1b2130;
+    --hit-bg-hover: #212a3d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-height: 100vh;
+  }
+  header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  form { flex: 1; display: flex; gap: 8px; align-items: center; }
+  .qopts { display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--muted); }
+  .qopts label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+  .qopts input[type=checkbox] { accent-color: var(--accent); }
+  input[type=search] {
+    flex: 1;
+    padding: 10px 14px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    background: #0b0c10;
+    color: var(--text);
+    border-radius: 8px;
+    outline: none;
+  }
+  input[type=search]:focus { border-color: var(--accent); }
+  button {
+    padding: 10px 18px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    background: #20242d;
+    color: var(--text);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  main {
+    display: grid;
+    grid-template-columns: minmax(480px, 3fr) 2fr;
+    gap: 0;
+    min-height: 0;
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+  }
+  #hits-pane { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
+  #hits { overflow-y: auto; flex: 1; min-height: 0; }
+  .hit {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    transition: background 0.12s;
+  }
+  .hit:hover { background: var(--hit-bg-hover); }
+  .hit.active { background: var(--hit-bg); border-left: 3px solid var(--accent); padding-left: 11px; }
+  .hit-thumb { width: 96px; height: 54px; flex: 0 0 auto; object-fit: cover; border-radius: 4px; background: #000; }
+  .hit-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .hit-title { font-size: 13px; font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .hit-meta { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .hit-text { font-size: 13px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+  .filters { padding: 10px 14px; border-bottom: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 12px; }
+  .filters input, .filters select {
+    padding: 4px 8px; font-size: 12px;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: #0b0c10; color: var(--text); outline: none;
+  }
+  .filters input:focus, .filters select:focus { border-color: var(--accent); }
+  .filters label { grid-column: 1 / -1; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+
+  .search-match-hl { background: rgba(231, 189, 84, 0.28); border-radius: 2px; padding: 0 1px; }
+
+  details.help { margin: 0; padding: 0; border-bottom: 1px solid var(--border); }
+  details.help > summary {
+    list-style: none; cursor: pointer; padding: 8px 14px;
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+    user-select: none;
+  }
+  details.help > summary::-webkit-details-marker { display: none; }
+  details.help > summary::before { content: "▸ "; display: inline-block; transition: transform 0.15s; }
+  details.help[open] > summary::before { content: "▾ "; }
+  details.help .help-body { padding: 4px 14px 12px; font-size: 12px; line-height: 1.6; color: var(--text); }
+  details.help code {
+    background: #0b0c10; border: 1px solid var(--border); border-radius: 3px;
+    padding: 0 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    color: var(--accent);
+  }
+  details.help dl { margin: 4px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+  details.help dt { color: var(--muted); }
+  details.help dd { margin: 0; }
+
+  #player-pane {
+    padding: 20px 24px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  #player-pane video, #player-pane audio {
+    width: 100%;
+    max-height: 320px;
+    background: #000;
+    border-radius: 8px;
+  }
+  #player-title { font-size: 14px; font-weight: 500; }
+  #player-empty { color: var(--muted); font-size: 14px; padding: 40px 0; text-align: center; }
+  #transcript {
+    font-size: 14px; line-height: 1.7; color: var(--text);
+    max-height: 340px; overflow-y: auto;
+    padding: 12px 14px;
+    background: #0b0c10; border: 1px solid var(--border); border-radius: 8px;
+  }
+  .sentence { cursor: pointer; padding: 2px 0; border-radius: 3px; transition: background 0.12s; }
+  .sentence:hover { background: rgba(108, 166, 255, 0.08); }
+  .word { padding: 1px 0; border-radius: 2px; transition: background 0.12s, color 0.12s; }
+  .highlight-sentence { background: rgba(108, 166, 255, 0.12); }
+  .highlight-word { background: rgba(108, 166, 255, 0.45); color: #fff; }
+  .search-match { background: rgba(231, 189, 84, 0.28); border-radius: 2px; }
+  .status { font-size: 12px; color: var(--muted); padding: 16px 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>raudio <span>viewer</span></h1>
+  <form id="search-form">
+    <input type="search" id="q" placeholder='Search… e.g. betänkandet, regeringen' autofocus />
+    <div class="qopts">
+      <label title="Tolerate typos (Levenshtein distance up to 2)"><input type="checkbox" id="opt-fuzzy" />fuzzy</label>
+      <label title="Match the exact phrase, words in order"><input type="checkbox" id="opt-phrase" />phrase</label>
+    </div>
+    <button type="submit">Search</button>
+  </form>
+  <nav style="display:flex;gap:14px;font-size:13px;">
+    <a href="/" style="color:var(--accent);text-decoration:none;">search</a>
+    <a href="/gallery" style="color:var(--accent);text-decoration:none;">gallery</a>
+  </nav>
+</header>
+<main>
+  <div id="hits-pane">
+    <details class="help">
+      <summary>search syntax</summary>
+      <div class="help-body">
+        <dl>
+          <dt><code>betänkandet</code></dt>
+          <dd>single term — Swedish stemmer matches <em>betänkande</em>, <em>betänkanden</em>, <em>betänkandet</em></dd>
+          <dt><code>minister regering</code></dt>
+          <dd>multiple terms — documents containing any term match; ranked by relevance (BM25)</dd>
+          <dt>☑ <strong>fuzzy</strong></dt>
+          <dd>tolerate typos up to edit-distance 2. Use this when unsure of spelling — <em>betänkadet</em> (typo) → finds <em>betänkandet</em></dd>
+          <dt>☑ <strong>phrase</strong></dt>
+          <dd>match the exact phrase in order — e.g. <code>alkoholmonopolets framtid</code> only finds those words adjacent</dd>
+        </dl>
+        <div style="margin-top: 8px; color: var(--muted); font-size: 11px;">
+          Note: <code>AND</code>/<code>OR</code>/<code>NOT</code> in the search box don't work — Lance FTS treats them as terms. Use the <strong>fuzzy</strong> toggle for typos and the filters below to narrow results.
+        </div>
+        <div style="margin-top: 10px; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em;">filters</div>
+        <dl>
+          <dt><code>language</code></dt>
+          <dd>document language (ISO 639-1: <em>sv</em>, <em>en</em>) — exact match</dd>
+          <dt><code>namn</code></dt>
+          <dd>event name from the Riksarkivet metadata CSV — substring match (e.g. <em>alkoholmonopolet</em> matches the full title)</dd>
+          <dt><code>referenskod</code></dt>
+          <dd>archival reference code (e.g. <em>SE/RA/1207/07/B 4/13</em>) — substring match, partial codes work</dd>
+          <dt><code>extraid</code></dt>
+          <dd>internal Riksarkivet identifier — exact match</dd>
+        </dl>
+        <div style="margin-top: 8px; color: var(--muted);">
+          Filters combine with AND, applied <em>after</em> the FTS query. Spell Swedish words correctly — typos like <em>betänkadet</em> (missing <em>n</em>) won't match.
+        </div>
+      </div>
+    </details>
+    <div class="filters">
+      <label>filters</label>
+      <select id="f-language">
+        <option value="">any language</option>
+        <option value="sv">sv</option>
+        <option value="en">en</option>
+      </select>
+      <input id="f-namn" type="text" placeholder="namn contains…" />
+      <input id="f-referenskod" type="text" placeholder="referenskod contains…" />
+      <input id="f-extraid" type="text" placeholder="extraid (exact)" />
+    </div>
+    <div id="hits"><div class="status">Enter a query above.</div></div>
+  </div>
+  <div id="player-pane">
+    <div id="player-empty">Click a hit to play.</div>
+  </div>
+</main>
+<script type="module">
+const hitsEl = document.getElementById("hits");
+const paneEl = document.getElementById("player-pane");
+const qInput = document.getElementById("q");
+const form = document.getElementById("search-form");
+
+function fmtTime(s) {
+  const total = Math.round(s);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+
+async function runSearch(q) {
+  hitsEl.innerHTML = `<div class="status">Searching…</div>`;
+  const params = new URLSearchParams({ q, n: "30" });
+  const fl = document.getElementById("f-language").value.trim();
+  const fn = document.getElementById("f-namn").value.trim();
+  const fr = document.getElementById("f-referenskod").value.trim();
+  const fe = document.getElementById("f-extraid").value.trim();
+  if (fl) params.set("language", fl);
+  if (fn) params.set("namn", fn);
+  if (fr) params.set("referenskod", fr);
+  if (fe) params.set("extraid", fe);
+  if (document.getElementById("opt-fuzzy").checked) params.set("fuzziness", "2");
+  if (document.getElementById("opt-phrase").checked) params.set("phrase", "true");
+  const r = await fetch(`/api/search?${params}`);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    hitsEl.innerHTML = `<div class="status">Error: ${err.detail ?? err.error ?? r.statusText}</div>`;
+    return;
+  }
+  const hits = await r.json();
+  renderHits(hits);
+}
+
+function queryTerms(q) {
+  return (q.match(/\w+/gu) ?? [])
+    .map((t) => t.toLowerCase())
+    .filter((t) => !["and", "or", "not", "near"].includes(t));
+}
+
+function highlightTerms(text, terms) {
+  if (!terms.length) return escapeHtml(text);
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`(${escaped.join("|")})`, "giu");
+  return escapeHtml(text).replace(re, '<span class="search-match">$1</span>');
+}
+
+function renderHits(hits) {
+  if (!hits.length) {
+    hitsEl.innerHTML = `<div class="status">No hits.</div>`;
+    return;
+  }
+  hitsEl.innerHTML = "";
+  const terms = queryTerms(currentQuery);
+  for (const h of hits) {
+    const el = document.createElement("div");
+    el.className = "hit";
+    const title = h.namn || h.audio_path || h.doc_id;
+    el.innerHTML = `
+      <img class="hit-thumb" loading="lazy"
+           src="/api/thumbnail/${encodeURIComponent(h.doc_id)}"
+           onerror="this.style.visibility='hidden'" alt="" />
+      <div class="hit-body">
+        <div class="hit-title">${escapeHtml(title)}</div>
+        <div class="hit-meta">${fmtTime(h.start)} → ${fmtTime(h.end)} · ${h.language ?? ""}${h.referenskod ? ' · ' + escapeHtml(h.referenskod) : ''}</div>
+        <div class="hit-text">${highlightTerms(h.text ?? "", terms)}</div>
+      </div>
+    `;
+    el.addEventListener("click", () => {
+      document.querySelectorAll(".hit.active").forEach((e) => e.classList.remove("active"));
+      el.classList.add("active");
+      openPlayer(h);
+    });
+    hitsEl.appendChild(el);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+let currentQuery = "";
+let rafId = 0;
+let currentMediaEl = null;
+
+function disposeCurrentMedia() {
+  cancelAnimationFrame(rafId);
+  rafId = 0;
+  if (currentMediaEl) {
+    try {
+      currentMediaEl.pause();
+      currentMediaEl.removeAttribute("src");
+      currentMediaEl.load();
+    } catch (e) { /* ignore */ }
+    currentMediaEl = null;
+  }
+}
+
+function openPlayer(hit) {
+  disposeCurrentMedia();
+  paneEl.innerHTML = "";
+
+  const title = document.createElement("div");
+  title.id = "player-title";
+  title.textContent = `${hit.audio_path}  ·  ${fmtTime(hit.start)} → ${fmtTime(hit.end)}`;
+  paneEl.appendChild(title);
+
+  const mime = hit.media_mime ?? "";
+  const isVideo = mime ? mime.startsWith("video/") : true;
+  const mediaEl = document.createElement(isVideo ? "video" : "audio");
+  mediaEl.controls = true;
+  mediaEl.preload = "auto";
+  mediaEl.src = `/api/media/${encodeURIComponent(hit.doc_id)}`;
+
+  let sought = false;
+  const seekOnce = () => {
+    if (sought) return;
+    sought = true;
+    try { mediaEl.currentTime = hit.start; } catch (e) { console.warn("seek failed", e); }
+    mediaEl.play().catch((err) => console.warn("autoplay blocked:", err));
+  };
+  mediaEl.addEventListener("loadedmetadata", seekOnce);
+  mediaEl.addEventListener("canplay", seekOnce);
+
+  mediaEl.addEventListener("error", () => {
+    const err = mediaEl.error;
+    const codes = { 1: "MEDIA_ERR_ABORTED", 2: "MEDIA_ERR_NETWORK",
+                    3: "MEDIA_ERR_DECODE", 4: "MEDIA_ERR_SRC_NOT_SUPPORTED" };
+    const label = err ? (codes[err.code] ?? "?") : "?";
+    const msg = document.createElement("div");
+    msg.className = "status";
+    msg.style.color = "#e07b7b";
+    msg.textContent = `Video failed to load: ${label}. Check /api/media/${hit.doc_id}.`;
+    paneEl.appendChild(msg);
+  });
+
+  paneEl.appendChild(mediaEl);
+  currentMediaEl = mediaEl;
+
+  // Transcript panel: word-level spans built from hit.alignments (inline
+  // from the Lance `alignments_json` JSONB column, parsed by the backend).
+  const tr = document.createElement("div");
+  tr.id = "transcript";
+  paneEl.appendChild(tr);
+
+  const alignments = Array.isArray(hit.alignments) ? hit.alignments : [];
+  const wordMap = [];       // [{ el, start, end }] — flat list for RAF scan
+  const sentenceMap = [];   // [{ el, start, end }]
+
+  // Query-term highlighter (mirrors the CLI's --words logic).
+  const terms = new Set(
+    (currentQuery.match(/\w+/gu) ?? [])
+      .map((t) => t.toLowerCase())
+      .filter((t) => !["and", "or", "not", "near"].includes(t))
+  );
+
+  for (const a of alignments) {
+    const sent = document.createElement("span");
+    sent.className = "sentence";
+    sent.addEventListener("click", () => {
+      mediaEl.currentTime = a.start;
+      mediaEl.play().catch(() => {});
+    });
+    for (const w of a.words ?? []) {
+      const span = document.createElement("span");
+      span.className = "word";
+      const stripped = (w.text ?? "").replace(/^\W+|\W+$/gu, "").toLowerCase();
+      if (terms.has(stripped)) {
+        const inner = document.createElement("span");
+        inner.className = "search-match";
+        inner.textContent = w.text;
+        span.appendChild(inner);
+      } else {
+        span.textContent = w.text;
+      }
+      sent.appendChild(span);
+      wordMap.push({ el: span, start: w.start, end: w.end });
+    }
+    tr.appendChild(sent);
+    sentenceMap.push({ el: sent, start: a.start, end: a.end });
+    // Preserve paragraph breaks: alignments not ending in space = break.
+    if (!(a.text ?? "").endsWith(" ")) tr.appendChild(document.createElement("br"));
+  }
+
+  // Binary search — O(log n) per frame.
+  function find(segs, t) {
+    let lo = 0, hi = segs.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (t < segs[mid].start) hi = mid - 1;
+      else if (t >= segs[mid].end) lo = mid + 1;
+      else return segs[mid];
+    }
+    return null;
+  }
+
+  let prevWord = null, prevSent = null;
+  function refresh() {
+    const t = mediaEl.currentTime;
+    const w = find(wordMap, t);
+    if (w !== null && w.el !== prevWord) {
+      if (prevWord) prevWord.classList.remove("highlight-word");
+      w.el.classList.add("highlight-word");
+      prevWord = w.el;
+    }
+    const s = find(sentenceMap, t);
+    if (s !== null && s.el !== prevSent) {
+      if (prevSent) prevSent.classList.remove("highlight-sentence");
+      s.el.classList.add("highlight-sentence");
+      s.el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      prevSent = s.el;
+    }
+  }
+
+  mediaEl.addEventListener("seeked", refresh);
+  function tick() {
+    if (!mediaEl.paused) refresh();
+    rafId = requestAnimationFrame(tick);
+  }
+  rafId = requestAnimationFrame(tick);
+}
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = qInput.value.trim();
+  if (q) {
+    currentQuery = q;
+    runSearch(q);
+  }
+});
+
+for (const id of ["f-language", "f-namn", "f-referenskod", "f-extraid"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    const q = qInput.value.trim();
+    if (q) { currentQuery = q; runSearch(q); }
+  });
+}
+</script>
+</body>
+</html>

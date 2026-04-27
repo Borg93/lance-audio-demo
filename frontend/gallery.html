@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>raudio — gallery</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e0f13;
+    --panel: #15171d;
+    --border: #272a33;
+    --muted: #9aa0a8;
+    --text: #e8e9ee;
+    --accent: #6ca6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  header nav a { color: var(--accent); text-decoration: none; font-size: 14px; margin-left: 12px; }
+  main { padding: 18px 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 14px;
+  }
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.1s, border-color 0.12s;
+  }
+  .tile:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .tile img {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    background: #000;
+    display: block;
+  }
+  .tile-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; min-height: 78px; }
+  .tile-title { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .tile-meta { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
+  .pager {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    padding: 24px;
+    font-size: 14px;
+  }
+  .pager a, .pager span {
+    color: var(--accent);
+    text-decoration: none;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .pager .disabled { color: var(--muted); opacity: 0.5; pointer-events: none; }
+  .status { color: var(--muted); padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>raudio <span>gallery</span></h1>
+  <nav><a href="/">← search</a></nav>
+</header>
+<main>
+  <div id="grid" class="grid"><div class="status">Loading…</div></div>
+  <nav class="pager" id="pager"></nav>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+const page = Math.max(1, parseInt(params.get("page") || "1", 10));
+const perPage = 24;
+
+function fmtDuration(s) {
+  if (!s) return "";
+  const total = Math.round(s);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+}
+
+fetch(`/api/documents?page=${page}&per_page=${perPage}`)
+  .then((r) => r.json())
+  .then(({ total, docs }) => {
+    const grid = document.getElementById("grid");
+    if (!docs.length) { grid.innerHTML = `<div class="status">No documents.</div>`; return; }
+    grid.innerHTML = "";
+    for (const d of docs) {
+      const tile = document.createElement("a");
+      tile.className = "tile";
+      tile.href = `/?doc=${d.doc_id}`;
+      tile.innerHTML = `
+        <img src="/api/thumbnail/${d.doc_id}" loading="lazy" alt="" />
+        <div class="tile-body">
+          <div class="tile-title">${esc(d.namn || d.audio_path)}</div>
+          <div class="tile-meta">${fmtDuration(d.duration)} · ${esc(d.referenskod || "")}</div>
+        </div>
+      `;
+      grid.appendChild(tile);
+    }
+    const totalPages = Math.max(1, Math.ceil(total / perPage));
+    const pager = document.getElementById("pager");
+    const prev = page > 1 ? `<a href="?page=${page - 1}">← prev</a>` : `<span class="disabled">← prev</span>`;
+    const next = page < totalPages ? `<a href="?page=${page + 1}">next →</a>` : `<span class="disabled">next →</span>`;
+    pager.innerHTML = `${prev}<span>${page} / ${totalPages} (${total})</span>${next}`;
+  })
+  .catch((e) => {
+    document.getElementById("grid").innerHTML = `<div class="status">Error: ${e.message}</div>`;
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "raudio-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bun static server + /api/* proxy for the raudio FastAPI backend.",
+  "scripts": {
+    "dev": "bun run --watch server.ts",
+    "start": "bun run server.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
