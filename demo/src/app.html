@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/x-icon" href="%sveltekit.assets%/favicon.ico" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Multimodal Lab</title>
+		<script>
+			// Static hosts (Hugging Face Spaces, GitHub Pages, some S3 configs)
+			// sometimes serve `/foo.html` directly with the URL bar showing
+			// `/foo.html` instead of `/foo`. SvelteKit's client router would
+			// then fail to match the route. Strip `.html` before boot.
+			(function () {
+				var p = location.pathname;
+				if (p === '/index.html') {
+					history.replaceState(null, '', '/' + location.search + location.hash);
+				} else if (p.endsWith('.html')) {
+					history.replaceState(
+						null,
+						'',
+						p.replace(/\.html$/, '') + location.search + location.hash
+					);
+				}
+			})();
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

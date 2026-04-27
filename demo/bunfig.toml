@@ -1,0 +1,6 @@
+# Exclude the large ONNX runtime from pre-bundling so WebGPU can load it lazily.
+# (Mirrors the `optimizeDeps.exclude` entry in vite.config.ts.)
+
+[install]
+# Use exact lockfile resolution by default
+exact = false

@@ -42,6 +42,8 @@ logs/*
 # SvelteKit build artifacts
 frontend/.svelte-kit/
 frontend/build/
+demo/.svelte-kit/
+demo/build/
 node_modules/
 
 # Stray local artifacts
