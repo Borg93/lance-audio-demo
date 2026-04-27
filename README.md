@@ -1,417 +1,250 @@
-# raudio
+# lance-audio-demo
 
-A thin ingestion/search layer that turns
-[`easytranscriber`](https://github.com/kb-labb/easytranscriber) transcript JSON
-into a **self-contained** [Lance](https://lancedb.com) dataset — text rows
-with a **Tantivy BM25 index** for retrieval, plus the original media files
-stored inline as **Lance blob-v2** columns so a search hit has everything the
-player needs in one place.
+Searchable archive viewer for Swedish press-conference video transcripts.
+Single Lance database, FastAPI backend, SvelteKit frontend, optional
+multimodal search via Qwen3-VL embeddings.
 
-The Lance dataset is the **interchange format**: the downstream consumer is
-meant to be a TypeScript search application using
-[`@lancedb/lancedb`](https://lancedb.github.io/lancedb/) (Node native today,
-browser WASM emerging). Python produces the dataset, TypeScript reads it — no
-external storage tier, no audio-path resolution, no broken links.
+> Built around [`easytranscriber`](https://github.com/kb-labb/easytranscriber)
+> output (alignment JSON + MP4 source). The pipeline ingests both into a
+> single self-contained [Lance](https://lancedb.com) dataset, then serves
+> search + playback through a typed HTTP API.
 
-Pipeline:
+---
+
+## What this repo does
 
 ```
- ┌─────────────┐  easytranscriber   ┌─────────────┐  raudio   ┌─────────────┐
- │  audio/mp3  │ ─────────────────▶ │   *.json    │ ─────────────▶ │    Lance    │
- │  audio/wav  │   VAD + Whisper    │ AudioMetadata│   ingest + FTS │  + Tantivy  │
- │   …/mp4     │   + forced align   │   (msgspec) │                │   index     │
- └─────────────┘                    └─────────────┘                └──────┬──────┘
-                                                                         │
-                                                       TS search UI  ◀───┘
-                                                     (@lancedb/lancedb)
+input/sv/*.mp4                 ← source videos
+        │
+   transcribe                  → output/sv/alignments/*.json   (easytranscriber)
+        │
+   thumbnail                   → thumbnails/{stem}.jpg          (one per doc)
+        │
+   ingest-full                 → transcripts.lance/             (Lance: chunks + documents)
+        │
+   embed-chunks                → chunks.text_embedding          (Qwen3-VL → 1024 dims)
+   extract-chunk-frames        → chunks.frame_blob              (ffmpeg @ chunk.start)
+   embed-chunk-frames          → chunks.frame_embedding         (Qwen3-VL on each frame)
+        │
+   make backend                → FastAPI on :8000 (/api/*)
+   make frontend               → SvelteKit + Bun proxy on :3000
 ```
 
-- **Input**: `AudioMetadata` JSON files from
-  `easytranscriber.pipelines.pipeline(...)` (one per audio file).
-- **Output**: a Lance directory with **two tables**:
-  - `chunks` — one row per `AudioChunk` (`[start, end)`, word-level alignments,
-    document-level context denormalised on). The `text` column is indexed by
-    Tantivy BM25.
-  - `documents` — one row per source media file. The raw mp3/mp4/wav bytes
-    live in a **blob-v2** column (`media_blob`) and are loaded lazily via
-    `ds.take_blobs(...)`.
-- **Retrieval**: BM25 FTS on `chunks.text`; lookup `documents` by `doc_id`
-  when the hit needs playback. Phrase queries, boolean operators, prefix
-  match, `NEAR(...)`, etc. are all supported.
+Search modes the API supports:
 
-Why two tables? A chunk is ~50 words, a source file is ~30 MB. Putting the
-blob on every chunk row would duplicate each media file 100–200×. The chunks
-table stays light (cheap FTS scans), the documents table holds one heavy
-blob per file. Blob-v2 encoding means the bytes never touch the scanner
-unless you explicitly request them.
-
-No embedding model, no vector search — just FTS. If you later want hybrid
-retrieval you can add a `list<float32>` column with `table.add_columns(...)`
-(Lance supports schema evolution).
-
-## Bootstrap / prereqs
-
-### System dependencies
-
-| Tool | Required for | Install |
+| `mode` | what it matches | requires |
 |---|---|---|
-| **`uv`** | everything | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| **`ffmpeg`** | `transcribe`, `ingest-with-audio` | `sudo apt install ffmpeg` (Linux) · `brew install ffmpeg` (macOS) |
-| **NVIDIA GPU + CUDA** | `transcribe` with `kb-whisper-large` | see [PyTorch install matrix](https://pytorch.org/get-started/locally/); skip for CPU-only smaller models |
-| **`hf` CLI + HF token** | gated `pyannote` VAD | `pip install huggingface_hub[cli]` then `hf auth login` (or pass `VAD=silero` to skip) |
+| `fts` | BM25 over chunk text (Tantivy + Swedish stemmer) | `chunks.text` |
+| `semantic` | cosine over `chunks.text_embedding` | `embed-chunks` run |
+| `hybrid` | FTS + semantic, RRF-fused (Lance native) | both |
+| `visual` | cosine over `chunks.frame_embedding`, query is text *or* image | frames + embeddings |
+| `all` | union of FTS + semantic + visual, RRF-fused | everything |
 
-Run the built-in check at any time:
+Optional `rerank=true` swaps the default RRF for a Qwen3-VL-Reranker cross-encoder over the top candidates.
 
-```bash
-make check-deps
+---
+
+## Repo layout
+
 ```
-
-It prints a pass/fail for each of the above with the exact install command.
-
-### One-shot bootstrap
-
-```bash
-make bootstrap
-```
-
-This runs `check-deps`, then `uv sync`, then `uv sync --extra transcribe`, and
-prints the next steps. Safe to re-run — `uv sync` is idempotent.
-
-If you only want to **use an existing Lance table** (ingest + search, no
-transcription), drop the transcribe extra:
-
-```bash
-make install          # lighter install, no torch/whisper
+lance-audio-demo/
+├── backend/app.py             FastAPI: /api/search, /api/media, /api/thumbnail,
+│                              /api/chunk-frame, /api/health, Range streaming
+├── frontend/                  SvelteKit + Tailwind v4 viewer (main UI)
+│   ├── src/                   routes + components
+│   └── server.ts              Bun static-file server + /api/* proxy
+├── demo/                      Secondary SvelteKit app (transformers.js audio demo)
+├── src/raudio/                Python ingestion + search core
+│   ├── cli.py                 typer CLI: ingest, embed-chunks, extract-…, serve
+│   ├── ingest.py              JSON → Lance writer (chunks + documents tables)
+│   ├── schema.py              PyArrow schemas (text_embedding, frame_blob, …)
+│   ├── embeddings.py          vLLM HTTP client (text + image) + Qwen reranker
+│   ├── frames.py              ffmpeg per-chunk frame extractor
+│   └── search.py              FTS + vector + hybrid query helpers
+├── tools/                     Jinja templates, NVIDIA toolkit installer
+├── Makefile                   end-to-end developer commands
+├── pyproject.toml             uv-managed Python deps (+ [multimodal] extra)
+└── transcripts.lance/         Lance dataset (gitignored — local only)
 ```
 
 ---
 
-## Try it — one command
+## Quickstart
+
+### 0. System prerequisites
+
+- Python 3.11 (managed via `uv`)
+- `ffmpeg` on `$PATH`
+- NVIDIA GPU + Docker for the multimodal vLLM servers (optional — text FTS works without it)
 
 ```bash
-make demo
+make bootstrap     # uv venv + install all Python deps
 ```
 
-This installs deps, wipes any previous Lance DB, ingests
-`examples/taleoftwocities_01_dickens_64kb_trimmed.json`, and runs three
-representative FTS queries so you can see the full pipeline end-to-end. No
-audio extraction, no ffmpeg required.
+### 1. Ingest (one-time)
 
-### Producing the JSON files from your own audio
-
-The JSONs that `make ingest` reads are produced by
-[`easytranscriber`](https://github.com/kb-labb/easytranscriber) (KBLab's ASR
-pipeline: VAD → Whisper → forced alignment). That dep is **optional** (heavy:
-torch + transformers + pyannote + ctranslate2) and lives in the `[transcribe]`
-extra:
+Place transcripts under `output/sv/alignments/*.json` and source videos under `input/sv/*.mp4`.
 
 ```bash
-make install-transcribe                         # uv sync --extra transcribe
-# or: uv pip install 'raudio[transcribe]'
-
-# Then run the pipeline on a directory of audio — writes output/alignments/*.json.
-# Defaults to kb-whisper-large + Swedish; override via env:
-make transcribe AUDIO_DIR=./my-audio LANGUAGE=sv        # GPU recommended
-make transcribe AUDIO_DIR=./my-audio LANGUAGE=en \
-    MODEL=onnx-community/whisper-base DEVICE=cpu         # CPU-friendly fallback
-
-# Feed those JSONs into Lance:
-make reingest SAMPLE=output/alignments/*.json
+make pipeline      # transcribe + thumbnail + ingest-full
+# OR if alignments already exist:
+make ingest-full
 ```
 
-The transcription stage requires `ffmpeg` on PATH and (for gated `pyannote` VAD)
-a Hugging Face auth token — run `hf auth login` first, or use `VAD=silero`.
-Under the hood `make transcribe` just calls
-`raudio transcribe --audio-dir …` (see `src/raudio/transcribe.py`).
+This populates `transcripts.lance/` with two tables: `documents` (one row per video, with thumbnail + media URI) and `chunks` (one row per ~30s transcript chunk).
 
-### Individual steps
+### 2. Run the viewer
+
+Three terminals:
 
 ```bash
-make install                          # uv sync
-make ingest                           # appends the sample into ./transcripts.lance
-make reingest                         # same, but wipes the DB first (safe to re-run)
-make search Q='best of times'         # BM25 query
-make search Q='"spring of hope"'      # exact phrase
-make search Q='wisdom OR foolishness' # boolean
+# T1: FastAPI backend
+make backend                       # → http://127.0.0.1:8000
 
-# Also embed the raw source media as a blob-v2 column in a `documents` table:
-#   needs the source files under AUDIO_ROOT (no ffmpeg required — we store bytes verbatim)
-make ingest-with-media AUDIO_ROOT=/path/to/media-dir
-
-make shell                            # Python REPL with `la = raudio`
-make clean                            # drop ./transcripts.lance + build artefacts
-make reset                            # clean + drop .venv
+# T2: SvelteKit frontend (production build + Bun proxy)
+make frontend                      # → http://localhost:3000
+# OR Vite HMR for dev:
+make frontend-dev                  # → http://localhost:5173
 ```
 
-Run `make` with no args for the annotated list of targets.
+You can now search by keyword (FTS) and play any chunk in the right pane.
 
-## Consuming the Lance dataset
+### 3. Add semantic search (optional)
 
-### Python — pull a playable blob for a hit
+Requires GPU. Spin up the vLLM embed server, then embed all chunks once:
 
-```python
-import lance
+```bash
+# T3: long-running vLLM HTTP server (Qwen3-VL-Embedding-8B)
+make embed-server-docker            # → http://127.0.0.1:8001
+
+# Once-off — populates chunks.text_embedding + builds IVF_PQ index
+make embed-chunks                   # ~25 min on a 5090 for 145k chunks
+```
+
+After this, the UI's "meaning" / "both" toggle is live and `mode=semantic|hybrid` work via the API.
+
+### 4. Add visual search (optional)
+
+Requires GPU + the embed server. Two stages:
+
+```bash
+make extract-chunk-frames          # ffmpeg, CPU-bound, ~30 min for 145k chunks
+make embed-chunk-frames            # Qwen3-VL image embeddings → frame_embedding
+```
+
+Drag-drop an image onto the search bar to query frames; or set mode to `all` for cross-modal text+image fusion.
+
+### 5. Reranking (optional)
+
+```bash
+make rerank-server-docker          # Qwen3-VL-Reranker-8B on :8002
+```
+
+With both servers up, toggle "rerank" in the UI to engage the cross-encoder over the top candidates. ~200–500 ms latency cost, large recall improvement.
+
+---
+
+## How the search runs end-to-end
+
+### Plain FTS query
+
+```
+browser  →  GET /api/search?q=alkohol&mode=fts
+frontend (Bun :3000)  →  proxy  →  FastAPI :8000
+backend  →  chunks.search().full_text_search("alkohol").limit(20)
+                ↳ Tantivy BM25 index (Swedish stemmer)
+backend  →  json hits  →  frontend renders list
+```
+
+### Semantic / hybrid query
+
+```
+browser  →  GET /api/search?q=klimat&mode=hybrid
+backend  →  vLLM /v1/embeddings (chat shape, system="Represent the user's input.")
+              ↳ Qwen3-VL embedding (4096 → MRL-truncated to 1024)
+backend  →  chunks.query().full_text_search(q).nearest_to(vec).rerank(RRFReranker())
+              ↳ Lance native FTS+vector hybrid with RRF fusion
+backend  →  json hits  →  frontend
+```
+
+### Visual query (image upload)
+
+```
+browser  →  POST /api/search  multipart  (image, mode=visual)
+backend  →  PIL center-crop to 448×448, base64 → vLLM /v1/embeddings (image_url)
+backend  →  chunks.query()
+              .nearest_to(image_vec, vector_column_name="frame_embedding")
+              .distance_type("cosine").limit(n)
+backend  →  json hits including chunk-frame URLs
+frontend →  /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}  (Lance Blob V2 fetch)
+```
+
+### Playback
+
+```
+HitCard click  →  PlayerPane mounts <video>
+<video src="/api/media/{doc_id}">
+backend  →  documents table → media_blob (Blob V2 External URI → MP4 on disk)
+            ↳ Range request maps to BlobFile.seek(start) + read(length)
+```
+
+---
+
+## Inspect the dataset directly
+
+```bash
+uv run python -c "
 import lancedb
-
-db = lancedb.connect("./transcripts.lance")
-chunks = db.open_table("chunks")
-
-hit = chunks.search("spring of hope", query_type="fts").limit(1).to_list()[0]
-print(f"[{hit['start']:.2f}s] {hit['text']}")
-
-# Fetch the source media blob for that chunk's parent document.
-docs = lance.dataset("./transcripts.lance/documents.lance")
-row = docs.to_table(
-    filter=f"doc_id = '{hit['doc_id']}'",
-    columns=[],           # <- empty: metadata-only, don't pull bytes
-    with_row_id=True,
-).to_pylist()[0]
-
-blob = docs.take_blobs("media_blob", ids=[row["_rowid"]])[0]
-with blob as f:
-    media_bytes = f.read()        # full mp3/mp4/wav
-# or stream just a range with f.seek()/f.read(n), or hand `blob` to PyAV.
+t = lancedb.connect('./transcripts.lance').open_table('chunks')
+print('rows           :', t.count_rows())
+print('text emb null  :', t.count_rows('text_embedding IS NULL'))
+print('frame mime null:', t.count_rows('frame_mime IS NULL'))
+print('frame emb null :', t.count_rows('frame_embedding IS NULL'))
+"
 ```
 
-### TypeScript — FTS + join on `doc_id`
+(`frame_mime` is the safe NULL sentinel — Lance 4.0 panics on `IS NULL` against `lance.blob.v2` columns.)
 
-```ts
-import * as lancedb from '@lancedb/lancedb';
+---
 
-const db = await lancedb.connect('./transcripts.lance');
-const chunks = await db.openTable('chunks');
-const documents = await db.openTable('documents');
+## API cheat sheet
 
-// BM25 full-text search (same Tantivy index `make search` uses).
-const hits = await chunks.search('"spring of hope"', 'fts').limit(10).toArray();
+| Endpoint | What it does |
+|---|---|
+| `GET /api/health` | Pings vLLM embed + rerank, reports DB path / table list / row counts |
+| `GET /api/search?q=…&mode=fts\|semantic\|hybrid&n=20` | Text search |
+| `POST /api/search` (multipart `image=…&mode=visual`) | Image / cross-modal search |
+| `GET /api/documents?page=1&per_page=24` | Paginated browse |
+| `GET /api/thumbnail/{doc_id}` | Document thumbnail (Inline Blob) |
+| `GET /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}` | Chunk frame (Inline Blob) |
+| `GET /api/media/{doc_id}` | Stream the MP4 (External Blob, Range-friendly) |
 
-for (const h of hits) {
-    console.log(`[${h.start.toFixed(2)}s] ${h.text}`);
-}
+The viewer's status badge (top-right of the navbar) hits `/api/health` every 10 s — green = embed/rerank reachable, red = down.
 
-// Fetch the media blob(s) for those hits.
-const docIds = [...new Set(hits.map(h => h.doc_id))];
-const docs = await documents
-    .query()
-    .where(`doc_id IN (${docIds.map(d => `'${d}'`).join(',')})`)
-    .select(['doc_id', 'media_mime', 'media_blob'])
-    .toArray();
+---
 
-for (const d of docs) {
-    // d.media_blob is a Uint8Array of the original file bytes.
-    const url = URL.createObjectURL(new Blob([d.media_blob], { type: d.media_mime }));
-    // <audio src={url} /> or seek with <audio>.currentTime = hit.start
-}
-```
+## GPU layout (3-GPU box)
 
-- **Node/Bun** works today.
-- **Browser** via `@lancedb/lancedb-wasm` is still experimental — if you need
-  browser-side search today, wrap this Lance table in a tiny FastAPI/Node API
-  and have the frontend call that.
+| GPU | Service |
+|---|---|
+| 0 | (free / `make pipeline GPU=0` for transcribe) |
+| 1 | `make rerank-server-docker RERANK_GPU=1` |
+| 2 | `make embed-server-docker EMBED_GPU=2` |
 
-`easytranscriber` itself is **not** a required dependency — we vendor a
-minimal copy of its msgspec data model (`AudioMetadata` / `SpeechSegment` /
-`AudioChunk` / `AlignmentSegment` / `WordSegment`) so ingest doesn't pull in
-torch/transformers. Install it separately if you want to generate new JSONs:
+For a single-GPU box, run sequentially: transcribe first, then start the vLLM servers with `--gpu-memory-utilization 0.40` each.
 
-```bash
-uv pip install 'raudio[transcribe]'
-```
+---
 
-## Usage
+## Development tips
 
-### CLI
+- `make dev` runs backend + frontend together (in two tmux panes if available).
+- `make frontend-dev` for Vite HMR while iterating on Svelte components.
+- Logs go to `logs/` (rotating, gitignored). Process logs use `tee` so you can watch live with `tail -f logs/<file>`.
+- `make vllm-stop` stops both Docker vLLM containers.
+- Re-embedding is incremental: every `embed-*` command has `--only-null` (default) and only processes rows where the target column is empty. Safe to Ctrl-C and resume.
 
-```bash
-# Ingest transcripts
-raudio --db transcripts.lance ingest output/alignments/*.json
+---
 
-# Full-text search
-raudio --db transcripts.lance search '"spring of hope"'
-raudio --db transcripts.lance search 'age of wisdom' -n 5
-raudio --db transcripts.lance search 'climate OR weather' \
-    --where "language = 'en'"
-```
+## Author
 
-### Python
-
-```python
-from pathlib import Path
-from raudio import ingest_many, load_transcript, nearest_chunks
-
-docs = [load_transcript(p) for p in Path("output/alignments").glob("*.json")]
-ingest_many("transcripts.lance", docs)
-
-hits = nearest_chunks("transcripts.lance", "the spring of hope", limit=5)
-for h in hits:
-    print(f"[{h['start']:.2f}s] {h['audio_path']}\n  {h['text']}")
-```
-
-## Schema
-
-Two Lance datasets live under one directory (`transcripts.lance/`). They share
-`doc_id` as the join key:
-
-```
-transcripts.lance/
-├── chunks.lance       — search index, ~150 rows per source file
-└── documents.lance    — one row per source file, holds video URI + thumbnail
-```
-
-### `chunks` — one row per `AudioChunk` (search target)
-
-Lightweight, scan-friendly. The Tantivy FTS index lives here.
-
-| Column            | Type                          | Notes                                                  |
-|-------------------|-------------------------------|--------------------------------------------------------|
-| `doc_id`          | string                        | `sha1(audio_path)[:16]` — join key to `documents`      |
-| `speech_id`       | int32                         | index of the parent SpeechSegment                      |
-| `chunk_id`        | int32                         | index within `speech.chunks`                           |
-| `audio_path`      | string                        | original filename (denormalised for filter-free reads) |
-| `sample_rate`     | int32                         |                                                        |
-| `audio_duration`  | float32                       | whole-file duration                                    |
-| `referenskod`     | string                        | Riksarkivet archival reference (from CSV)              |
-| `namn`            | string                        | Riksarkivet event title                                |
-| `bildid`          | string                        | Riksarkivet image id                                   |
-| `extraid`         | string                        | Riksarkivet extra id                                   |
-| `start` / `end`   | float32                       | absolute seconds in audio                              |
-| `duration`        | float32                       |                                                        |
-| `text`            | string                        | **indexed by Tantivy FTS** (Swedish stemmer)           |
-| `audio_frames`    | int64                         |                                                        |
-| `num_logits`      | int64                         |                                                        |
-| `language`        | string                        | inherited from the document (e.g. `"sv"`)              |
-| `language_prob`   | float32                       |                                                        |
-| `alignments_json` | **JSONB** (`pa.json_()`)      | word-level alignments for this chunk, stored as JSONB  |
-| `metadata`        | string (JSON)                 | per-speech metadata escape hatch                       |
-
-Indexes:
-- **FTS** on `text` (Tantivy, `with_position=True`, Swedish stemmer, stop words kept)
-- **BTREE** on `doc_id` and `audio_path`
-
-Why `alignments_json` is JSONB and not a nested struct: the TS Lance binding
-can't decode nested word/struct lists, but every binding can read JSONB. The
-backend parses it back to objects before returning hits.
-
-### `documents` — one row per source file (Lance file format 2.2)
-
-Heavy stuff lives here. Required for the viewer (videos + thumbnails).
-
-| Column           | Type                          | Notes                                                                       |
-|------------------|-------------------------------|-----------------------------------------------------------------------------|
-| `doc_id`         | string                        | shared with `chunks`                                                        |
-| `audio_path`     | string                        |                                                                             |
-| `sample_rate`    | int32                         |                                                                             |
-| `duration`       | float32                       |                                                                             |
-| `referenskod`    | string                        |                                                                             |
-| `namn`           | string                        |                                                                             |
-| `bildid`         | string                        |                                                                             |
-| `extraid`        | string                        |                                                                             |
-| `language`       | string                        | ISO 639-1 code (`sv`, `en`, …)                                              |
-| `media_mime`     | string                        | e.g. `"video/mp4"`                                                          |
-| `media_blob`     | **Blob V2 External**          | stores a **URI** (`file:///abs/path.mp4`); read lazily via `ds.take_blobs`  |
-| `thumbnail`      | **Blob V2 Inline**            | JPEG **bytes** stored in-line in the data file                              |
-| `thumbnail_mime` | string                        | usually `"image/jpeg"`                                                      |
-| `metadata`       | string (JSON)                 |                                                                             |
-
-The Blob V2 split is intentional:
-- **Videos** are GBs total → store URIs only, never copy bytes into Lance
-- **Thumbnails** are KBs each → inline so a fetch is one Lance read
-
-Full Arrow struct definitions live in [`schema.py`](src/raudio/schema.py).
-
-## Search at query time
-
-The backend builds a **structured Lance FTS query** (not a raw query string),
-which gives us proper fuzziness and phrase support that the plain string API
-doesn't expose.
-
-### What happens for a single search
-
-```
-GET /api/search?q=betänkandet&fuzziness=0&phrase=false&language=sv&namn=…
-```
-
-1. **Build optional SQL where-clause** from the metadata params:
-   ```sql
-   language = 'sv' AND namn LIKE '%alkohol%' AND referenskod LIKE '%SE/RA%'
-   ```
-2. **Pick the FTS query type** based on toggles:
-   - `phrase=true`    → `PhraseQuery(q, "text")` — exact word sequence (requires `with_position=True` index, which we have)
-   - `fuzziness=N`    → `MatchQuery(q, "text", fuzziness=N)` — Levenshtein distance ≤ N (0, 1, or 2)
-   - default          → `MatchQuery(q, "text", fuzziness=0)` — exact stemmed terms
-3. **Run FTS, post-filter** on the where-clause, take top-N by BM25 score:
-   ```python
-   chunks.search(MatchQuery(q, "text", fuzziness=2))
-         .where("language = 'sv' AND namn LIKE '%alkohol%'", prefilter=False)
-         .limit(20)
-         .to_list()
-   ```
-4. **Join via the frontend**: each hit carries `doc_id`. The viewer fetches
-   `/api/thumbnail/{doc_id}` and `/api/media/{doc_id}` which call
-   `documents.take_blobs("thumbnail" | "media_blob", indices=[idx])`. Media
-   reads support HTTP Range — `BlobFile.seek(start) + read(length)` streams the
-   exact byte range the browser asked for, so video scrubbing works without
-   ever loading the whole MP4.
-
-### Tokenization of `text`
-
-The FTS index is built with:
-
-| Setting             | Value      | Why                                                                  |
-|---------------------|------------|----------------------------------------------------------------------|
-| `language`          | Swedish    | Stemmer maps `betänkandet`/`betänkande`/`betänkanden` → same stem    |
-| `with_position`     | true       | Required for `PhraseQuery`                                           |
-| `remove_stop_words` | false      | Keeps "of"/"the"/"av" so quoted phrases match verbatim               |
-| `lower_case`        | true (default) | Case-insensitive matching                                        |
-| `ascii_folding`     | true (default) | `é`/`å` collapse to `e`/`a` for accent-tolerant matches          |
-
-### What works in the search box
-
-Lance's plain query string is **not** a Tantivy mini-language — `AND`/`OR`/`NOT`
-typed in the box are treated as literal terms. To control matching, use the
-toggles next to the search bar:
-
-| Input                                                  | Hits                                                                      |
-|--------------------------------------------------------|---------------------------------------------------------------------------|
-| `betänkandet`                                          | Stemmed match: also finds *betänkande*, *betänkanden*                     |
-| `minister regering`                                    | Either term, ranked by BM25 (more matched terms = higher score)           |
-| `betänkadet` + ☑ **fuzzy**                             | Edit-distance ≤ 2: finds *betänkandet* despite the typo                   |
-| `alkoholmonopolets framtid` + ☑ **phrase**             | Exact phrase, words adjacent in order                                     |
-| filter: `language = sv`                                | Pre-narrows the result set; combines with FTS query via SQL `AND`         |
-
-### Why typos return 0 hits without "fuzzy"
-
-Tantivy looks up the exact stemmed token in its term dictionary. A misspelling
-like `betänkadet` (missing `n`) doesn't exist in any inflection of any Swedish
-word — the stemmer can't reconstruct the missing letter, so the lookup
-returns nothing. Toggling **fuzzy** switches the query type to
-`MatchQuery(..., fuzziness=2)` which permits up to 2 edits — at the cost of
-some false positives on short queries.
-
-## Relationship to `easytranscriber`
-
-`easytranscriber` ships its own search UI (`easysearch`) backed by **SQLite
-FTS5**. `raudio` is an alternative sink that targets **Lance + Tantivy**
-instead — useful when you want columnar storage, ACID snapshots, the ability
-to bolt on vector search later, or integration with the broader Lance
-ecosystem (Rust / JS / LanceDB Cloud).
-
-## Layout
-
-```
-raudio/
-├── Makefile               # bootstrap + transcribe + ingest + search targets
-├── README.md
-├── pyproject.toml         # deps; `[transcribe]` extra adds easytranscriber
-├── examples/
-│   └── taleoftwocities_01_dickens_64kb_trimmed.json   # sample alignment JSON
-└── src/raudio/
-    ├── __init__.py        # public re-exports
-    ├── cli.py             # `raudio {transcribe,ingest,search}` entrypoint
-    ├── datamodel.py       # msgspec structs mirroring easytranscriber
-    ├── schema.py          # CHUNK_SCHEMA + DOC_SCHEMA pyarrow schemas
-    ├── ingest.py          # load_transcript / flatten_chunks / ingest_{document,many}
-    ├── search.py          # nearest_chunks (Tantivy FTS) + timecode helper
-    ├── audio.py           # ffmpeg PCM extraction for the audio_pcm column
-    └── transcribe.py      # wrapper around easytranscriber.pipelines.pipeline
-```
+[Borg93](https://github.com/Borg93)
