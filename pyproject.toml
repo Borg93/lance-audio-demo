@@ -24,8 +24,8 @@ dependencies = [
 
 [project.optional-dependencies]
 # Client-side multimodal extra. Used by:
-#   - the embed-chunks / extract-chunk-frames / embed-chunk-frames CLI commands
-#   - the FastAPI backend at query time (lazy-imported in src/raudio/retrieval/embeddings.py)
+#   - the `raudio feature text_embedding|frame_embedding` + `extract-chunk-frames` commands
+#   - the FastAPI backend at query time (lazy-imported in src/raudio/vllm/embedding.py)
 # Talks HTTP to a vLLM server; doesn't run a model in-process, so no GPU is
 # required to install this extra and no torch conflict with our cu128 pin.
 multimodal = [
