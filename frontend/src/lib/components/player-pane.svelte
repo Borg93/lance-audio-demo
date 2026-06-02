@@ -80,6 +80,12 @@
       {hit.audio_path} · {fmtTime(hit.start)} → {fmtTime(hit.end)}
     </div>
 
+    {#if hit.caption}
+      <div class="shrink-0 text-xs italic text-muted-foreground" title="AI scene caption">
+        🎬 {hit.caption}
+      </div>
+    {/if}
+
     <!-- Grow to fill the pane height; object-contain keeps the aspect ratio
          (letterboxed) instead of the old fixed 320px cap. -->
     <video

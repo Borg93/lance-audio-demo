@@ -15,13 +15,13 @@
 
   <!-- 2) THE 3 JUDGES -->
   <div class="flex flex-col gap-1.5">
-    <div class="font-semibold text-foreground">The 3 judges</div>
+    <div class="font-semibold text-foreground">The 4 judges</div>
     <p class="text-muted-foreground">
-      A search asks up to three independent judges to rank the chunks. Each searches its
+      A search asks up to four independent judges to rank the chunks. Each searches its
       <em>own</em> space and hands back its <em>own</em> ranked list. They never compare scores
       with each other.
     </p>
-    <div class="grid grid-cols-3 gap-2">
+    <div class="grid grid-cols-2 gap-2">
       <div class="rounded border border-border border-l-2 border-l-sky-400 bg-surface2 p-2">
         <div class="font-medium text-foreground">⌨ Keyword</div>
         <div class="text-[10px] text-muted-foreground">exact words you type (FTS / BM25 on the transcript)</div>
@@ -33,6 +33,10 @@
       <div class="rounded border border-border border-l-2 border-l-amber-400 bg-surface2 p-2">
         <div class="font-medium text-foreground">🖼 Image</div>
         <div class="text-[10px] text-muted-foreground">how much the video frame looks like your image (frame vector)</div>
+      </div>
+      <div class="rounded border border-border border-l-2 border-l-emerald-400 bg-surface2 p-2">
+        <div class="font-medium text-foreground">🎬 Scene</div>
+        <div class="text-[10px] text-muted-foreground">what's visible on screen, from each frame's Swedish caption (caption vector)</div>
       </div>
     </div>
   </div>
@@ -61,9 +65,15 @@
       </div>
       <!-- image -->
       <div class="grid grid-cols-[64px_1fr_1fr] text-[10px] text-muted-foreground">
-        <div class="p-1.5 text-foreground">🖼 Image</div>
-        <div class="border-l border-border p-1.5">your image → a vector</div>
-        <div class="border-l border-border p-1.5"><code>frame_embedding</code> of each video frame. Good at: visually similar scenes.</div>
+        <div class="border-b border-border p-1.5 text-foreground">🖼 Image</div>
+        <div class="border-b border-l border-border p-1.5">your image → a vector</div>
+        <div class="border-b border-l border-border p-1.5"><code>frame_embedding</code> of each video frame. Good at: visually similar scenes.</div>
+      </div>
+      <!-- scene -->
+      <div class="grid grid-cols-[64px_1fr_1fr] text-[10px] text-muted-foreground">
+        <div class="p-1.5 text-foreground">🎬 Scene</div>
+        <div class="border-l border-border p-1.5">your text → a vector</div>
+        <div class="border-l border-border p-1.5"><code>caption_embedding</code> of each frame's Swedish caption. Good at: what's on screen ("plakat", "snöig gata").</div>
       </div>
     </div>
   </div>
@@ -100,6 +110,10 @@
         Frame-vector leg<div class="text-[10px] text-muted-foreground"><code>frame_embedding</code></div>
       </div>
     </div>
+    <p class="text-center text-[10px] text-muted-foreground/80">
+      + the text query also drives a <strong class="text-foreground">Scene</strong> leg
+      (<code>caption_embedding</code>) in “all”.
+    </p>
     <div class="text-center text-muted-foreground/70">▼&emsp;&emsp;▼&emsp;&emsp;▼</div>
 
     <!-- fuse -->
@@ -147,8 +161,8 @@
     </div>
     <p class="text-muted-foreground">
       Clips that appear in <strong class="text-foreground">more lists</strong> rise to the top. RRF needs no
-      tuning and works the same for <strong class="text-foreground">2 or 3 lists</strong> — you just add another
-      <code>1/(60 + rank)</code> term. The 3-judge "all" mode <em>always</em> uses equal-weight RRF.
+      tuning and works the same for <strong class="text-foreground">2, 3, or 4 lists</strong> — you just add another
+      <code>1/(60 + rank)</code> term. The multi-judge "all" mode <em>always</em> uses equal-weight RRF.
     </p>
   </div>
 
@@ -219,7 +233,8 @@
       <li>Image search = visual <strong class="text-foreground">frame similarity</strong>, not face / identity recognition.</li>
       <li>No speaker diarization — nothing links who is <em>on screen</em> to who is <em>speaking</em>.</li>
       <li>The reranker is text-only; it never uses the image.</li>
-      <li>3-way fusion is equal-weight — there is no image-vs-text weight yet.</li>
+      <li>Multi-leg fusion (up to 4 judges) is equal-weight — there is no per-leg weight yet.</li>
+      <li>Scene depends on AI captions — only as accurate as the frame captioner.</li>
     </ul>
   </div>
 </div>

@@ -2,22 +2,43 @@
 
 A generative counterpart to the embedding/reranker clients — it asks a
 vision-language model (chat-completions) to describe each frame in one line. The
-caption is stored as a plain ``string`` feature column on ``chunk_frames`` and
-indexed for FTS, so visual content becomes keyword-searchable.
+caption is stored as a plain ``string`` feature column on ``chunk_frames``; a
+second feature (``caption_embedding``) then embeds those strings so the scene
+description becomes vector-searchable (mode ``scene``).
+
+Defaults target **Gemma 4** served by vLLM on port 8003 with an OpenAI-style
+chat-completions API, producing **Swedish** captions for the Riksarkivet corpus.
+Model / URL / instruction are overridable via the ``raudio feature caption``
+CLI flags or the ``RAUDIO_CAPTION_*`` env vars, so the same client can drive a
+different VLM (e.g. ``Qwen/Qwen3-VL-Instruct-2B``) or language without code edits.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Protocol
 
 from .base import DEFAULT_TIMEOUT_S, VLLMTransport
-from .image import image_to_data_url
+from .image import frame_to_data_url
 
-CAPTION_MODEL = "Qwen/Qwen3-VL-Instruct-2B"
-DEFAULT_CAPTION_URL = "http://127.0.0.1:8003"
-CAPTION_INSTRUCTION = "Describe this video frame in one concise sentence."
+# Gemma 4 instruction-tuned VLM that you already run locally at the OpenAI chat
+# endpoint on :8003 (the `rask-gemma` server). This client only POSTs to it — it
+# does not start a server. Override with RAUDIO_CAPTION_* or the CLI flags.
+CAPTION_MODEL = os.getenv("RAUDIO_CAPTION_MODEL", "google/gemma-4-31B-it")
+DEFAULT_CAPTION_URL = os.getenv("RAUDIO_CAPTION_URL", "http://127.0.0.1:8003")
+# Swedish, single factual sentence — the corpus is Swedish press/archival footage.
+# Explicitly forbid the "En bild av… / Bilden visar…" preamble: it repeats across
+# every caption, which both reads worse and dilutes the caption_embedding vectors
+# (every vector shares that lead-in). Ask for the scene content directly.
+CAPTION_INSTRUCTION = os.getenv(
+    "RAUDIO_CAPTION_INSTRUCTION",
+    "Beskriv sakligt vad som syns i videobilden, i en kort mening på svenska. "
+    'Börja direkt med motivet — inte med "En bild", "Bilden visar" eller liknande. '
+    "Svara endast med den beskrivande meningen.",
+)
 CAPTION_CONCURRENCY = 8
-CAPTION_MAX_TOKENS = 64
+# Headroom for a full Swedish sentence (Swedish tokenizes longer than English).
+CAPTION_MAX_TOKENS = 96
 
 _ChatMessage = dict[str, object]
 
@@ -62,7 +83,7 @@ class VLLMCaptionClient:
             {
                 "role": "user",
                 "content": [
-                    {"type": "image_url", "image_url": {"url": image_to_data_url(image)}},
+                    {"type": "image_url", "image_url": {"url": frame_to_data_url(image)}},
                     {"type": "text", "text": self.instruction},
                 ],
             }

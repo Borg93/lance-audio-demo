@@ -50,12 +50,13 @@
           : 'bg-red-500'}"
     ></span>
     <Activity class="size-3.5 text-muted-foreground" />
-    <span class="hidden text-muted-foreground sm:inline">services</span>
+    <span class="hidden text-muted-foreground sm:inline group-data-[collapsible=icon]:!hidden">services</span>
   </Popover.Trigger>
   <Popover.Portal>
     <Popover.Content
-      sideOffset={6}
-      align="end"
+      side="top"
+      sideOffset={8}
+      align="start"
       class="z-50 w-80 rounded-md border border-border bg-card p-3 text-xs shadow-md"
     >
       {#if lastError}

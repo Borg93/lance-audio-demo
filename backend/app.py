@@ -21,6 +21,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.atlas.router import router as atlas_router
 from backend.media.router import router as media_router
 from backend.search.router import router as search_router
 from backend.state import open_resources
@@ -39,6 +40,7 @@ def create_app(db_path: str | Path) -> FastAPI:
     app.include_router(search_router)
     app.include_router(media_router)
     app.include_router(system_router)
+    app.include_router(atlas_router)
 
     # API-only — the Bun frontend serves assets and proxies /api/*.
     # expose_headers is load-bearing for browser Range seeking.

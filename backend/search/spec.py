@@ -15,6 +15,8 @@ class SearchMode(StrEnum):
     FTS = "fts"
     SEMANTIC = "semantic"
     VISUAL = "visual"
+    SCENE = "scene"  # text → cosine over chunk_frames.caption_embedding (Swedish captions)
+    SCENE_FTS = "scene_fts"  # keyword → BM25 over chunk_frames.caption
     HYBRID = "hybrid"
     ALL = "all"
 

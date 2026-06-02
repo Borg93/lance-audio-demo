@@ -35,6 +35,16 @@ multimodal = [
     "tqdm>=4.66",
 ]
 
+# Embedding-Atlas projection extra. Used by `raudio feature atlas` to compute the
+# 2-D map (EVōC node embedding) + cluster columns from the stored text_embedding.
+# EVōC is CPU-only (numba / scikit-learn / tbb) with no torch dependency, so it
+# installs cleanly alongside our cu128 pin. Lazy-imported in features/projection.py.
+atlas = [
+    "evoc>=0.3.1",
+    "numpy>=1.26",
+    "scikit-learn>=1.1",
+]
+
 # vLLM is NOT a project extra: its torch/torchaudio pins conflict with our
 # cu128 versions. Run it instead via `uvx` (uv-managed ephemeral env) — see
 # the `embed-server` and `rerank-server` Make targets. That keeps the main

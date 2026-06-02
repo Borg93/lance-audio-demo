@@ -26,6 +26,7 @@
     rerankN = $bindable('20'),
     weightPct = $bindable<number | null>(null),
     style = $bindable('loose'),
+    sceneMethod = $bindable('vector'),
   }: {
     kind: string;
     resultN?: string;
@@ -33,6 +34,7 @@
     rerankN?: string;
     weightPct?: number | null;
     style?: string;
+    sceneMethod?: string;
   } = $props();
 
   const resultOptions: SelectOption[] = [20, 50, 100, 200].map((n) => ({
@@ -47,6 +49,11 @@
     { value: 'loose', label: 'Loose', description: 'Words anywhere in the chunk; stem-aware.' },
     { value: 'phrase', label: 'Phrase', description: 'Exact words, consecutive order.' },
     { value: 'fuzzy', label: 'Fuzzy', description: 'Allow up to 2 typos per word.' },
+  ];
+  // How the Scene kind searches the frame caption: by meaning (vector) or words (BM25).
+  const sceneOptions: RadioOption[] = [
+    { value: 'vector', label: 'Meaning', description: 'Vector search over the caption — semantically similar scenes.' },
+    { value: 'fts', label: 'Keyword', description: 'BM25 over the caption text — exact Swedish words in the scene description.' },
   ];
 
   // Balance is stored as weightPct ∈ [0,100] | null (null = parameter-free RRF).
@@ -121,7 +128,17 @@
         </div>
       {/if}
 
-      {#if kind !== 'meaning'}
+      {#if kind === 'scene'}
+        <Field
+          label="Scene search"
+          description="Search the AI caption of each frame by meaning (vector) or exact words (keyword)."
+          class="border-t border-border pt-3"
+        >
+          <RadioGroup bind:value={sceneMethod} options={sceneOptions} />
+        </Field>
+      {/if}
+
+      {#if kind !== 'meaning' && kind !== 'scene'}
         <Field label="Keyword match style" class="border-t border-border pt-3">
           <RadioGroup bind:value={style} options={matchOptions} />
         </Field>

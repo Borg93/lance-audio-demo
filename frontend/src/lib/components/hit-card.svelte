@@ -77,6 +77,11 @@
         <!-- highlighted is HTML-escaped + safe to inject -->
         {@html highlighted}
       </div>
+      {#if hit.caption}
+        <div class="line-clamp-2 text-[10px] italic text-muted-foreground" title={hit.caption}>
+          🎬 {hit.caption}
+        </div>
+      {/if}
     </div>
   </button>
 {:else}
@@ -127,6 +132,11 @@
         <!-- highlighted is HTML-escaped + safe to inject -->
         {@html highlighted}
       </div>
+      {#if hit.caption}
+        <div class="line-clamp-1 text-[11px] italic text-muted-foreground" title={hit.caption}>
+          🎬 {hit.caption}
+        </div>
+      {/if}
     </div>
   </button>
 {/if}

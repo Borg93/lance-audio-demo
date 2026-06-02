@@ -1,10 +1,11 @@
 <script lang="ts">
+  // The search-bar `?` — a small popover with click-to-run examples + tips that
+  // make search easier. The deep "how it works" walk-through now lives on the
+  // Guide page (linked at the bottom), so this stays compact.
   import { Popover } from 'bits-ui';
-  import { HelpCircle } from 'lucide-svelte';
-  import SearchFlow from './search-flow.svelte';
+  import { HelpCircle, ArrowRight, Image as ImageIcon } from 'lucide-svelte';
 
   type Example = { label: string; example: string; explain: string };
-
   type Props = {
     examples: Record<string, Example>;
     /** Called when the user clicks an example row — fires (key, example). */
@@ -12,71 +13,62 @@
   };
   let { examples, onpick }: Props = $props();
 
-  let tab = $state<'examples' | 'flow'>('examples');
+  let open = $state(false);
+
+  function pick(key: string, example: string) {
+    onpick?.(key, example);
+    open = false; // filled the query box — close so results are visible
+  }
 </script>
 
-<Popover.Root>
+<Popover.Root bind:open>
   <Popover.Trigger
-    class="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary/40 hover:text-foreground"
-    title="Show search examples"
+    class="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground"
+    title="Examples & tips"
   >
     <HelpCircle class="size-4" />
   </Popover.Trigger>
-
   <Popover.Portal>
     <Popover.Content
-      sideOffset={6}
+      side="bottom"
       align="end"
-      class="z-50 w-[520px] rounded-md border border-border bg-card p-3 text-xs shadow-md"
+      sideOffset={6}
+      class="z-50 w-[min(92vw,400px)] rounded-lg border border-border bg-card p-3 text-xs shadow-md"
     >
-      <!-- Tabs: examples vs the search-flow diagram -->
-      <div class="mb-3 flex items-center gap-1 border-b border-border pb-2">
-        <button
-          type="button"
-          onclick={() => (tab = 'examples')}
-          class={'rounded px-2 py-0.5 text-[11px] font-medium transition-colors ' +
-            (tab === 'examples' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground')}
-        >
-          Examples
-        </button>
-        <button
-          type="button"
-          onclick={() => (tab = 'flow')}
-          class={'rounded px-2 py-0.5 text-[11px] font-medium transition-colors ' +
-            (tab === 'flow' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground')}
-        >
-          How search works
-        </button>
-      </div>
-
-      {#if tab === 'examples'}
-        <div class="grid gap-1">
-          {#each Object.entries(examples) as [key, info] (key)}
-            <button
-              type="button"
-              onclick={() => onpick?.(key, info.example)}
-              class="grid grid-cols-[140px_max-content_1fr] items-baseline gap-3 rounded px-2 py-1.5 text-left transition-colors hover:bg-secondary/50"
-            >
-              <span class="font-medium">{info.label}</span>
+      <div class="mb-1.5 font-medium text-foreground">Try an example</div>
+      <div class="grid gap-0.5">
+        {#each Object.entries(examples) as [key, info] (key)}
+          <button
+            type="button"
+            onclick={() => pick(key, info.example)}
+            class="grid grid-cols-[84px_1fr] items-baseline gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-secondary/50"
+          >
+            <span class="font-medium text-foreground">{info.label}</span>
+            <span class="min-w-0">
               <code class="rounded bg-surface2 px-1.5 py-0.5 font-mono text-[11px] text-primary">
                 {info.example}
               </code>
-              <span class="text-muted-foreground">{info.explain}</span>
-            </button>
-          {/each}
-        </div>
-        <div class="mt-3 rounded-md border border-dashed border-border bg-muted/40 p-2 text-[11px] text-muted-foreground">
-          💡 <strong>With an image attached</strong> (drag in or 📎): the
-          dropdown becomes a fusion knob.
-          <ul class="mt-1 ml-4 list-disc space-y-0.5">
-            <li><em>Keyword/Phrase/Fuzzy</em> → image-only (visual similarity).</li>
-            <li><em>Vector</em> → image + your text query, fused over transcript&nbsp;+ frame vectors.</li>
-            <li><em>Hybrid</em> → adds keyword search on top → 3-way RRF fusion.</li>
-          </ul>
-        </div>
-      {:else}
-        <SearchFlow />
-      {/if}
+              <span class="mt-0.5 block text-muted-foreground">{info.explain}</span>
+            </span>
+          </button>
+        {/each}
+      </div>
+
+      <div
+        class="mt-2 flex items-start gap-1.5 rounded border border-dashed border-border bg-muted/40 p-2 text-muted-foreground"
+      >
+        <ImageIcon class="mt-0.5 size-3.5 shrink-0" />
+        <span><strong class="text-foreground">Attach an image</strong> (📎 or drag in) to add a visual pass.</span>
+      </div>
+
+      <a
+        href="/guide"
+        onclick={() => (open = false)}
+        class="mt-2 flex items-center gap-1.5 rounded px-2 py-1.5 font-medium text-primary transition-colors hover:bg-secondary/50"
+      >
+        Full guide: how search works
+        <ArrowRight class="size-3.5" />
+      </a>
     </Popover.Content>
   </Popover.Portal>
 </Popover.Root>

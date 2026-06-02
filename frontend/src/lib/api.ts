@@ -12,7 +12,15 @@ import { z } from 'zod';
 // Schemas (mirror src/raudio/schema.py:CHUNK_SCHEMA + DOC_SCHEMA)
 // ─────────────────────────────────────────────────────────────────────
 
-export const SearchModeSchema = z.enum(['fts', 'semantic', 'visual', 'hybrid', 'all']);
+export const SearchModeSchema = z.enum([
+    'fts',
+    'semantic',
+    'visual',
+    'scene',
+    'scene_fts',
+    'hybrid',
+    'all',
+]);
 export type SearchMode = z.infer<typeof SearchModeSchema>;
 
 const WordSchema = z.object({
@@ -48,6 +56,9 @@ export const HitSchema = z.object({
     referenskod: z.string().nullable().optional(),
     bildid: z.string().nullable().optional(),
     extraid: z.string().nullable().optional(),
+    // AI-written Swedish caption of the chunk's representative frame. Present
+    // only once captions are built (`raudio feature caption`); null otherwise.
+    caption: z.string().nullable().optional(),
     // Backend (`_postprocess_hits`) always emits this field — empty array
     // when the chunk has no alignments — so we keep it required here.
     alignments: z.array(AlignmentSchema),
@@ -213,3 +224,71 @@ export const thumbnailUrl = (doc_id: string) => `/api/thumbnail/${encodeURICompo
 export const chunkFrameUrl = (doc_id: string, speech_id: number, chunk_id: number) =>
     `/api/chunk-frame/${encodeURIComponent(doc_id)}/${speech_id}/${chunk_id}`;
 export const mediaUrl = (doc_id: string) => `/api/media/${encodeURIComponent(doc_id)}`;
+
+// ── Embedding Atlas ───────────────────────────────────────────────────────
+// The Atlas tab renders a precomputed 2-D EVōC projection of the chunks table
+// (built offline by `raudio feature atlas`). `status` gates the view, `points`
+// streams compact coord/colour/key arrays for the scatter renderer, and
+// `chunk` lazily fetches one chunk's full detail when a point is selected.
+const AtlasStatusSchema = z.object({ projected: z.boolean(), rows: z.number().int() });
+export type AtlasStatus = z.infer<typeof AtlasStatusSchema>;
+
+export async function getAtlasStatus(fetcher: typeof fetch = fetch): Promise<AtlasStatus> {
+    return asJson(await fetcher('/api/atlas/status'), AtlasStatusSchema);
+}
+
+/** Compact arrays for the scatter map. `doc[i]` indexes into `docs` (the distinct
+ *  doc ids); `(docs[doc[i]], speech_id[i], chunk_id[i])` is point i's chunk key. */
+export interface AtlasPoints {
+    count: number;
+    x: number[];
+    y: number[];
+    docs: string[];
+    doc: number[];
+    speech_id: number[];
+    chunk_id: number[];
+    cluster?: number[];
+    language?: number[];
+    languages?: string[];
+}
+
+/** Fetch the point arrays. Skips per-element zod (the payload is ~10⁶ numbers);
+ *  a structural guard is enough at this boundary and keeps the map load snappy. */
+export async function getAtlasPoints(fetcher: typeof fetch = fetch): Promise<AtlasPoints> {
+    const r = await fetcher('/api/atlas/points');
+    if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new ApiError(r.status, body?.detail ?? r.statusText);
+    }
+    const data = (await r.json()) as AtlasPoints;
+    if (typeof data?.count !== 'number' || !Array.isArray(data.x) || data.x.length !== data.count) {
+        throw new ApiError(500, 'malformed /api/atlas/points payload');
+    }
+    return data;
+}
+
+/** Full hit for one chunk (detail pane + playback), looked up by its key. */
+export async function getAtlasChunk(
+    doc_id: string,
+    speech_id: number,
+    chunk_id: number,
+    fetcher: typeof fetch = fetch,
+): Promise<Hit> {
+    const r = await fetcher(`/api/atlas/chunk/${encodeURIComponent(doc_id)}/${speech_id}/${chunk_id}`);
+    return asJson(r, HitSchema);
+}
+
+/** Full hits for a batch of chunk keys — the lasso/box selection's results table. */
+export async function getAtlasChunks(
+    keys: [string, number, number][],
+    fetcher: typeof fetch = fetch,
+): Promise<Hit[]> {
+    const r = await fetcher('/api/atlas/chunks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys }),
+    });
+    return asJson(r, z.array(HitSchema));
+}
+
+export const atlasParquetUrl = () => '/api/atlas/parquet';

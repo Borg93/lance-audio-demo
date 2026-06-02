@@ -1,31 +1,108 @@
 <script lang="ts">
   import '../app.css';
+  import { browser } from '$app/environment';
+  import { page } from '$app/state';
+  import type { ComponentType, Snippet } from 'svelte';
+  import { AudioLines, Search, Map, BookOpen } from 'lucide-svelte';
+  import * as Sidebar from '$lib/components/ui/sidebar';
   import ThemeToggle from '$lib/components/theme-toggle.svelte';
   import StatusBadge from '$lib/components/status-badge.svelte';
-  import type { Snippet } from 'svelte';
 
   let { children }: { children: Snippet } = $props();
+
+  const NAV: { href: string; label: string; icon: ComponentType; hint: string }[] = [
+    { href: '/', label: 'Search', icon: Search, hint: 'Find moments across transcripts, video & scenes' },
+    { href: '/atlas', label: 'Atlas', icon: Map, hint: 'Explore the embedding map of every chunk' },
+    { href: '/guide', label: 'Guide', icon: BookOpen, hint: 'How search works — signals, fusion & rerank' },
+  ];
+
+  // '/' must match exactly; deeper routes match on prefix so nested pages stay active.
+  const isActive = (href: string): boolean =>
+    href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href);
+
+  const current = $derived(NAV.find((n) => isActive(n.href)));
+
+  // Restore the collapsed/expanded state the provider persists to a cookie.
+  function initialOpen(): boolean {
+    if (!browser) return true;
+    const m = document.cookie.match(/(?:^|;\s*)sidebar:state=(true|false)/);
+    return m ? m[1] === 'true' : true;
+  }
+  let sidebarOpen = $state(initialOpen());
 </script>
 
-<div class="grid h-screen grid-rows-[auto_1fr] bg-background text-foreground">
-  <!--
-    Tiny header — single row, ~40px tall. Brand on the left, theme on the
-    right. No nav (single-page app), no padding waste.
-  -->
-  <header class="flex h-10 items-center justify-between border-b border-border bg-card/60 px-4">
-    <a
-      href="/"
-      class="text-xs font-semibold tracking-tight text-foreground/90 hover:text-foreground"
-    >
-      raudio<span class="text-muted-foreground font-normal"> · viewer</span>
-    </a>
-    <div class="flex items-center gap-1">
-      <StatusBadge />
-      <ThemeToggle />
+<Sidebar.Provider bind:open={sidebarOpen} class="h-svh overflow-hidden">
+  <Sidebar.Root collapsible="icon">
+    <!-- header -->
+    <div data-slot="sidebar-header" class="flex flex-col gap-2 p-2">
+      <a
+        href="/"
+        title="raudio — home"
+        aria-label="raudio home"
+        class="hover:bg-sidebar-accent flex items-center gap-2 rounded-md p-1.5 transition-colors"
+      >
+        <div class="bg-primary/10 text-primary grid size-8 shrink-0 place-items-center rounded-lg">
+          <AudioLines class="size-5" />
+        </div>
+        <div class="flex min-w-0 flex-col leading-tight group-data-[collapsible=icon]:hidden">
+          <span class="text-foreground truncate text-sm font-semibold">raudio</span>
+          <span class="text-muted-foreground truncate text-[10px]">press-conf viewer</span>
+        </div>
+      </a>
     </div>
-  </header>
 
-  <main class="min-h-0 overflow-hidden">
-    {@render children()}
-  </main>
-</div>
+    <!-- content -->
+    <div
+      data-slot="sidebar-content"
+      class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden"
+    >
+      <div data-slot="sidebar-group" class="relative flex w-full min-w-0 flex-col p-2">
+        <div
+          data-slot="sidebar-group-label"
+          class="text-sidebar-foreground/60 flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium tracking-wide uppercase transition-[margin,opacity] duration-200 ease-linear group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0"
+        >
+          Navigate
+        </div>
+        <ul data-slot="sidebar-menu" class="flex w-full min-w-0 flex-col gap-1">
+          {#each NAV as item (item.href)}
+            {@const active = isActive(item.href)}
+            {@const Icon = item.icon}
+            <li data-slot="sidebar-menu-item" class="group/menu-item relative">
+              <Sidebar.MenuButton href={item.href} isActive={active} tooltip={item.label}>
+                <Icon />
+                <span>{item.label}</span>
+              </Sidebar.MenuButton>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    </div>
+
+    <!-- footer -->
+    <div data-slot="sidebar-footer" class="flex flex-col gap-2 p-2">
+      <div
+        class="flex items-center justify-between gap-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-2"
+      >
+        <StatusBadge />
+        <ThemeToggle />
+      </div>
+    </div>
+    <Sidebar.Rail />
+  </Sidebar.Root>
+
+  <Sidebar.Inset class="h-svh overflow-hidden">
+    <header class="border-border flex h-11 shrink-0 items-center gap-2 border-b px-3">
+      <Sidebar.Trigger />
+      <div class="bg-border h-4 w-px"></div>
+      {#if current}
+        {@const Icon = current.icon}
+        <Icon class="text-muted-foreground size-4" />
+        <span class="text-foreground text-sm font-medium">{current.label}</span>
+        <span class="text-muted-foreground hidden truncate text-xs sm:inline">— {current.hint}</span>
+      {/if}
+    </header>
+    <div class="min-h-0 flex-1 overflow-hidden">
+      {@render children()}
+    </div>
+  </Sidebar.Inset>
+</Sidebar.Provider>

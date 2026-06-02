@@ -235,6 +235,34 @@ def ensure_vector_index(
     return True
 
 
+def ensure_fts_index(
+    table: lancedb.table.Table,
+    column: str,
+    *,
+    language: str = "Swedish",
+) -> bool:
+    """Build a Tantivy FTS (BM25) index on a string ``column`` once it's populated.
+
+    Mirrors the transcript FTS index (``ingest.reindex_fts``): ``with_position``
+    for phrase queries, the Swedish stemmer so caption queries match inflections.
+    Skips (returns ``False``) while any row is still ``NULL`` — the index would be
+    incomplete. Used for ``chunk_frames.caption`` so ``mode=scene`` can keyword-search.
+    """
+    nulls = table.count_rows(filter=f"{column} IS NULL")
+    if nulls > 0:
+        logger.warning(f"skipping FTS index on {column}: {nulls} row(s) still NULL")
+        return False
+    logger.info(f"building FTS index on {column} (language={language})")
+    table.create_fts_index(
+        column,
+        replace=True,
+        with_position=True,
+        remove_stop_words=False,
+        language=language,
+    )
+    return True
+
+
 def _as_str(path: str | Path | None) -> str | None:
     """Coerce an optional path to ``str`` for APIs that don't take ``Path``."""
     return None if path is None else str(path)

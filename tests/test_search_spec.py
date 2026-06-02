@@ -85,6 +85,9 @@ class TestMode:
         # FastAPI hands the raw query string in; Pydantic coerces it to the enum.
         assert SearchSpec.model_validate({"mode": "hybrid"}).mode is SearchMode.HYBRID
 
+    def test_scene_mode_coerces(self) -> None:
+        assert SearchSpec.model_validate({"mode": "scene"}).mode is SearchMode.SCENE
+
     def test_unknown_mode_rejected(self) -> None:
         with pytest.raises(ValidationError):
             SearchSpec.model_validate({"mode": "bogus"})

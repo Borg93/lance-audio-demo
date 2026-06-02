@@ -27,6 +27,7 @@ GPU             ?= 2
 	ingest ingest-with-media ingest-full reindex-fts \
 	pipeline pipeline-sharded pipeline-multimodal \
 	embed-server rerank-server embed-server-docker rerank-server-docker vllm-stop kernels-prepare embed-chunks extract-chunk-frames embed-chunk-frames \
+	caption-chunk-frames embed-captions captions \
 	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
 	hf-upload-db hf-upload-videos hf-upload-all hf-download-db hf-download-all \
 	reingest search query demo shell clean clean-db clean-run reset download
@@ -209,14 +210,24 @@ labeler:              ## Run the manual language relabeler on $(AUDIO_DIR) (port
 EMBED_BACKEND   ?= vllm
 EMBED_URL       ?= http://127.0.0.1:8001
 RERANK_URL      ?= http://127.0.0.1:8002
-# Pin each server to a distinct GPU. Co-locating both on one GPU triggers
-# vLLM 0.20.0's "memory profiling" race: when one server frees a few GB
-# during init, the other's profile_run aborts with an AssertionError.
-EMBED_GPU       ?= 2
-RERANK_GPU      ?= 1
-# Each server has its own GPU now → can use most of its memory.
-EMBED_MEM_FRAC  ?= 0.90
-RERANK_MEM_FRAC ?= 0.85
+# Both vLLM servers run on the SAME GPU by default (override the card with
+# `make embed-server VLLM_GPU=N`). Two 2B models co-locate fine at ~0.45
+# mem-frac each (~88 GB on a 96 GB card).
+# IMPORTANT: start them SEQUENTIALLY — bring the embed server fully up before
+# launching the reranker. Launching both at once trips vLLM's memory-profiling
+# race (one server freeing GPU memory mid-init aborts the other's profile_run).
+VLLM_GPU        ?= 0
+EMBED_GPU       ?= $(VLLM_GPU)
+RERANK_GPU      ?= $(VLLM_GPU)
+EMBED_MEM_FRAC  ?= 0.45
+RERANK_MEM_FRAC ?= 0.45
+
+# Caption model — a generative VLM (Gemma 4) you ALREADY run locally on :8003.
+# raudio is only a CLIENT of it: `raudio feature caption` POSTs frames to this
+# URL. We do NOT start the server (no Make target spins one up) — point these at
+# wherever your Gemma serves. The client also honours RAUDIO_CAPTION_URL/MODEL.
+CAPTION_URL      ?= http://127.0.0.1:8003
+CAPTION_MODEL    ?= google/gemma-4-31B-it
 
 # vLLM version pin — set to 0.22.0 (one pinned build across both the uvx and
 # Docker routes; see docs/INVESTIGATION.md on why a single build matters).
@@ -331,6 +342,16 @@ extract-chunk-frames: ## ffmpeg → one JPEG per chunk.start into chunks.frame_b
 
 embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ index.
 	uv run --extra multimodal raudio --db $(DB) feature frame_embedding --url $(EMBED_URL)
+
+caption-chunk-frames: ## Caption EXISTING frames → chunk_frames.caption (uses your Gemma at $(CAPTION_URL)).
+	uv run --extra multimodal raudio --db $(DB) feature caption --url $(CAPTION_URL) --model $(CAPTION_MODEL)
+
+embed-captions:       ## Embed chunk_frames.caption → caption_embedding + IVF_PQ index (needs embed-server).
+	uv run --extra multimodal raudio --db $(DB) feature caption_embedding --url $(EMBED_URL)
+
+# Caption pipeline: write the Swedish captions, then embed them for scene search.
+# Reuses existing frames — run `extract-chunk-frames` first if chunk_frames is empty.
+captions: caption-chunk-frames embed-captions  ## Caption frames + embed captions (scene search).
 
 # Full multimodal indexing chain. Existing `pipeline` runs first, then the
 # three new stages add the multimodal columns + indexes. Resumable: each

@@ -365,8 +365,19 @@ and `prefilter`.
 | `fts` | BM25 over `chunks.text` | `chunks.search(MatchQuery/PhraseQuery)` — **no embeddings** |
 | `semantic` | cosine over `chunks.text_embedding` | `_vector_search(..., "text_embedding")` with embedded query |
 | `visual` | cosine over `chunk_frames.frame_embedding` | `_frame_search(...)` — image query *or* text query (shared space), joined back to `chunks` |
+| `scene` | cosine over `chunk_frames.caption_embedding` | `_frame_search(..., column="caption_embedding")` — text query vs the Swedish frame caption, joined back to `chunks` |
 | `hybrid` | FTS **+** text-vector, fused | Lance native hybrid query (`search(query_type="hybrid")`) |
-| `all` | FTS + text-vector + frame-vector | three rankings fused by `_rrf_fuse()`, optional rerank |
+| `all` | FTS + text-vector + frame-vector + caption-vector | up to four rankings fused by `_rrf_fuse()`, optional rerank |
+
+`visual` and `scene` are the same join (`_frame_search`) over two different
+vector columns on `chunk_frames`: the raw image embedding vs the text embedding
+of the Gemma Swedish caption. `scene` lets a text query match *what is visible on
+screen* even when the transcript never says it.
+
+Every mode's hits are then enriched with `caption` (the representative frame's
+Swedish caption, `frame_idx=0`) via `_attach_captions` — one guarded scan of
+`chunk_frames`, so the list/table views can show the scene description. It is a
+no-op (leaves the field absent) when frames or the caption column don't exist.
 
 All vector legs run cosine and apply the IVF_PQ recall knobs `nprobes=20` +
 `refine_factor=3` (`_VECTOR_NPROBES` / `_VECTOR_REFINE_FACTOR`) — Lance's default
@@ -422,9 +433,9 @@ letting the result list be longer than the reranked window.
 
 The reranker is **text-only**: it scores the user's combined text intent
 (`q + q_vec`) jointly with each candidate's transcript `text`; it never sees the
-image or the vectors. It applies to `fts`, `semantic`, `hybrid`, and `all`. For
-image-only `visual` search there is no query text, so rerank is a **no-op** there
-(results keep their frame-similarity order regardless of the toggle).
+image or the vectors. It applies to `fts`, `semantic`, `scene`, `hybrid`, and
+`all`. For image-only `visual` search there is no query text, so rerank is a
+**no-op** there (results keep their frame-similarity order regardless of the toggle).
 
 > **Frame search gating:** `mode=visual` and the frame branch of `mode=all` query
 > the `chunk_frames` table (`_frame_search`: rank by `frame_embedding`, dedup to
@@ -492,6 +503,16 @@ Adding a column is one entry in that dict.
 |---|---|---|---|---|
 | `raudio feature text_embedding` | `chunks.text` | `chunks.text_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
 | `raudio feature frame_embedding` | `chunk_frames.frame_blob` | `chunk_frames.frame_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | all-or-nothing (skips if column exists; `--all` rebuilds) |
+| `raudio feature caption` | `chunk_frames.frame_blob` | `chunk_frames.caption` (Gemma 4 Swedish string) via `add_columns` | FTS-able string | all-or-nothing (skips if column exists; `--all` rebuilds) |
+| `raudio feature caption_embedding` | `chunk_frames.caption` | `chunk_frames.caption_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
+
+`caption` is a **generative** feature: it POSTs each existing frame to the Gemma 4
+VLM you already run on `:8003` (`--url`/`--model`/`--instruction` or the
+`RAUDIO_CAPTION_*` env vars override the defaults) and stores one Swedish
+sentence per frame — it never re-extracts frames. `caption_embedding` then embeds
+that text into the shared 2048-d space (reusing the embed server, same as
+`text_embedding`) so `mode=scene` can search it. The Makefile wraps the pair as
+`make captions` (`caption-chunk-frames` → `embed-captions`).
 
 (The Makefile wraps these as `make embed-chunks` and `make embed-chunk-frames`.)
 Both default to `--batch-size 256` and `--url http://127.0.0.1:8001`, and build
@@ -532,11 +553,13 @@ rebuilding the indexes after the bulk writes.
 |---|---|
 | Change the embed/rerank wire format | [`vllm/embedding.py`](../src/raudio/vllm/embedding.py) / [`vllm/reranker.py`](../src/raudio/vllm/reranker.py) **and** [`qwen3_vl_reranker.jinja`](../src/raudio/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
 | Change the embedding dim / normalization | `EMBED_DIM` in [`model/schema.py`](../src/raudio/model/schema.py); `l2_normalize()` in [`vllm/image.py`](../src/raudio/vllm/image.py) |
-| Change image resolution | `_IMAGE_SIDE`, `_square_crop()` in [`vllm/image.py`](../src/raudio/vllm/image.py) + the Makefile pixel pin + [INVESTIGATION.md](INVESTIGATION.md) |
-| Launch / configure the vLLM servers | [`Makefile`](../Makefile) — `embed-server*`, `rerank-server*` targets |
+| Change embed image resolution | `_IMAGE_SIDE`, `_square_crop()` in [`vllm/image.py`](../src/raudio/vllm/image.py) + the Makefile pixel pin + [INVESTIGATION.md](INVESTIGATION.md) |
+| Change caption image resolution | `frame_to_data_url` / `_CAPTION_MAX_SIDE` in [`vllm/image.py`](../src/raudio/vllm/image.py) (full frame, no square crop) |
+| Change the caption model / prompt / language | `RAUDIO_CAPTION_*` env or `feature caption --model/--instruction/--url`; defaults in [`vllm/caption.py`](../src/raudio/vllm/caption.py) |
+| Launch / configure the vLLM servers | [`Makefile`](../Makefile) — `embed-server*`, `rerank-server*` targets (the caption VLM is run externally; raudio is only its client) |
 | Change which GPU each server uses | `EMBED_GPU` / `RERANK_GPU` in the Makefile |
-| Change search fusion / add a mode | [`backend/search/service.py`](../backend/search/service.py) — `run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse` |
+| Change search fusion / add a mode | [`backend/search/service.py`](../backend/search/service.py) — `run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`; modes in [`backend/search/spec.py`](../backend/search/spec.py) |
 | Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/raudio/vllm/) satisfying `EmbeddingClient`, wire it via `backend/clients.py` / `features/columns.py` |
 | Add a new derived column | one entry in `FEATURES` in [`features/columns.py`](../src/raudio/features/columns.py) |
-| Run the offline embed passes | `raudio feature text_embedding` / `raudio feature frame_embedding` ([`cli/features.py`](../src/raudio/cli/features.py)) |
+| Run the offline embed passes | `raudio feature text_embedding` / `frame_embedding` / `caption` / `caption_embedding` ([`cli/features.py`](../src/raudio/cli/features.py)) |
 | Understand the open blockers | [TODO.md](../TODO.md) and [INVESTIGATION.md](INVESTIGATION.md) |

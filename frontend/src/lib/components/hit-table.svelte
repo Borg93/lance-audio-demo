@@ -22,6 +22,7 @@
     { key: 'doc_id', label: 'Doc', render: (h) => h.doc_id },
     { key: 'audio_path', label: 'File', render: (h) => h.audio_path },
     { key: 'text', label: 'Text', render: (h) => h.text },
+    { key: 'caption', label: 'Caption', render: (h) => h.caption ?? '' },
   ];
 </script>
 

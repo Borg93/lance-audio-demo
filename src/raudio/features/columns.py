@@ -21,7 +21,7 @@ import pyarrow as pa
 from pydantic import BaseModel, ConfigDict
 
 from ..model.schema import EMBED_DIM
-from .engine import ensure_vector_index, upsert_blob_column, upsert_scan_column
+from .engine import ensure_fts_index, ensure_vector_index, upsert_blob_column, upsert_scan_column
 
 if TYPE_CHECKING:
     import lancedb
@@ -34,8 +34,11 @@ TEXT_EMBED_COLUMN = "text_embedding"
 FRAME_EMBED_COLUMN = "frame_embedding"
 SUMMARY_COLUMN = "summary"
 CAPTION_COLUMN = "caption"
+CAPTION_EMBED_COLUMN = "caption_embedding"
 
 CHUNK_KEYS = ["doc_id", "speech_id", "chunk_id"]
+# chunk_frames adds frame_idx to the key (a chunk may hold several frames).
+FRAME_KEYS = ["doc_id", "speech_id", "chunk_id", "frame_idx"]
 VECTOR_TYPE = pa.list_(pa.float32(), EMBED_DIM)
 
 
@@ -160,6 +163,51 @@ def caption_column(
     )
 
 
+def embed_caption_column(
+    frames_path: str | Path,
+    *,
+    client: EmbeddingClient,
+    batch_rows: int = 256,
+    checkpoint_file: str | Path | None = None,
+    overwrite: bool = False,
+    progress: Callable[[int], None] | None = None,
+) -> int:
+    """Attach ``caption_embedding`` (2048-d) to chunk_frames from the ``caption`` text.
+
+    The text counterpart to ``frame_embedding``: it embeds each frame's Swedish
+    caption string (produced by :func:`caption_column`) into the same shared
+    2048-d space, so a text query can retrieve frames by *what the scene depicts*
+    (``mode=scene``), complementing the raw image-similarity ``frame_embedding``.
+    Reads the existing ``caption`` column — it never re-reads or re-extracts the
+    frame JPEGs. Run ``raudio feature caption`` first.
+    """
+    import lance
+
+    ds = lance.dataset(str(frames_path))
+    if CAPTION_COLUMN not in ds.schema.names:
+        raise ValueError(
+            f"'{CAPTION_COLUMN}' column missing on {frames_path} — run "
+            f"`raudio feature caption` before `caption_embedding`."
+        )
+
+    def compute(batch: pa.RecordBatch) -> pa.Array:
+        captions = [c or "" for c in batch.column(CAPTION_COLUMN).to_pylist()]
+        return _vectors_to_arrow(client.embed_text(captions))
+
+    return upsert_scan_column(
+        frames_path,
+        name=CAPTION_EMBED_COLUMN,
+        output_type=VECTOR_TYPE,
+        key_columns=FRAME_KEYS,
+        read_columns=[CAPTION_COLUMN],
+        compute=compute,
+        batch_rows=batch_rows,
+        checkpoint_file=checkpoint_file,
+        overwrite=overwrite,
+        progress=progress,
+    )
+
+
 # ─────────────────────────────── Registry ───────────────────────────────────
 
 
@@ -167,6 +215,10 @@ class FeatureRunOptions(BaseModel):
     """Knobs the ``raudio feature <name>`` CLI passes into a feature's ``run``."""
 
     url: str | None = None  # model server base URL; None → the feature's own default
+    # Generative-feature overrides (caption): None → the client's own default
+    # (Gemma 4 / the Swedish instruction). Ignored by the embedding features.
+    model: str | None = None
+    instruction: str | None = None
     batch_rows: int = 256
     overwrite: bool = False  # --all: drop and rebuild rather than fill-NULL
     create_index: bool = True  # vector features only
@@ -259,15 +311,67 @@ def _run_summary(
 def _run_caption(
     db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
 ) -> int:
-    from ..vllm.caption import DEFAULT_CAPTION_URL, VLLMCaptionClient
+    from ..vllm.caption import (
+        CAPTION_INSTRUCTION,
+        CAPTION_MODEL,
+        DEFAULT_CAPTION_URL,
+        VLLMCaptionClient,
+    )
 
-    client = VLLMCaptionClient(opts.url or DEFAULT_CAPTION_URL)
-    return caption_column(
+    # model/instruction fall back to the client's own defaults (Gemma 4 / Swedish)
+    # when the CLI didn't override them.
+    client = VLLMCaptionClient(
+        opts.url or DEFAULT_CAPTION_URL,
+        model=opts.model or CAPTION_MODEL,
+        instruction=opts.instruction or CAPTION_INSTRUCTION,
+    )
+    n = caption_column(
         db_path / "chunk_frames.lance",
         client=client,
         batch_rows=opts.batch_rows,
         checkpoint_file=opts.checkpoint,
         overwrite=opts.overwrite,
+        progress=progress,
+    )
+    # Tantivy FTS index so captions are keyword-searchable (mode=scene, keyword).
+    if opts.create_index:
+        ensure_fts_index(_open_table(db_path, "chunk_frames"), CAPTION_COLUMN)
+    return n
+
+
+def _run_caption_embedding(
+    db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
+) -> int:
+    from ..vllm.embedding import DEFAULT_EMBED_URL, VLLMEmbeddingClient
+
+    client = VLLMEmbeddingClient(opts.url or DEFAULT_EMBED_URL)
+    n = embed_caption_column(
+        db_path / "chunk_frames.lance",
+        client=client,
+        batch_rows=opts.batch_rows,
+        checkpoint_file=opts.checkpoint,
+        overwrite=opts.overwrite,
+        progress=progress,
+    )
+    if opts.create_index:
+        ensure_vector_index(
+            _open_table(db_path, "chunk_frames"),
+            CAPTION_EMBED_COLUMN,
+            num_partitions=opts.num_partitions,
+            num_sub_vectors=opts.num_sub_vectors,
+        )
+    return n
+
+
+def _run_atlas(
+    db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
+) -> int:
+    from .projection import project_atlas_columns
+
+    return project_atlas_columns(
+        db_path / "chunks.lance",
+        overwrite=opts.overwrite,
+        batch_rows=opts.batch_rows,
         progress=progress,
     )
 
@@ -294,7 +398,19 @@ FEATURES: dict[str, Feature] = {
     "caption": Feature(
         name="caption",
         table="chunk_frames",
-        description="VLM caption of each chunk's representative frame.",
+        description="Gemma 4 Swedish caption of each chunk's frame (one factual sentence).",
         run=_run_caption,
+    ),
+    "caption_embedding": Feature(
+        name="caption_embedding",
+        table="chunk_frames",
+        description="Qwen3-VL text embedding (2048-d) of each frame's caption for scene search.",
+        run=_run_caption_embedding,
+    ),
+    "atlas": Feature(
+        name="atlas",
+        table="chunks",
+        description="EVōC 2-D layout + clusters (atlas_x/atlas_y/atlas_cluster) for the Atlas view.",
+        run=_run_atlas,
     ),
 }

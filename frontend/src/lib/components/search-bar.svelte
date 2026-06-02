@@ -19,8 +19,16 @@
    * Internal values stay 'meaning'/'both' to map onto modes semantic/hybrid.
    */
   let kind = $state<string>(
-    spec.mode === 'semantic' ? 'meaning' : spec.mode === 'fts' ? 'keyword' : 'both',
+    spec.mode === 'semantic'
+      ? 'meaning'
+      : spec.mode === 'scene' || spec.mode === 'scene_fts'
+        ? 'scene'
+        : spec.mode === 'fts'
+          ? 'keyword'
+          : 'both',
   );
+  // For the Scene kind: search the caption field by meaning (vector) or keyword (BM25).
+  let sceneMethod = $state<string>(spec.mode === 'scene_fts' ? 'fts' : 'vector');
   let style = $state<string>(spec.phrase ? 'phrase' : spec.fuzziness === 2 ? 'fuzzy' : 'loose');
   let rerank = $state(spec.rerank ?? false);
   let rerankN = $state(String(spec.rerankN ?? 20));
@@ -38,6 +46,7 @@
     { value: 'keyword', label: 'Keyword' },
     { value: 'meaning', label: 'Vector' },
     { value: 'both', label: 'Hybrid' },
+    { value: 'scene', label: 'Scene' },
   ];
 
   let imagePreview: string | null = $state(null);
@@ -60,6 +69,7 @@
     if (imageFile && hasText) mode = 'all';
     else if (imageFile) mode = 'visual';
     else if (kind === 'meaning') mode = 'semantic';
+    else if (kind === 'scene') mode = sceneMethod === 'fts' ? 'scene_fts' : 'scene';
     else if (kind === 'both') mode = 'hybrid';
     else mode = 'fts';
     return {
@@ -115,11 +125,16 @@
     fuzzy:   { label: 'Fuzzy',    example: 'betänkadet',   explain: 'Like Keyword but allows up to 2 letter typos per word — useful when unsure of spelling.' },
     meaning: { label: 'Vector',   example: 'klimatkris',   explain: 'Vector search — finds chunks that DISCUSS the topic, even if those exact words aren\'t there. "klimat" can find "miljö" / "ekosystem".' },
     both:    { label: 'Hybrid',   example: 'regeringens beslut', explain: 'Run Keyword (FTS) AND Vector together, fuse the rankings. Recommended default.' },
+    scene:   { label: 'Scene',    example: 'demonstranter med plakat', explain: 'Searches the AI-written Swedish caption of each video FRAME — finds clips by what is visible on screen, described in words. Complements Image search (which matches raw visuals).' },
   } satisfies Record<string, { label: string; example: string; explain: string }>;
 
   /** Placeholder for the single query box (non-hybrid modes). */
   const singlePlaceholder = $derived(
-    kind === 'meaning' ? 'Search by meaning…' : 'Search transcripts…',
+    kind === 'scene'
+      ? 'Describe what\'s on screen…'
+      : kind === 'meaning'
+        ? 'Search by meaning…'
+        : 'Search transcripts…',
   );
 
   /** Single-line summary that always reflects the current setting. */
@@ -129,6 +144,7 @@
         return 'Image + your text → fused over transcript meaning AND visually similar frames.';
       return 'Image only → finds visually similar video frames. (Switch to Vector or Hybrid to also use your text.)';
     }
+    if (kind === 'scene') return examples.scene.explain;
     if (kind === 'meaning') return examples.meaning.explain;
     if (kind === 'both') return `Hybrid — ${examples.keyword.explain} PLUS ${examples.meaning.explain}`;
     if (style === 'phrase') return examples.phrase.explain;
@@ -167,13 +183,14 @@
             (e.currentTarget as HTMLInputElement).value = '';
           }}
         />
-        <SearchSettings bind:resultN bind:rerank bind:rerankN bind:weightPct bind:style {kind} />
+        <SearchSettings bind:resultN bind:rerank bind:rerankN bind:weightPct bind:style bind:sceneMethod {kind} />
         <FilterPopover bind:spec onchange={submit} />
         <HelpPopover
           {examples}
           onpick={(key, ex) => {
             if (key === 'phrase' || key === 'fuzzy') { kind = 'keyword'; style = key; }
             else if (key === 'meaning') kind = 'meaning';
+            else if (key === 'scene') kind = 'scene';
             else if (key === 'both') { kind = 'both'; style = 'loose'; }
             else { kind = 'keyword'; style = 'loose'; }
             q = ex;

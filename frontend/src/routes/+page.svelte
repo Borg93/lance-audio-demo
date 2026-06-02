@@ -57,7 +57,7 @@
   let view = $state<'list' | 'grid' | 'table'>('list');
   // Which result columns the table view shows (persisted). Defaults to a
   // readable subset; the chooser bar toggles any of TABLE_COLUMNS.
-  let tableCols = $state<string[]>(['thumbnail', 'namn', 'start', 'end', 'duration', 'text']);
+  let tableCols = $state<string[]>(['thumbnail', 'namn', 'start', 'end', 'duration', 'text', 'caption']);
 
   // Columns shown in the browse-mode (pre-search) documents table. Documents
   // carry fewer fields than search hits, so this is its own small set.
@@ -72,7 +72,7 @@
   ];
   $effect(() => {
     if (typeof localStorage === 'undefined') return;
-    const v = localStorage.getItem('raudio-table-cols-v2');
+    const v = localStorage.getItem('raudio-table-cols-v3');
     if (v) {
       try {
         tableCols = JSON.parse(v) as string[];
@@ -86,7 +86,7 @@
       ? tableCols.filter((k) => k !== key)
       : [...tableCols, key];
     try {
-      localStorage.setItem('raudio-table-cols-v2', JSON.stringify(tableCols));
+      localStorage.setItem('raudio-table-cols-v3', JSON.stringify(tableCols));
     } catch {
       /* ignore */
     }

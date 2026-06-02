@@ -22,7 +22,15 @@ from backend.search.service import (
 from backend.search.spec import SearchMode, SearchSpec
 from fastapi import HTTPException
 
-from fakes import TOPICS, FakeEmbedClient, make_doc
+from fakes import (
+    TOPICS,
+    FakeCaptionClient,
+    FakeEmbedClient,
+    make_doc,
+    write_frames_aligned_to_chunks,
+)
+from raudio.features.columns import caption_column, embed_caption_column
+from raudio.features.engine import ensure_fts_index
 from raudio.ingest.ingest import ingest_many
 from raudio.vllm.embedding import VLLMEmbeddingClient
 
@@ -42,6 +50,10 @@ def _embedder() -> VLLMEmbeddingClient:
 
 def _no_reranker() -> Never:
     raise AssertionError("reranker must not be constructed on these paths")
+
+
+def _no_embedder() -> Never:
+    raise AssertionError("embedder must not be constructed on keyword-only paths")
 
 
 class TestRunSearchErrors:
@@ -86,6 +98,56 @@ class TestRunSearchDegradation:
         spec = SearchSpec(q="carbon emissions", mode=SearchMode.ALL)
         hits = run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=None)
         assert hits
+
+
+class TestSceneSearch:
+    @pytest.fixture
+    def captioned(self, tmp_path):
+        """chunks + frames with caption + caption_embedding built (offline fakes)."""
+        db = tmp_path / "scene.lance"
+        ingest_many(db, [make_doc(f"input/{n}.mp4", [t]) for n, t in TOPICS.items()])
+        write_frames_aligned_to_chunks(db)
+        frames_path = db / "chunk_frames.lance"
+        caption_column(frames_path, client=FakeCaptionClient())
+        embed_caption_column(frames_path, client=FakeEmbedClient())
+        conn = lancedb.connect(str(db))
+        frames = conn.open_table("chunk_frames")
+        ensure_fts_index(frames, "caption", language="English")  # captions are keyword-searchable
+        return conn.open_table("chunks"), frames
+
+    def test_scene_returns_chunk_hits(self, captioned) -> None:
+        chunks, frames = captioned
+        spec = SearchSpec(q="anything", mode=SearchMode.SCENE)
+        hits = run_search(chunks, frames, _embedder, _no_reranker, spec, image_bytes=None)
+        # caption_embedding is populated → scene search ranks frames, joins to chunks.
+        assert hits
+        assert {"doc_id", "text", "caption"} <= hits[0].keys()
+
+    def test_scene_without_frames_is_empty(self, chunks) -> None:
+        # No chunk_frames table → scene degrades to [] like visual (not a 500).
+        spec = SearchSpec(q="carbon", mode=SearchMode.SCENE)
+        assert run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=None) == []
+
+    def test_caption_rides_along_on_fts_hits(self, captioned) -> None:
+        # Captions surface on EVERY mode (for the list/table views), not just scene.
+        chunks, frames = captioned
+        spec = SearchSpec(q="carbon", mode=SearchMode.FTS)
+        hits = run_search(chunks, frames, _embedder, _no_reranker, spec, image_bytes=None)
+        assert hits and hits[0]["caption"]
+
+    def test_scene_fts_keyword_search(self, captioned) -> None:
+        # BM25 over the caption text. The fake captions all contain "caption", so a
+        # keyword query returns chunk hits — and needs NO embedder (note _no_reranker
+        # only; the embed getter is never called on this path).
+        chunks, frames = captioned
+        spec = SearchSpec(q="caption", mode=SearchMode.SCENE_FTS)
+        hits = run_search(chunks, frames, _no_embedder, _no_reranker, spec, image_bytes=None)
+        assert hits
+        assert {"doc_id", "text", "caption"} <= hits[0].keys()
+
+    def test_scene_fts_without_captions_is_empty(self, chunks) -> None:
+        spec = SearchSpec(q="anything", mode=SearchMode.SCENE_FTS)
+        assert run_search(chunks, None, _no_embedder, _no_reranker, spec, image_bytes=None) == []
 
 
 class TestSearchHelpers:

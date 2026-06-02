@@ -17,6 +17,14 @@ def cmd_feature(
         str | None,
         typer.Option("--url", help="Model server base URL (default: the feature's own)."),
     ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Override the model id (caption only; default: Gemma 4)."),
+    ] = None,
+    instruction: Annotated[
+        str | None,
+        typer.Option("--instruction", help="Override the caption prompt (caption only; default: Swedish)."),
+    ] = None,
     batch_size: Annotated[int, typer.Option("--batch-size", help="Rows per embed batch.")] = 256,
     only_null: Annotated[
         bool,
@@ -37,13 +45,17 @@ def cmd_feature(
 
     Available features:
 
-      * text_embedding  — chunks.text  → 2048-d vector (semantic search)
-      * frame_embedding — chunk_frames → 2048-d vector (visual search)
-      * summary         — chunks.text  → one-line LLM summary
-      * caption         — chunk_frames → VLM caption
+      * text_embedding    — chunks.text          → 2048-d vector (semantic search)
+      * frame_embedding   — chunk_frames.frame_blob → 2048-d vector (visual search)
+      * summary           — chunks.text          → one-line LLM summary
+      * caption           — chunk_frames.frame_blob → Gemma 4 Swedish caption
+      * caption_embedding — chunk_frames.caption → 2048-d vector (scene search)
 
     Attaches one new column file, no fragment rewrites. `--only-null` (default)
     tops up rows a later ingest added; `--all` drops and rebuilds.
+
+    `caption_embedding` reuses the existing frames — it reads the `caption`
+    column (run `caption` first), never re-extracting frames.
     """
     import lancedb
     from tqdm import tqdm
@@ -61,6 +73,8 @@ def cmd_feature(
 
     options = FeatureRunOptions(
         url=url,
+        model=model,
+        instruction=instruction,
         batch_rows=batch_size,
         overwrite=not only_null,
         create_index=create_index,

@@ -10,16 +10,26 @@ from __future__ import annotations
 from pathlib import Path
 
 import lance
+import numpy as np
 import pyarrow as pa
 import pytest
 
-from fakes import FakeCaptionClient, FakeSummarizeClient, make_doc, write_synthetic_frames
+from fakes import (
+    FakeCaptionClient,
+    FakeEmbedClient,
+    FakeSummarizeClient,
+    det_vector,
+    make_doc,
+    write_synthetic_frames,
+)
 from raudio.features.columns import (
     CAPTION_COLUMN,
+    CAPTION_EMBED_COLUMN,
     CHUNK_KEYS,
     FEATURES,
     SUMMARY_COLUMN,
     caption_column,
+    embed_caption_column,
     summary_column,
 )
 from raudio.features.engine import upsert_scan_column
@@ -88,6 +98,38 @@ class TestCaptionColumn:
         assert caption_column(frames_path, client=FakeCaptionClient()) == 0
 
 
+class TestCaptionEmbeddingColumn:
+    def _captioned_frames(self, tmp_path: Path, n: int) -> Path:
+        frames_path = tmp_path / "chunk_frames.lance"
+        write_synthetic_frames(frames_path, n=n)
+        caption_column(frames_path, client=FakeCaptionClient())  # captions must exist first
+        return frames_path
+
+    def test_embeds_existing_captions(self, tmp_path: Path) -> None:
+        # Reuses the frames — embeds the `caption` text, never re-reads frame_blob.
+        frames_path = self._captioned_frames(tmp_path, n=4)
+        assert embed_caption_column(frames_path, client=FakeEmbedClient()) == 4
+
+        ds = lance.dataset(str(frames_path))
+        assert CAPTION_EMBED_COLUMN in ds.schema.names
+        rows = ds.to_table(columns=[CAPTION_COLUMN, CAPTION_EMBED_COLUMN]).to_pylist()
+        for r in rows:
+            stored = np.asarray(r[CAPTION_EMBED_COLUMN], dtype=np.float32)
+            np.testing.assert_allclose(stored, det_vector(r[CAPTION_COLUMN].encode()), rtol=0, atol=1e-6)
+
+    def test_requires_caption_column(self, tmp_path: Path) -> None:
+        # Guard clause: embedding captions before captioning is a loud error.
+        frames_path = tmp_path / "chunk_frames.lance"
+        write_synthetic_frames(frames_path, n=2)
+        with pytest.raises(ValueError, match=CAPTION_COLUMN):
+            embed_caption_column(frames_path, client=FakeEmbedClient())
+
+    def test_second_pass_is_noop(self, tmp_path: Path) -> None:
+        frames_path = self._captioned_frames(tmp_path, n=3)
+        embed_caption_column(frames_path, client=FakeEmbedClient())
+        assert embed_caption_column(frames_path, client=FakeEmbedClient()) == 0
+
+
 class TestUpsertModes:
     def test_only_null_fills_rows_added_by_a_later_ingest(self, tmp_path: Path) -> None:
         # The incremental top-up path: a later ingest appends NULL-summary rows;
@@ -111,7 +153,15 @@ class TestUpsertModes:
 
 class TestRegistry:
     def test_has_expected_features(self) -> None:
-        assert set(FEATURES) == {"text_embedding", "frame_embedding", "summary", "caption"}
+        # Membership, not an exact set: the registry grows over time, so we only
+        # assert the core columns are wired (incl. the caption pair).
+        assert {
+            "text_embedding",
+            "frame_embedding",
+            "summary",
+            "caption",
+            "caption_embedding",
+        } <= set(FEATURES)
 
     @pytest.mark.parametrize("feature", FEATURES.values(), ids=list(FEATURES))
     def test_feature_is_well_formed(self, feature) -> None:

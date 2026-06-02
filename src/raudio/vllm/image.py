@@ -52,6 +52,12 @@ def image_to_data_url(image: object) -> str:
 
     Center-crops + resizes to a fixed square first (see ``_IMAGE_SIDE``) so the
     vLLM vision-token count matches the server's warmup profile.
+
+    This square-crop is a constraint of the *embedding* server only. The
+    generative caption client uses :func:`frame_to_data_url` instead, which
+    preserves the whole frame (a VLM caption wants the full scene, and a
+    chat-completions server sizes vision tokens per request rather than from a
+    fixed warmup buffer).
     """
     if isinstance(image, bytes | bytearray):
         image = Image.open(io.BytesIO(bytes(image)))
@@ -62,6 +68,37 @@ def image_to_data_url(image: object) -> str:
     image = _square_crop(image)
     buf = io.BytesIO()
     image.save(buf, format="JPEG", quality=88)
+    return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+
+
+# Longest-side cap for caption frames. Extracted frames are ~448 px wide
+# (media.frames.DEFAULT_FRAME_WIDTH), so this only downscales the rare larger
+# frame and never upscales — Gemma's variable-resolution vision tower handles
+# the native aspect ratio fine, and a chat server bills vision tokens per call.
+_CAPTION_MAX_SIDE = 896
+
+
+def frame_to_data_url(image: object, *, max_side: int = _CAPTION_MAX_SIDE) -> str:
+    """Encode a frame for a generative VLM caption — full scene, no square crop.
+
+    Preserves aspect ratio, only downscaling so the longest side ≤ ``max_side``.
+    Unlike :func:`image_to_data_url` (which pins a square for the embedding
+    server's fixed warmup buffer), this keeps the whole frame so the caption
+    model sees everything in the shot.
+    """
+    if isinstance(image, bytes | bytearray):
+        image = Image.open(io.BytesIO(bytes(image)))
+    if not isinstance(image, Image.Image):
+        raise TypeError(f"expected PIL.Image or bytes, got {type(image).__name__}")
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+    longest = max(image.size)
+    if longest > max_side:
+        scale = max_side / longest
+        new_size = (round(image.width * scale), round(image.height * scale))
+        image = image.resize(new_size, Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=90)
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
 
 

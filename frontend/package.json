@@ -13,6 +13,7 @@
   "dependencies": {
     "bits-ui": "^2.0.0",
     "clsx": "^2.1.1",
+    "embedding-atlas": "^0.21.0",
     "lucide-svelte": "^0.468.0",
     "svelte": "^5.36.0",
     "tailwind-merge": "^2.5.5",
