@@ -86,7 +86,14 @@ def cmd_ingest(
     ] = None,
 ) -> None:
     """Ingest one or more easytranscriber AudioMetadata JSON files."""
-    docs = [load_transcript(p) for p in json_paths]
+    from tqdm import tqdm
+
+    # Parsing the alignment JSONs is the I/O-heavy part; the subsequent table
+    # write + FTS index build log their own progress (see ingest_many).
+    docs = [
+        load_transcript(p)
+        for p in tqdm(json_paths, unit="file", desc="parsing", smoothing=0.05)
+    ]
 
     # Infer doc_language from the alignments dir if not explicitly passed.
     # `output/sv/alignments/foo.json` → parent.parent.name == 'sv'.

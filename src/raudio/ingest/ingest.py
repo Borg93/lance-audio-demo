@@ -419,6 +419,10 @@ def ingest_many(
     if not chunk_rows:
         raise ValueError("No chunks produced from any of the supplied transcripts.")
 
+    logger.info(
+        f"flattened {len(docs_list)} transcript(s) → {len(chunk_rows)} chunk row(s); "
+        f"writing to '{table_name}'…"
+    )
     chunks_table = _build_chunks_table(chunk_rows)
     table = _write_chunks_table(
         db,
@@ -435,6 +439,10 @@ def ingest_many(
     # `language=…` picks the stemmer and stop-word list. For Swedish text the
     # English stemmer can't reduce forms like `ministern`/`vägen`/`ansåg` to a
     # shared stem, so those queries return zero hits — use "Swedish" to fix.
+    logger.info(
+        f"building FTS index on 'text' (language={fts_language}) over "
+        f"{table.count_rows()} row(s)…"
+    )
     table.create_fts_index(
         "text",
         replace=True,
