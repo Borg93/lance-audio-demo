@@ -1,0 +1,137 @@
+"""Media endpoints — thumbnail, per-chunk frame, and Range-streamed media.
+
+All three read Lance Blob V2 columns via :mod:`backend.media.blobs`. ``media``
+honours HTTP Range so the browser can seek video without downloading the whole
+file; ``thumbnail`` / ``chunk_frame`` return small inline JPEGs.
+"""
+
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
+
+from backend.deps import StateDep
+from backend.media.blobs import (
+    doc_blob_size,
+    parse_range,
+    rowid_for_doc_id,
+    stream_blob_range,
+    valid_doc_id,
+)
+
+router = APIRouter(tags=["media"])
+
+
+@router.get("/api/thumbnail/{doc_id}")
+def thumbnail(doc_id: str, state: StateDep) -> Response:
+    valid_doc_id(doc_id)
+    if state.docs_ds is None:
+        raise HTTPException(status_code=404, detail="documents table missing")
+    rowid = rowid_for_doc_id(state.docs_ds, doc_id)
+    if rowid is None:
+        raise HTTPException(status_code=404, detail="doc_id not found")
+    mime_row = state.docs_ds.to_table(
+        columns=["thumbnail_mime"], filter=f"doc_id = '{doc_id}'", limit=1
+    )
+    mime = "image/jpeg"
+    if mime_row.num_rows > 0 and mime_row.column("thumbnail_mime")[0].is_valid:
+        mime = mime_row.column("thumbnail_mime")[0].as_py()
+    blob = state.docs_ds.take_blobs("thumbnail", ids=[rowid])[0]
+    with blob as f:
+        data = f.read()
+    if not data:
+        raise HTTPException(status_code=404, detail="no thumbnail for doc_id")
+    return Response(
+        content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"}
+    )
+
+
+@router.get("/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}")
+def chunk_frame(
+    doc_id: str,
+    speech_id: int,
+    chunk_id: int,
+    state: StateDep,
+    frame_idx: Annotated[int, Query(ge=0)] = 0,
+) -> Response:
+    """A chunk's frame from the `chunk_frames` table; 404 until
+    `extract-chunk-frames` has run. ``frame_idx`` selects which frame when a
+    chunk was sampled multiple times (0 = the representative frame)."""
+    valid_doc_id(doc_id)
+    if state.chunk_frames_ds is None:
+        raise HTTPException(status_code=404, detail="frame not extracted yet")
+
+    keyed = state.chunk_frames_ds.to_table(
+        columns=["frame_mime"],
+        filter=(
+            f"doc_id = '{doc_id}' AND speech_id = {int(speech_id)} "
+            f"AND chunk_id = {int(chunk_id)} AND frame_idx = {int(frame_idx)}"
+        ),
+        with_row_id=True,
+        limit=1,
+    )
+    if keyed.num_rows == 0:
+        raise HTTPException(status_code=404, detail="frame not extracted yet")
+    rowid = keyed.column("_rowid")[0].as_py()
+    mime = (
+        keyed.column("frame_mime")[0].as_py()
+        if keyed.column("frame_mime")[0].is_valid
+        else "image/jpeg"
+    )
+    try:
+        blob = state.chunk_frames_ds.take_blobs("frame_blob", ids=[rowid])[0]
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"no frame: {e}") from e
+    with blob as f:
+        data = f.read()
+    if not data:
+        raise HTTPException(status_code=404, detail="frame body empty")
+    return Response(
+        content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"}
+    )
+
+
+@router.get("/api/media/{doc_id}")
+def media(doc_id: str, request: Request, state: StateDep) -> Response:
+    valid_doc_id(doc_id)
+    if state.docs_ds is None:
+        raise HTTPException(status_code=404, detail="documents table missing")
+    rowid = rowid_for_doc_id(state.docs_ds, doc_id)
+    if rowid is None:
+        raise HTTPException(status_code=404, detail="doc_id not found")
+
+    mime_row = state.docs_ds.to_table(
+        columns=["media_mime"], filter=f"doc_id = '{doc_id}'", limit=1
+    )
+    mime = "application/octet-stream"
+    if mime_row.num_rows > 0 and mime_row.column("media_mime")[0].is_valid:
+        mime = mime_row.column("media_mime")[0].as_py()
+
+    total = doc_blob_size(state.docs_ds, "media_blob", rowid)
+    range_hdr = request.headers.get("range")
+    if range_hdr:
+        rng = parse_range(range_hdr, total)
+        if rng is None:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+        start, end = rng
+        return StreamingResponse(
+            stream_blob_range(state.docs_ds, "media_blob", rowid, start, end),
+            status_code=206,
+            media_type=mime,
+            headers={
+                "Content-Length": str(end - start + 1),
+                "Content-Range": f"bytes {start}-{end}/{total}",
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    return StreamingResponse(
+        stream_blob_range(state.docs_ds, "media_blob", rowid, 0, total - 1),
+        media_type=mime,
+        headers={
+            "Content-Length": str(total),
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store",
+        },
+    )

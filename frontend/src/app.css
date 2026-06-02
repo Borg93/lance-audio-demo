@@ -1,102 +1,160 @@
-@import 'tailwindcss';
+/* ────────────────────────────────────────────────────────────────────
+ * Tailwind 4 + shadcn-svelte theme — SHARED design system.
+ *
+ * This palette/typography is the design system shared with the sibling
+ * apps (ranymizer, …) so the three can merge into one UI cleanly. The
+ * source-of-truth tokens (--bg, --surface, --text, --accent, …) drive
+ * shadcn's semantic names (--background, --card, --primary, …) via
+ * `@theme inline`, so any component using `bg-card` / `text-foreground` /
+ * `border-border` picks up the palette automatically.
+ *
+ * Structure note (raudio-specific): light values live in `:root` and the
+ * `.dark` class overrides them, because raudio's theme toggle flips the
+ * `.dark` class (see theme-toggle.svelte). The app boots DARK by default
+ * (see app.html). ranymizer keeps the inverse (dark in :root, .light
+ * override) — same values, mirrored placement; reconcile at merge time.
+ * ──────────────────────────────────────────────────────────────────── */
 
-/* The `dark` class on <html> toggles dark mode for descendant elements. */
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* Tailwind 4 + Vite auto-discovery isn't reliable for .svelte under Bun;
+ * point it at the source roots explicitly (paths relative to this file). */
+@source "./lib";
+@source "./routes";
+@source "./app.html";
+
 @custom-variant dark (&:where(.dark, .dark *));
 
-/*
- * Design tokens.
- *
- * Light is the default. The :root values are used until <html> gains the
- * `.dark` class, at which point the .dark overrides take effect.
- *
- * Palette: low-saturation neutral surfaces + a single accent (oklch
- * blue/violet) used for hits-active state, primary buttons, and focus
- * rings. Highlight (warm amber) marks search matches.
- */
-@theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-
-  --radius-sm: 0.25rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
-}
-
-/* ── Light theme (default) ───────────────────────────────────────────── */
+/* ── design tokens — LIGHT (default in :root; .dark overrides) ─────── */
 :root {
-  --color-background:           oklch(0.99   0.002 264);
-  --color-foreground:           oklch(0.22   0.012 264);
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --surface2: #f4f4f2;
+  --surface3: #eeeeec;
+  --border-c: rgba(0, 0, 0, 0.07);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --text: #1c1c1e;
+  --text2: #515156;
+  --text3: #86868b;
+  --accent: #4f46e5;
+  --accent-dim: rgba(79, 70, 229, 0.08);
+  --danger: #dc2626;
+  /* raudio-specific: warm amber for search-match underline + karaoke cursor. */
+  --highlight: #b07d12;
 
-  --color-card:                 oklch(1.00   0.000 264);
-  --color-card-foreground:      oklch(0.22   0.012 264);
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-serif: 'Lora', Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
-  --color-muted:                oklch(0.96   0.005 264);
-  --color-muted-foreground:     oklch(0.50   0.015 264);
+  /* shadcn semantic mapping → shared tokens above (live var() refs, so the
+   * .dark overrides below cascade through automatically). */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface2);
+  --secondary-foreground: var(--text);
+  --muted: var(--surface2);
+  --muted-foreground: var(--text2);
+  --accent-bg: var(--accent-dim);
+  --accent-foreground: var(--accent);
+  --destructive: var(--danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--border-c);
+  --input: var(--border-c);
+  --ring: var(--accent);
 
-  --color-border:               oklch(0.91   0.006 264);
-  --color-input:                oklch(0.98   0.004 264);
-  --color-ring:                 oklch(0.62   0.18  256);
-
-  --color-primary:              oklch(0.55   0.20  256);
-  --color-primary-foreground:   oklch(0.99   0.002 264);
-
-  --color-secondary:            oklch(0.95   0.006 264);
-  --color-secondary-foreground: oklch(0.22   0.012 264);
-
-  --color-accent:               oklch(0.55   0.20  256);
-  --color-accent-foreground:    oklch(0.99   0.002 264);
-
-  --color-destructive:          oklch(0.55   0.22   27);
-  --color-destructive-foreground: oklch(0.99 0.002 264);
-
-  --color-highlight:            oklch(0.85   0.16   80);
+  --radius: 0.375rem;
 }
 
-/* ── Dark theme overrides ────────────────────────────────────────────── */
+/* ── design tokens — DARK (raudio boots here; toggle removes .dark) ── */
 :where(.dark) {
-  --color-background:           oklch(0.13   0.005 264);
-  --color-foreground:           oklch(0.96   0.005 264);
+  --bg: #0d0d0f;
+  --surface: #131316;
+  --surface2: #1a1a1e;
+  --surface3: #222227;
+  --border-c: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e9e9ea;
+  --text2: #9a9a9f;
+  --text3: #65656c;
+  --accent: #818cf8;
+  --accent-dim: rgba(129, 140, 248, 0.12);
+  --danger: #f87171;
+  --highlight: #e3b341;
+}
 
-  --color-card:                 oklch(0.16   0.006 264);
-  --color-card-foreground:      oklch(0.96   0.005 264);
+/* ── Tailwind 4 theme: bind shadcn names to our colors and fonts ──── */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent-bg);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-surface2: var(--surface2);
+  --color-text2: var(--text2);
+  --color-text3: var(--text3);
+  --color-highlight: var(--highlight);
 
-  --color-muted:                oklch(0.22   0.010 264);
-  --color-muted-foreground:     oklch(0.68   0.015 264);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 
-  --color-border:               oklch(0.25   0.010 264);
-  --color-input:                oklch(0.18   0.008 264);
-  --color-ring:                 oklch(0.72   0.16  256);
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif);
+  --font-mono: var(--font-mono);
+}
 
-  --color-primary:              oklch(0.72   0.16  256);
-  --color-primary-foreground:   oklch(0.13   0.005 264);
-
-  --color-secondary:            oklch(0.24   0.010 264);
-  --color-secondary-foreground: oklch(0.96   0.005 264);
-
-  --color-accent:               oklch(0.72   0.16  256);
-  --color-accent-foreground:    oklch(0.13   0.005 264);
-
-  --color-destructive:          oklch(0.62   0.22   27);
-  --color-destructive-foreground: oklch(0.96 0.005 264);
-
-  --color-highlight:            oklch(0.78   0.13   90);
+/* ── reset + body ─────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 @layer base {
   * {
     border-color: var(--color-border);
   }
-  html, body {
+  html,
+  body {
     height: 100%;
   }
   body {
     font-family: var(--font-sans);
-    background: var(--color-background);
-    color: var(--color-foreground);
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--foreground);
+    background: var(--background);
+    font-feature-settings: 'ss01', 'cv11';
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
-  /* shadcn-style scrollbar */
-  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  /* shadcn-style thin scrollbar */
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
   *::-webkit-scrollbar-thumb {
     background: var(--color-border);
     border-radius: 999px;
@@ -106,21 +164,19 @@
   }
 }
 
+svg {
+  display: block;
+  flex-shrink: 0;
+}
+
 /* ────────────────────────────────────────────────────────────────────
- * Karaoke cursor styling for the transcript player.
- *
- * Uses raw CSS (not utility classes) because the cursor is toggled via
- * direct .classList.add/remove in a RAF loop — applying many small
- * Tailwind classes from JS produces noisy diffs every frame.
- *
- * - .cursor-word     : the currently-spoken word
- * - .cursor-sentence : the currently-spoken sentence (parent of word)
- * Both are designed to be visible in light AND dark themes.
+ * Karaoke cursor styling for the transcript player. Raw CSS (not utility
+ * classes) because the cursor is toggled via direct .classList add/remove
+ * in a RAF loop — applying Tailwind classes from JS produces noisy diffs
+ * every frame. Visible in both themes via the --highlight token.
  * ──────────────────────────────────────────────────────────────────── */
 .cursor-word {
-  /* Subtle wash — still clearly marks the active word but doesn't blast
-     the eye on every karaoke step. */
-  background: color-mix(in oklch, var(--color-highlight) 45%, transparent);
+  background: color-mix(in oklab, var(--color-highlight) 45%, transparent);
   color: var(--color-foreground);
   font-weight: 600;
   border-radius: 3px;
@@ -128,19 +184,15 @@
   margin: 0 -2px;
 }
 .cursor-sentence {
-  background: color-mix(in oklch, var(--color-highlight) 12%, transparent);
-  border-left: 2px solid color-mix(in oklch, var(--color-highlight) 70%, transparent);
+  background: color-mix(in oklab, var(--color-highlight) 12%, transparent);
+  border-left: 2px solid color-mix(in oklab, var(--color-highlight) 70%, transparent);
   padding-left: 6px;
   margin-left: -8px;
   border-radius: 3px;
 }
 
-/*
- * bits-ui Popover.Content gets a class via animations that bleeds opacity
- * during enter/exit. Pin all popovers to solid background + visible border.
- * `data-state` is set by bits-ui; using it lets us override their styling
- * without fighting their animation classes elsewhere.
- */
+/* bits-ui Popover.Content bleeds opacity during enter/exit animations; pin
+ * popovers to a solid surface + visible border so they never render faint. */
 [data-popover-content][data-state='open'],
 [data-popover-content][data-state='closed'] {
   background-color: var(--color-card) !important;

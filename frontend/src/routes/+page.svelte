@@ -98,14 +98,11 @@
     loadingMore = true;
     try {
       const nextN = (spec.n ?? PAGE_STEP) + PAGE_STEP;
-      const requested = nextN;
-      const more = await search({ ...spec, n: nextN });
-      // Preserve the active hit reference if it still exists in the new set.
-      hits = more;
+      hits = await search({ ...spec, n: nextN });
       spec = { ...spec, n: nextN };
-      if (more.length < requested) allLoaded = true;
-    } catch (e) {
-      // Silent on load-more errors — show the existing hits.
+      if (hits.length < nextN) allLoaded = true;
+    } catch {
+      // Silent on load-more errors — keep the hits already shown.
     } finally {
       loadingMore = false;
     }

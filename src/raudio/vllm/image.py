@@ -1,0 +1,75 @@
+"""Pure, stateless image/vector transforms for the model clients: L2
+normalization and image → data-URL encoding. No network, no model state.
+
+Imported lazily (only when a client actually runs), so its numpy/Pillow deps
+stay behind the ``[multimodal]`` extra and never load during `raudio --help`.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+
+import numpy as np
+from PIL import Image
+
+from ..model.schema import EMBED_DIM
+
+# vLLM sizes the Qwen3-VL deepstack buffer once at warmup; if a runtime image
+# yields more vision tokens than that buffer, the engine aborts
+# (`num_tokens=N > buffer=N-k`). The robust fix is to send every image at exactly
+# the pixel area the server pins via `min_pixels == max_pixels` (see the
+# `embed-server` / `embed-server-docker` Makefile targets): 392 x 392 = 153664 px
+# == that pin, so the runtime token count can't exceed the warmup ceiling.
+# (The previous 448 x 448 = 200704 px overran it — the recurring crash.)
+# Center-crop sacrifices aspect ratio — fine for whole-image similarity.
+#
+# Documented fix per docs/INVESTIGATION.md (Part B). UNVERIFIED end-to-end:
+# embed-chunk-frames has never completed on GPU. Validate with
+# `make embed-server-docker && make embed-chunk-frames`. If you change this side
+# length, change the Makefile min/max_pixels pin to match (side² == pin).
+_IMAGE_SIDE = 392
+
+
+def l2_normalize(vectors: object) -> np.ndarray:
+    """L2-normalize a batch of embeddings to unit length.
+
+    Validates the dimension against ``EMBED_DIM`` so a server/model mismatch
+    fails loudly here instead of corrupting the Lance vector column.
+    """
+    arr = np.asarray(vectors, dtype=np.float32)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    if arr.shape[1] != EMBED_DIM:
+        raise ValueError(f"expected {EMBED_DIM}-d embeddings, got {arr.shape[1]}-d")
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return (arr / norms).astype(np.float32)
+
+
+def image_to_data_url(image: object) -> str:
+    """Encode a PIL image or raw JPEG bytes as a ``data:image/jpeg;base64,…`` URL.
+
+    Center-crops + resizes to a fixed square first (see ``_IMAGE_SIDE``) so the
+    vLLM vision-token count matches the server's warmup profile.
+    """
+    if isinstance(image, bytes | bytearray):
+        image = Image.open(io.BytesIO(bytes(image)))
+    if not isinstance(image, Image.Image):
+        raise TypeError(f"expected PIL.Image or bytes, got {type(image).__name__}")
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+    image = _square_crop(image)
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=88)
+    return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+
+
+def _square_crop(image: Image.Image) -> Image.Image:
+    w, h = image.size
+    side = min(w, h)
+    left, top = (w - side) // 2, (h - side) // 2
+    image = image.crop((left, top, left + side, top + side))
+    if image.size != (_IMAGE_SIDE, _IMAGE_SIDE):
+        image = image.resize((_IMAGE_SIDE, _IMAGE_SIDE), Image.Resampling.LANCZOS)
+    return image

@@ -9,6 +9,10 @@ multimodal search via Qwen3-VL embeddings.
 > single self-contained [Lance](https://lancedb.com) dataset, then serves
 > search + playback through a typed HTTP API.
 
+> 📐 **New to the codebase?** Read **[GUIDE.md](GUIDE.md)** — architecture, data
+> flow, design rationale, and the developer workflow. Running task list:
+> **[TODO.md](TODO.md)**.
+
 ---
 
 ## What this repo does
@@ -23,7 +27,7 @@ input/sv/*.mp4                 ← source videos
    ingest-full                 → transcripts.lance/chunks        (FTS + metadata)
                                  transcripts.lance/documents     (media blobs)
         │
-   embed-chunks                → chunks.text_embedding           (Qwen3-VL → 1024 dims)
+   embed-chunks                → chunks.text_embedding           (Qwen3-VL → 2048 dims)
    extract-chunk-frames        → transcripts.lance/chunk_frames  (NEW table, append-only)
                                    ↳ frame_blob (Blob V2 inline ~50 KB JPEG)
                                    ↳ frame_mime, frame_width, frame_height
@@ -50,7 +54,7 @@ Search modes the API supports:
 | `fts` | BM25 over chunk text (Tantivy + Swedish stemmer) | `chunks.text` |
 | `semantic` | cosine over `chunks.text_embedding` | `embed-chunks` run |
 | `hybrid` | FTS + semantic, RRF-fused (Lance native) | both |
-| `visual` | cosine over `chunks.frame_embedding`, query is text *or* image | frames + embeddings |
+| `visual` | cosine over `chunk_frames.frame_embedding` (joined back to chunks), query is text *or* image | frames + embeddings |
 | `all` | union of FTS + semantic + visual, RRF-fused | everything |
 
 Optional `rerank=true` swaps the default RRF for a Qwen3-VL-Reranker cross-encoder over the top candidates.
@@ -127,7 +131,7 @@ You can now search by keyword (FTS) and play any chunk in the right pane.
 Requires GPU. Spin up the vLLM embed server, then embed all chunks once:
 
 ```bash
-# T3: long-running vLLM HTTP server (Qwen3-VL-Embedding-8B)
+# T3: long-running vLLM HTTP server (Qwen3-VL-Embedding-2B)
 make embed-server-docker            # → http://127.0.0.1:8001
 
 # Once-off — populates chunks.text_embedding + builds IVF_PQ index
@@ -150,7 +154,7 @@ Drag-drop an image onto the search bar to query frames; or set mode to `all` for
 ### 5. Reranking (optional)
 
 ```bash
-make rerank-server-docker          # Qwen3-VL-Reranker-8B on :8002
+make rerank-server-docker          # Qwen3-VL-Reranker-2B on :8002
 ```
 
 With both servers up, toggle "rerank" in the UI to engage the cross-encoder over the top candidates. ~200–500 ms latency cost, large recall improvement.
@@ -174,7 +178,7 @@ backend  →  json hits  →  frontend renders list
 ```
 browser  →  GET /api/search?q=klimat&mode=hybrid
 backend  →  vLLM /v1/embeddings (chat shape, system="Represent the user's input.")
-              ↳ Qwen3-VL embedding (4096 → MRL-truncated to 1024)
+              ↳ Qwen3-VL embedding (full 2048-d, no truncation)
 backend  →  chunks.query().full_text_search(q).nearest_to(vec).rerank(RRFReranker())
               ↳ Lance native FTS+vector hybrid with RRF fusion
 backend  →  json hits  →  frontend

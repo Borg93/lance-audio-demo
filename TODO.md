@@ -4,6 +4,16 @@ Living checklist for `lance-audio-demo`. Update as items land.
 
 > **How to read this:** ✅ done · ⏳ in progress · ❌ blocked · 📋 backlog.
 > Each pending item points to the file(s) and command needed to pick it up.
+>
+> New here? Read [GUIDE.md](GUIDE.md) first (architecture, data flow, design
+> rationale, dev workflow), then [README.md](README.md) for the quickstart.
+
+> **Contents:** [Active blockers](#active-blockers-do-these-next) ·
+> [Visual search wiring](#visual--cross-modal-search-wiring) ·
+> [UX polish](#ux-polish-that-came-up-in-conversation-but-is-still-open) ·
+> [Hygiene](#cleanup--hygiene) · [Code-quality backlog](#code-quality-backlog--skills-audit-2026-05-29) ·
+> [Search perf](#search-performance--observed-slow-prioritized-fixes) ·
+> [vLLM perf](#vllm-performance--observed-slow-embeddings) · [Closed](#closed-for-context--commit-log)
 
 ---
 
@@ -35,11 +45,15 @@ If this still crashes for any reason, fall back to a sidecar-directory
 implementation (write JPEGs to `frames/{doc_id}/{speech_id}-{chunk_id}.jpg`).
 See "Backup plan" below.
 
-### ❌ 2. `embed-chunk-frames` blocked by vLLM Qwen3-VL deepstack bug
+### ❌ 2. `embed-chunk-frames` blocked by vLLM Qwen3-VL image-embed crash
 
-Confirmed bug in vLLM 0.20.0 for Qwen3-VL-Embedding-8B: the warmup-time
+Observed on vLLM 0.20.0 / Qwen3-VL-Embedding-8B: the warmup-time
 deepstack-input-embeds buffer is sized differently from runtime, even
 when `--mm-processor-kwargs '{"min_pixels": …, "max_pixels": …}'` is set.
+The pin is now 0.22.0 / Qwen3-VL-Embedding-2B, and the client crop
+(`_IMAGE_SIDE` in `retrieval/utils.py`) still mismatches the server pixel pin
+(392px) — re-verify on the current pin before calling it fixed (see the Makefile
+pixel-pin note + INVESTIGATION.md).
 Single image request kills the engine with:
 
 ```
@@ -52,11 +66,11 @@ We have not been able to find a vLLM config that consistently avoids this.
 **Two options to unblock — both are cheap to implement (~80 LOC each):**
 
 - **(A)** In-process HF transformers fallback. Load
-  Qwen3-VL-Embedding-8B once at backend startup via `transformers`,
+  Qwen3-VL-Embedding-2B once at backend startup via `transformers`,
   embed images directly. Slower (~2 s/query) but immune to vLLM internals.
-  See `src/raudio/embeddings.py` — add `class HFClient(EmbeddingClient)`
-  alongside `VLLMClient`. Backend already supports `--backend hf` switch
-  via `make_client()` — just needs the implementation.
+  Add a second embedding client class in `src/raudio/retrieval/` with the same
+  `embed_text`/`embed_image` surface as `VLLMEmbeddingClient`, then wire it into
+  `backend/app.py` (`_get_embedder`) and `cli.py`.
 - **(B)** Different vLLM tag (`v0.21.0+` once released, or back to `v0.10.x`).
   Risk: Blackwell sm_120 support compat. Won't know until tested.
 
@@ -74,27 +88,18 @@ the embed step completes.
 
 ## Visual / cross-modal search wiring
 
-### ⏳ 4. Backend visual-search query path needs to read `chunk_frames`
+### ✅ 4. Backend visual-search query path reads `chunk_frames` (done)
 
-Currently in `backend/app.py`, `_run_search(...)` for `mode=visual` does:
+`backend/app.py::_frame_search` now runs the `mode=visual` / `mode=all` frame
+branch against the `chunk_frames` table's `frame_embedding`, then joins back to
+`chunks` (by `(doc_id, speech_id, chunk_id)`) for text/timestamps/metadata,
+preserving the frame-distance ranking. The legacy all-NULL `chunks.frame_*`
+columns were dropped from `CHUNK_SCHEMA`, and `/api/chunk-frame` no longer falls
+back to `chunks.frame_blob`. Degrades to `[]` until frames are embedded.
 
-```python
-_vector_search(chunks, vec, "frame_embedding", spec.n, where)
-```
-
-This still queries the (all-NULL) `chunks.frame_embedding` column. Needs
-to be re-pointed at `chunk_frames_ds` and JOIN back with `chunks` for
-text/timestamps/metadata in the response.
-
-Suggested approach (≈30 LOC):
-1. If `chunk_frames_ds` is opened and has `frame_embedding`, run vector
-   search against it → list of (doc_id, speech_id, chunk_id) keys.
-2. Build a SQL `IN (…)` filter on chunks for those keys, fetch the
-   chunk text + alignments + metadata.
-3. Compose hits in the same shape the frontend already expects.
-
-`/api/chunk-frame` is already wired correctly — only the search side
-needs the redirect.
+**Still gated** on the frame *data*: `embed-chunk-frames` has never completed
+(the vLLM image-embed crash, [INVESTIGATION.md](docs/INVESTIGATION.md)), so the
+happy path is unverified end-to-end — only the graceful-empty path is exercised.
 
 ### ❌ 5. `/api/health` should report `chunk_frames` state
 
@@ -127,14 +132,14 @@ entirely. Saves a request per card.
 
 ## Cleanup / hygiene
 
-### 📋 Drop the dead `frame_*` columns from `chunks` schema
+### ✅ Drop the dead `frame_*` columns from `chunks` schema (done in code)
 
-After `chunk_frames` is in production use, the columns `frame_blob`,
-`frame_mime`, `frame_width`, `frame_height`, `frame_embedding` on the
-`chunks` table become dead weight (still all NULL). They cost nothing
-on disk but add schema noise.
+`CHUNK_SCHEMA` no longer declares `frame_blob`/`frame_mime`/`frame_width`/
+`frame_height`/`frame_embedding`, and the backend no longer reads them (see #4).
+**New** ingests produce a clean `chunks` table automatically.
 
-To remove safely:
+An **existing** dataset built with the old schema still carries the (all-NULL)
+columns — drop them in place with:
 
 ```python
 import lance
@@ -142,10 +147,6 @@ ds = lance.dataset("./transcripts.lance/chunks.lance")
 ds.drop_columns(["frame_blob", "frame_mime", "frame_width",
                  "frame_height", "frame_embedding"])
 ```
-
-Don't do this until visual search has been exercised against
-`chunk_frames` for a while — easier to keep the legacy fallback path in
-the backend until then.
 
 ### 📋 `make compact` after multi-stage writes
 
@@ -242,7 +243,7 @@ latency by ~40% on cold cache.**
 
 ### 📋 Drop the rerank cross-encoder for typical queries
 
-`Qwen3-VL-Reranker-8B` adds 200–500 ms when toggled on — that's the bulk of
+`Qwen3-VL-Reranker-2B` adds 200–500 ms when toggled on — that's the bulk of
 the user-visible slowness when "rerank" is checked. Two mitigations:
 
 1. **Frontend default off**: the toggle is currently easy to leave on; default
@@ -268,7 +269,7 @@ Lance docs:
 
 > "IVF_HNSW_SQ offers better recall at the cost of more memory."
 
-For `frame_embedding` (145 k × 1024 dims, ~600 MB raw → ~150 MB SQ-quantized),
+For `frame_embedding` (145 k × 2048 dims, ~1.2 GB raw → ~300 MB SQ-quantized),
 the better recall might let you keep `nprobes` low and end up faster overall.
 Worth a one-shot benchmark after the basic IVF_PQ implementation lands.
 
@@ -279,7 +280,7 @@ ds.create_index("frame_embedding", index_type="IVF_HNSW_SQ",
 
 ## vLLM performance — observed slow embeddings
 
-A single `POST /v1/embeddings` against Qwen3-VL-Embedding-8B takes 100–300 ms
+A single `POST /v1/embeddings` against Qwen3-VL-Embedding-2B takes 100–300 ms
 (plus ~5 ms localhost RTT). For a hybrid search this fires once per query;
 combined with the index search itself, it's the bulk of the visible latency.
 Items below are ordered by impact-per-effort.
@@ -287,14 +288,14 @@ Items below are ordered by impact-per-effort.
 ### 📋 Switch to **Qwen3-VL-Embedding-2B** (biggest single win)
 
 Qwen ships a 2B-parameter sibling to the 8B model — same architecture, same
-1024-d MRL output space, ~4× faster forward pass, ~4× lower memory.
+2048-d output space, ~4× faster forward pass, ~4× lower memory (vs the 8B).
 Per the Qwen3-VL release page, quality on retrieval benchmarks is within
 1–2 points of 8B for most languages.
 
 Change in `Makefile`:
 
 ```diff
-- vllm/vllm-openai:latest --model Qwen/Qwen3-VL-Embedding-8B …
+- vllm/vllm-openai:v0.22.0 --model Qwen/Qwen3-VL-Embedding-2B …
 + vllm/vllm-openai:latest --model Qwen/Qwen3-VL-Embedding-2B …
 ```
 
@@ -329,7 +330,7 @@ responds. Two improvements:
    concurrently with `asyncio.gather`. (Already mentioned in the
    search-perf section above — the same change benefits both.)
 
-Code path: `src/raudio/embeddings.py` `VLLMClient._post_embeddings(...)`.
+Code path: `src/raudio/retrieval/embeddings.py` `VLLMEmbeddingClient._embed_one(...)`.
 Concurrent-batch path (`embed-chunks`) already uses `ThreadPoolExecutor` —
 keep that for the CLI batch case; only swap to async for the per-query
 serving path.
@@ -399,7 +400,7 @@ Before/after any of the above:
 uv run python -c "
 import time, lancedb, numpy as np
 t = lancedb.connect('./transcripts.lance').open_table('chunks')
-q = np.random.randn(1024).astype('float32')
+q = np.random.randn(2048).astype('float32')
 # warmup
 t.query().nearest_to(q).limit(20).to_list()
 # measure
@@ -425,12 +426,146 @@ If Lance keeps misbehaving, fall back to plain disk:
 ```
 
 Backend serves them via `FileResponse`. Embeddings go into a separate
-`chunk_frame_embeddings.lance` table (keys + 1024-d vector only — no
+`chunk_frame_embeddings.lance` table (keys + 2048-d vector only — no
 extension types, no merge_insert). ~15 min to implement.
 
 ---
 
+## Code-quality backlog (skills audit, 2026-05-29)
+
+Items deferred from the `writing-python` / `fastapi` / `svelte` / `writing-typescript`
+cleanup pass. The pass applied all the safe, mechanical wins directly (see the
+Closed section); these are the larger or behavior-shifting changes that were
+**intentionally not auto-applied** — each notes why and how to verify.
+
+### Backend (`backend/app.py`)
+
+#### 📋 Replace the hand-rolled `SearchSpec` with a Pydantic model + shared `Depends`
+`SearchSpec.__init__` both clamps values *and* raises `HTTPException` (an HTTP
+concern in a data class), with the param list duplicated across `search_get`,
+`search_post`, and the constructor. A Pydantic model behind a shared
+`Depends(get_search_params)` would dedupe it. **Behavior change to confirm
+first:** unknown `mode` would become a **422** (FastAPI validation) instead of
+the current **400**. The frontend tolerates this (`api.ts` `asJson` doesn't
+branch on 400), but it's an observable contract change — decide deliberately.
+
+#### 📋 Domain-error hierarchy + exception handlers instead of inline `HTTPException`
+Search/blob paths catch broad `Exception` and translate to `HTTPException`
+inline. A small `DomainError` hierarchy + registered handlers (per the fastapi
+skill) would centralize this. ⚠️ Do **not** narrow the `health()` ping to
+`except httpx.HTTPError` — `httpx` is lazy-imported there behind the
+`[multimodal]` extra, so an `ImportError` would escape as a 500. Keep that catch
+broad.
+
+#### 📋 Embedding client via `app.state` + a dependency, not a closure `state` dict
+`_get_client` closes over a module-local `state = {"client": None}`. It works
+(per-app-instance), but `app.state` + a FastAPI dependency expresses the lazy
+singleton more idiomatically and testably.
+
+#### 📋 CORS `allow_origins=["*"]` is hard-coded
+Fine for the local demo (API-only behind the Bun proxy); tighten via settings if
+this is ever exposed.
+
+### CLI / Python (`src/raudio/`)
+
+#### 📋 FTS-language defaults disagree (latent correctness bug on a Swedish corpus)
+`ingest` defaults `--fts-language English` (`cli.py`), but `reindex-fts` defaults
+`Swedish`. On this Swedish corpus the English stemmer silently returns zero hits
+for inflected forms. Pick one default (almost certainly `Swedish`) so a plain
+`raudio ingest` produces a usable index without the `--fts-language Swedish` flag.
+
+#### 📋 `_Ctx` global state → Typer's context object
+`cli.py` shares `--db`/`--table` via mutable class attributes on `_Ctx`. The
+idiomatic Typer pattern is `ctx.obj` / `typer.Context`. Low-risk but touches
+every command signature.
+
+#### 📋 Optional: split `cli.py` (944 lines) into a `cli/` package
+Each command is already a thin lazy-importing wrapper, so coupling is low. A
+split by group (ingest / search / embed / maintenance) is feasible and low-risk
+**if** verified with `uv run raudio --help` + importing `raudio.cli:app`. Polish,
+not a fix — the lazy-import discipline already provides most of the decoupling.
+
+#### 📋 `print()` → `logging` in library code
+`thumbnails.py`, `download.py`, `detect_language.py` print progress directly.
+Library modules should log (or return data) and let the CLI render; this matters
+if they're ever imported by the backend.
+
+#### 📋 Minor typing/dedup
+`ingest_document` is a public re-export never called in-repo that duplicates
+`ingest_many`'s 9-param signature; `frames._extract_one` takes an untyped
+`args: tuple` (lost the 8-element typing); `detect_language` probe closures lack
+annotations; `iter_matching_words` uses bare `dict`/`list` params; the reranker
+prefix/suffix constants in `embeddings.py` and `qwen3_vl_reranker.jinja` want a
+one-line cross-reference comment (they must stay in sync). All low priority.
+
+### Frontend & demo
+
+#### 📋 Add eslint + prettier to `frontend/` and `demo/`
+Neither has a lint/format config or scripts. `svelte-check` + `tsc` are the type
+gate today; eslint/prettier would round out the `writing-typescript` toolchain.
+
+#### 📋 `demo/`: type the Web Worker message protocol
+`worker.ts` ↔ `+page.svelte`/`RealtimePanel`/`BatchPanel` communicate over one
+`postMessage` channel disambiguated only by an implicit `jobId` convention. A
+shared discriminated-union message type would remove the ad-hoc `as` casts in
+`RealtimePanel` and the untyped boundary. (Secondary app — low urgency.)
+
+#### 📋 `demo/`: tighten `tsconfig`, drop unused dep, decide the `/search` stub
+Add `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` (as now done in
+`frontend/`); `d3-scale` appears unused in `src` (remove from `package.json` +
+`bun install`); the `/search` route is a permanent `WorkInProgress` placeholder —
+build it or remove the route + sidebar entry. Also: `formatBytes` is duplicated
+across `ProgressItem`, `TranscriptHistory`, and `BatchPanel` — extract one shared
+helper.
+
+### Repo hygiene
+
+#### 📋 Stray files
+`images_per.jpg` (repo root, gitignored) — delete or move to `tests/fixtures/`.
+`frontend/transcripts.lance/` is an empty stray dir — remove. `db.table_names()`
+is deprecated in lancedb (use `list_tables()`); verify the return shape before
+swapping in `backend/app.py` + `cli.py`.
+
+---
+
 ## Closed (for context / commit log)
+
+### ✅ Skills-audit cleanup pass (2026-05-29)
+
+Applied `writing-python` / `fastapi` / `svelte` / `writing-typescript`. All gates
+green afterward: ruff ✅, ty ✅, `pytest` 32 passed, `raudio --help` ✅,
+frontend `bun run check` 0/0 + build ✅.
+
+- **Tooling:** added `[tool.ruff]` (lint-only, `py311`), `[tool.ty]`,
+  `[tool.pytest.ini_options]`, and a `dev` dependency group (pytest, httpx) to
+  `pyproject.toml`. De-duplicated `.gitignore` and added tool-cache/IDE entries.
+- **Tests (new):** `tests/test_units.py` (timecode, `_parse_range`,
+  `_build_where_clause`, `_rrf_fuse`, query-term extraction) and
+  `tests/test_backend_smoke.py` (dataset-gated end-to-end: FTS, health,
+  documents, thumbnail, Range streaming, 503 degradation).
+- **Real bugs fixed:** `typer.Exit("msg")` (×4) was passing a *string* as the
+  exit code and silently dropping the message → now `_die()` (prints + exits 1);
+  removed a dead `chunks_ds` param from `_run_search` and dead `chunk_frames_tbl`.
+- **FastAPI:** `async search_post` now offloads the blocking vLLM/Lance work via
+  `run_in_threadpool` (was stalling the event loop); `raise … from e` on
+  re-raised `HTTPException`s; fixed import order (E402).
+- **Lint/types:** dead imports removed; `collections.abc` over `typing`;
+  storage-version constants typed `Final` (fix Lance `Literal` mismatch);
+  `Image.Resampling.LANCZOS`; `capture_output=True`; `zip(strict=…)`; etc.
+- **Stale docstrings corrected:** `frames.py` ("no separate frames table" — now
+  the `chunk_frames` table), `audio.py` (superseded `media_uri` design → Blob V2
+  External), `search.py` (`create_fts=True` kwarg that never existed),
+  `_pick_alignments` (interval notation), `cli.py` module + `_merge_insert_vectors`.
+- **Frontend:** enabled `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`
+  and fixed the fallout (`api.ts` optional fields, transcript binary-search index
+  access); `as` cast → `satisfies` in `search-bar`; cleaned `loadMore`; deleted 3
+  dead UI components (Card/Badge/Checkbox).
+- **Demo:** removed dead canvas `AudioVisualizer.svelte` and an unused
+  `formatDuration` export.
+- **Docs:** added [GUIDE.md](GUIDE.md) (architecture / data flow / design
+  rationale / onboarding) and restructured this file.
+
+### Earlier
 
 - ✅ Migrated frontend from vanilla HTML → SvelteKit + Tailwind v4 + Bun proxy.
 - ✅ Renamed `frontend-svelte/` → `frontend/`, deleted old `frontend/`.

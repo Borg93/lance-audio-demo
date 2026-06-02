@@ -59,9 +59,11 @@
         hi = segs.length - 1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if (t < segs[mid].start) hi = mid - 1;
-        else if (t >= segs[mid].end) lo = mid + 1;
-        else return segs[mid];
+        const seg = segs[mid];
+        if (seg === undefined) break;
+        if (t < seg.start) hi = mid - 1;
+        else if (t >= seg.end) lo = mid + 1;
+        else return seg;
       }
       return null;
     }
@@ -113,7 +115,7 @@
 
 <div
   bind:this={scrollContainer}
-  class="max-h-[340px] overflow-y-auto rounded-md border border-border bg-input p-3 text-sm leading-7"
+  class="max-h-[340px] overflow-y-auto rounded-md border border-border bg-surface2 p-3 text-sm leading-7"
 >
   {#each alignments as a (a.start)}
     {@const sentEndsWithSpace = (a.text ?? '').endsWith(' ')}

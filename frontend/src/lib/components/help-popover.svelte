@@ -37,7 +37,7 @@
             class="grid grid-cols-[140px_max-content_1fr] items-baseline gap-3 rounded px-2 py-1.5 text-left transition-colors hover:bg-secondary/50"
           >
             <span class="font-medium">{info.label}</span>
-            <code class="rounded bg-input px-1.5 py-0.5 font-mono text-[11px] text-primary">
+            <code class="rounded bg-surface2 px-1.5 py-0.5 font-mono text-[11px] text-primary">
               {info.example}
             </code>
             <span class="text-muted-foreground">{info.explain}</span>

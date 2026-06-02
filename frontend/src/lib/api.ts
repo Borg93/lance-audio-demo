@@ -76,20 +76,24 @@ export type DocumentsResponse = z.infer<typeof DocumentsResponseSchema>;
 // Search request shape
 // ─────────────────────────────────────────────────────────────────────
 
+// Optional fields are written `T | undefined` (not just `?: T`) because the
+// callers build specs with explicit `undefined` values and the project runs
+// with `exactOptionalPropertyTypes`, which distinguishes "absent" from
+// "present and undefined".
 export interface SearchSpec {
     q: string;
-    n?: number;
-    mode?: SearchMode;
-    rerank?: boolean;
-    fuzziness?: 0 | 1 | 2;
-    phrase?: boolean;
+    n?: number | undefined;
+    mode?: SearchMode | undefined;
+    rerank?: boolean | undefined;
+    fuzziness?: (0 | 1 | 2) | undefined;
+    phrase?: boolean | undefined;
     /** Hybrid weight ∈ [0,1]: 0 = pure FTS, 1 = pure vector. Undefined = RRF. */
-    weight?: number;
-    language?: string;
-    namn?: string;
-    referenskod?: string;
-    extraid?: string;
-    image?: File | null;
+    weight?: number | undefined;
+    language?: string | undefined;
+    namn?: string | undefined;
+    referenskod?: string | undefined;
+    extraid?: string | undefined;
+    image?: File | null | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────

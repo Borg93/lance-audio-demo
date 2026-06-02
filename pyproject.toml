@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pyarrow>=21.0.0",
     "lancedb>=0.30.0",
-    "msgspec>=0.21.1",
+    "pydantic>=2.10",
     "pylance>=4.0.0",
     "typer>=0.12.0",
     # FastAPI viewer backend. python-multipart is required for File/Form
@@ -25,7 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 # Client-side multimodal extra. Used by:
 #   - the embed-chunks / extract-chunk-frames / embed-chunk-frames CLI commands
-#   - the FastAPI backend at query time (lazy-imported in src/raudio/embeddings.py)
+#   - the FastAPI backend at query time (lazy-imported in src/raudio/retrieval/embeddings.py)
 # Talks HTTP to a vLLM server; doesn't run a model in-process, so no GPU is
 # required to install this extra and no torch conflict with our cu128 pin.
 multimodal = [
@@ -50,10 +50,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/raudio", "backend"]
 # Co-locate the vLLM reranker chat template with the only Python module that
-# orchestrates the reranker (src/raudio/embeddings.py). Hatchling otherwise
+# orchestrates the reranker (src/raudio/retrieval/embeddings.py). Hatchling otherwise
 # excludes non-.py files from the wheel.
 [tool.hatch.build.targets.wheel.force-include]
-"src/raudio/qwen3_vl_reranker.jinja" = "raudio/qwen3_vl_reranker.jinja"
+"src/raudio/retrieval/qwen3_vl_reranker.jinja" = "raudio/retrieval/qwen3_vl_reranker.jinja"
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
@@ -63,3 +63,47 @@ explicit = true
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
 torchaudio = [{ index = "pytorch-cu128" }]
+
+# Dev tooling. Installed with `uv sync --group dev`; not shipped in the wheel.
+# httpx is needed both by the [multimodal] extra and by FastAPI's TestClient.
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+# ── ruff: lint only ──────────────────────────────────────────────────────────
+# We intentionally do NOT enable `ruff format` in CI: the codebase uses
+# hand-aligned dict literals and box-drawing comment separators that the
+# formatter would reflow into a large, low-signal diff. Run `uvx ruff format`
+# manually if you want to adopt it wholesale. Lint, however, is enforced.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "backend", "tests"]
+
+[tool.ruff.lint]
+# E4/E7/E9 (import placement, statements, syntax) — skips E1/E2/E3 whitespace
+# and E501 line-length, which are the formatter's job. BLE keeps the existing
+# `# noqa: BLE001` markers meaningful. UP modernizes typing (collections.abc).
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "C4", "SIM", "BLE", "RUF"]
+ignore = [
+    # Ambiguous-unicode rules: this is a Swedish corpus with intentional
+    # typography (×, –, ≈, å/ä/ö) in comments, docstrings, and strings.
+    "RUF001", "RUF002", "RUF003",
+    # Typer's API *requires* calls (Path(...), typer.Option(...)) as parameter
+    # defaults — flagging them as function-call-in-default is a false positive.
+    "B008",
+]
+
+# ── ty: type checking ────────────────────────────────────────────────────────
+[tool.ty.environment]
+python = ".venv"
+
+[tool.ty.src]
+include = ["src", "backend", "tests"]

@@ -1,23 +1,23 @@
 """Lance table for easytranscriber AudioMetadata JSON — FTS-ready."""
 
-from .datamodel import (
+from .ingest.ingest import flatten_chunks, ingest_document, ingest_many, load_transcript
+from .model.datamodel import (
     AlignmentSegment,
     AudioChunk,
     AudioMetadata,
     SpeechSegment,
     WordSegment,
 )
-from .ingest import flatten_chunks, ingest_document, ingest_many, load_transcript
-from .schema import (
+from .model.schema import (
     CHUNK_SCHEMA,
     DOC_SCHEMA,
     DOC_STORAGE_VERSION,
     alignment_struct,
     word_struct,
 )
-from .search import nearest_chunks, timecode
+from .retrieval.search import nearest_chunks, timecode
 
-__all__ = [
+__all__ = [  # noqa: RUF022 — grouped by layer (more readable than alphabetical)
     # Data model (mirrors easytranscriber)
     "AlignmentSegment",
     "AudioChunk",

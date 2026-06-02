@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { Snippet } from 'svelte';
 
   /**
@@ -26,8 +27,6 @@
     minLeft = 360,
     minRight = 320,
   }: Props = $props();
-
-  import { untrack } from 'svelte';
 
   let container = $state<HTMLDivElement | null>(null);
   // Read `initial` once at component creation; `fraction` is the live state.

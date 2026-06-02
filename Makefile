@@ -27,7 +27,7 @@ GPU             ?= 2
 	ingest ingest-with-media ingest-full reindex-fts \
 	pipeline pipeline-sharded pipeline-multimodal \
 	embed-server rerank-server embed-server-docker rerank-server-docker vllm-stop kernels-prepare embed-chunks extract-chunk-frames embed-chunk-frames \
-	backend frontend frontend-build frontend-dev labeler dev \
+	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
 	hf-upload-db hf-upload-videos hf-upload-all hf-download-db hf-download-all \
 	reingest search query demo shell clean clean-db clean-run reset download
 
@@ -203,7 +203,7 @@ labeler:              ## Run the manual language relabeler on $(AUDIO_DIR) (port
 	cd tools/labeler && bun install --silent && bun run labeler.ts --root ../../$(AUDIO_DIR) --port $(LABELER_PORT)
 
 # ─── Multimodal embeddings (Phase 1+2 of the multimodal plan) ───────────────
-# Long-running vLLM HTTP servers serve Qwen3-VL-Embedding-8B + Reranker-8B.
+# Long-running vLLM HTTP servers serve Qwen3-VL-Embedding-2B + Reranker-2B.
 # CLI commands and the FastAPI backend are clients of these servers.
 # Online inference: model loads once, stays warm across all uses.
 EMBED_BACKEND   ?= vllm
@@ -215,24 +215,28 @@ RERANK_URL      ?= http://127.0.0.1:8002
 EMBED_GPU       ?= 2
 RERANK_GPU      ?= 1
 # Each server has its own GPU now → can use most of its memory.
-EMBED_MEM_FRAC  ?= 0.85
+EMBED_MEM_FRAC  ?= 0.90
 RERANK_MEM_FRAC ?= 0.85
 
-# vLLM version pin. Why pinning matters here:
-#   * 0.20.0 requires NVIDIA driver >= 575 (CUDA 12.9). Your driver supports
-#     up to CUDA 12.8 → "driver too old" crash at engine init.
-#   * 0.19.1 works against driver 12.8 but its bundled FA2 wheel only ships
-#     PTX up to sm_90 → "unsupported PTX" crash on Blackwell vit attention.
-# The HF `kernels` package + FA3 cache (see `kernels-prepare`) is the
-# eventual workaround for the FA2 issue; keep that infrastructure in place.
-VLLM_PIN ?= vllm==0.19.1
+# vLLM version pin — set to 0.22.0 (one pinned build across both the uvx and
+# Docker routes; see docs/INVESTIGATION.md on why a single build matters).
+# Caveats to verify on your box (we can't test without the GPU):
+#   * vLLM >= 0.20 requires NVIDIA driver >= 575 (CUDA 12.9). If the host driver
+#     only supports CUDA 12.8, the native (uvx) server "driver too old"-crashes at
+#     engine init — use the Docker variant (bundles its own CUDA) in that case.
+#   * Re-check the Qwen3-VL deepstack image-embed path: 0.22.0 may fix or shift
+#     the warmup-buffer overflow — confirm the image pixel-pin matches the
+#     server's vision-token count (the 448-vs-392 mismatch in INVESTIGATION.md).
+# The HF `kernels` package + FA3 cache (see `kernels-prepare`) remains the
+# workaround for the Blackwell sm_120 FA2/PTX gap; keep that infrastructure.
+VLLM_PIN ?= vllm==0.22.0
 VLLM_ENV ?=
 VLLM_INDEX ?=
 
 # Docker variant — uses the official vllm/vllm-openai image which bundles
 # its own CUDA toolkit + userspace, sidestepping host driver/toolkit
 # mismatches. Recommended path on Blackwell with driver 12.8.
-VLLM_IMAGE    ?= vllm/vllm-openai:latest
+VLLM_IMAGE    ?= vllm/vllm-openai:v0.22.0
 HF_CACHE      ?= $(HOME)/.cache/huggingface
 
 # Docker 27+ resolves `--gpus all` through CDI for ALL vendors and aborts
@@ -253,13 +257,16 @@ embed-server-docker:  ## Run vLLM embedding server in Docker (no driver pin).
 		-v $(HF_CACHE):/root/.cache/huggingface \
 		--name raudio-embed \
 		$(VLLM_IMAGE) \
-		--model Qwen/Qwen3-VL-Embedding-8B \
-		--runner pooling --port 8001 \
+		--model Qwen/Qwen3-VL-Embedding-2B \
+		--runner pooling --port 8001 --enable-prefix-caching \
 		--dtype bfloat16 --gpu-memory-utilization $(EMBED_MEM_FRAC) \
 		--max-model-len 8192 \
 		--limit-mm-per-prompt.image 1 \
 		--limit-mm-per-prompt.video 0 \
 		--mm-processor-kwargs '{"min_pixels": 153664, "max_pixels": 153664}'
+		# NOTE (2B + vLLM 0.22.0): the 392px / 153664-px pin above + the client
+		# _IMAGE_SIDE were derived for the 8B on 0.20.0 — re-verify the vision-token
+		# count for the 2B tower before trusting the image-embed path (INVESTIGATION.md).
 
 rerank-server-docker: ## Run vLLM reranker server in Docker (no driver pin).
 	# Reranker is text-only in raudio (cross-encoder over query/doc strings),
@@ -270,10 +277,10 @@ rerank-server-docker: ## Run vLLM reranker server in Docker (no driver pin).
 		--device=nvidia.com/gpu=$(RERANK_GPU) --ipc=host \
 		-p 8002:8002 \
 		-v $(HF_CACHE):/root/.cache/huggingface \
-		-v $(PWD)/src/raudio/qwen3_vl_reranker.jinja:/templates/qwen3_vl_reranker.jinja:ro \
+		-v $(PWD)/src/raudio/retrieval/qwen3_vl_reranker.jinja:/templates/qwen3_vl_reranker.jinja:ro \
 		--name raudio-rerank \
 		$(VLLM_IMAGE) \
-		--model Qwen/Qwen3-VL-Reranker-8B \
+		--model Qwen/Qwen3-VL-Reranker-2B \
 		--runner pooling --port 8002 \
 		--dtype bfloat16 --gpu-memory-utilization $(RERANK_MEM_FRAC) \
 		--max-model-len 4096 \
@@ -294,36 +301,36 @@ kernels-prepare:      ## Pre-download FA3 kernels from HF hub (one-time, ~200 MB
 		(echo "Hint: 'hf auth login' if the repo gates downloads."; exit 1)
 	@echo "✓ Kernels cached under ~/.cache/huggingface/hub/. Now run: make embed-server"
 
-embed-server:         ## Start vLLM Qwen3-VL-Embedding-8B (port 8001) on GPU $(EMBED_GPU).
+embed-server:         ## Start vLLM Qwen3-VL-Embedding-2B (port 8001) on GPU $(EMBED_GPU).
 	CUDA_VISIBLE_DEVICES=$(EMBED_GPU) $(VLLM_ENV) \
-	uvx --python 3.12 --with "kernels" $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve Qwen/Qwen3-VL-Embedding-8B \
-		--runner pooling --port 8001 \
+	uvx --python 3.12 --with "kernels" $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve Qwen/Qwen3-VL-Embedding-2B \
+		--runner pooling --port 8001 --enable-prefix-caching \
 		--dtype bfloat16 --gpu-memory-utilization $(EMBED_MEM_FRAC) \
 		--max-model-len 8192 \
-		--limit-mm-per-prompt '{"image": 1}'
+		--limit-mm-per-prompt '{"image": 1}' \
+		--mm-processor-kwargs '{"min_pixels": 153664, "max_pixels": 153664}'
 
 # Reranker requires an explicit chat template + hf_overrides per the model
 # card to wire up the no/yes classification head and /v1/rerank endpoint.
-rerank-server:        ## Start vLLM Qwen3-VL-Reranker-8B (port 8002) on GPU $(RERANK_GPU).
+rerank-server:        ## Start vLLM Qwen3-VL-Reranker-2B (port 8002) on GPU $(RERANK_GPU).
 	CUDA_VISIBLE_DEVICES=$(RERANK_GPU) $(VLLM_ENV) \
-	uvx --python 3.12 --with "kernels" $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve Qwen/Qwen3-VL-Reranker-8B \
+	uvx --python 3.12 --with "kernels" $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve Qwen/Qwen3-VL-Reranker-2B \
 		--runner pooling --port 8002 \
 		--dtype bfloat16 --gpu-memory-utilization $(RERANK_MEM_FRAC) \
 		--max-model-len 4096 \
+		--limit-mm-per-prompt '{"image": 0, "video": 0}' \
 		--hf_overrides '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}' \
-		--chat-template ./src/raudio/qwen3_vl_reranker.jinja
+		--chat-template ./src/raudio/retrieval/qwen3_vl_reranker.jinja
 
 embed-chunks:         ## Embed chunks.text → text_embedding column + IVF_PQ index.
-	uv run --extra multimodal raudio --db $(DB) embed-chunks \
-		--backend $(EMBED_BACKEND) --embed-url $(EMBED_URL)
+	uv run --extra multimodal raudio --db $(DB) feature text_embedding --url $(EMBED_URL)
 
 EXTRACT_JOBS    ?= 16
 extract-chunk-frames: ## ffmpeg → one JPEG per chunk.start into chunks.frame_blob.
 	uv run raudio --db $(DB) extract-chunk-frames --audio-root $(AUDIO_DIR) --jobs $(EXTRACT_JOBS)
 
 embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ index.
-	uv run --extra multimodal raudio --db $(DB) embed-chunk-frames \
-		--backend $(EMBED_BACKEND) --embed-url $(EMBED_URL)
+	uv run --extra multimodal raudio --db $(DB) feature frame_embedding --url $(EMBED_URL)
 
 # Full multimodal indexing chain. Existing `pipeline` runs first, then the
 # three new stages add the multimodal columns + indexes. Resumable: each
@@ -333,6 +340,11 @@ pipeline-multimodal: pipeline embed-chunks extract-chunk-frames embed-chunk-fram
 compact:               ## Compact fragments and rebuild IVF_PQ indexes (run after bulk writes).
 	uv run raudio --db $(DB) compact
 	@echo "── multimodal indexing complete ────────────────────────────────"
+
+E2E_DOCS        ?= 2
+E2E_FRAME_LIMIT ?= 24
+e2e-smoke:            ## Full-pipeline e2e on a tiny real sample → throwaway DB (needs embed-server on :8001).
+	uv run --extra multimodal python scripts/e2e_smoke.py --docs $(E2E_DOCS) --frame-limit $(E2E_FRAME_LIMIT)
 
 dev:                  ## Run backend + frontend together (tmux or two terminals).
 	@echo "Run these in two terminals:"

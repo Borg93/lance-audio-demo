@@ -9,10 +9,27 @@ wheels/
 # Virtual environments
 .venv
 
-# Lance table + transcription pipeline outputs
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.ty_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local agent config
+.claude/
+
+# Editor / IDE
+.vscode/
+
+# Lance datasets + transcription pipeline outputs (local-only, never committed)
 *.lance/
 output/
 models/
+input/
+thumbnails/
+video_batcher.csv
 
 # Media: don't commit audio/video — examples/ is for JSON only
 examples/*.mp3
@@ -24,27 +41,19 @@ examples/*.flac
 examples/*.mov
 examples/*.webm
 
-
-transcripts.lance/
-video_batcher.csv
-*.log*
-input/
-thumbnails/
-output/
-models/
-*/node_modules/
-
 # Process logs go to logs/ (see Makefile $(LOG_DIR)). Keep the folder
 # tracked via .gitkeep but never commit the rotating log files.
+*.log*
 logs/*
 !logs/.gitkeep
 
-# SvelteKit build artifacts
+# Node / SvelteKit (frontend + demo)
+node_modules/
+*/node_modules/
 frontend/.svelte-kit/
 frontend/build/
 demo/.svelte-kit/
 demo/build/
-node_modules/
 
 # Stray local artifacts
 images_per.jpg

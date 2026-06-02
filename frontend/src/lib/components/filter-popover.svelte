@@ -43,9 +43,9 @@
 <Popover.Root>
   <Popover.Trigger
     class={cn(
-      'inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-input px-3 text-xs',
+      'inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs transition-colors',
       activeCount > 0 ? 'text-foreground' : 'text-muted-foreground',
-      'hover:text-foreground',
+      'hover:bg-muted hover:text-foreground',
     )}
     title="Filter results by language, event name, reference code, or internal ID"
   >
@@ -85,7 +85,7 @@
           <select
             bind:value={language}
             onchange={commit}
-            class="h-8 rounded-md border border-border bg-input px-2 text-xs text-foreground"
+            class="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="">Any</option>
             <option value="sv">Swedish</option>

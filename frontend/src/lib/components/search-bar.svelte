@@ -108,7 +108,7 @@
     fuzzy:   { label: 'Fuzzy',    example: 'betänkadet',   explain: 'Like Keyword but allows up to 2 letter typos per word — useful when unsure of spelling.' },
     meaning: { label: 'Meaning',  example: 'klimatkris',   explain: 'Vector search — finds chunks that DISCUSS the topic, even if those exact words aren\'t there. "klimat" can find "miljö" / "ekosystem".' },
     both:    { label: 'Both',     example: 'regeringens beslut', explain: 'Run Keyword AND Meaning together, fuse the rankings. Recommended default.' },
-  };
+  } satisfies Record<string, { label: string; example: string; explain: string }>;
 
   /** Single-line summary that always reflects the current setting. */
   const summary = $derived.by(() => {
@@ -182,7 +182,7 @@
     <!-- ── Tune popover (the only "config" surface in the bar) ── -->
     <Popover.Root bind:open={advancedOpen}>
       <Popover.Trigger
-        class="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-input px-3 text-xs text-muted-foreground hover:text-foreground"
+        class="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         title="Tune the search — pick keyword / meaning / both, match style, and reranking"
       >
         <Settings2 class="size-3.5" />
@@ -309,7 +309,7 @@
     </Button>
 
     <HelpPopover
-      examples={examples as Record<string, { label: string; example: string; explain: string }>}
+      examples={examples}
       onpick={(key, ex) => {
         if (key === 'phrase' || key === 'fuzzy') { kind = 'keyword'; style = key; }
         else if (key === 'meaning') kind = 'meaning';
