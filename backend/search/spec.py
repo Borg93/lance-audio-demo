@@ -32,9 +32,10 @@ class SearchSpec(BaseModel):
     n: int = 20
     mode: SearchMode = SearchMode.FTS
     rerank: bool = False
-    # How many candidates the cross-encoder reranker scores before trimming to
-    # ``n``. Only used when ``rerank`` is True. Clamped, never rejected.
-    rerank_n: int = 100
+    # How many of the top results the cross-encoder reranker re-scores (the
+    # rerank "head"); the rest keep first-stage order. Only used when
+    # ``rerank`` is True. Clamped, never rejected.
+    rerank_n: int = 20
     language: str | None = None
     namn: str | None = None
     referenskod: str | None = None
@@ -55,12 +56,12 @@ class SearchSpec(BaseModel):
     @field_validator("n")
     @classmethod
     def _clamp_n(cls, v: int) -> int:
-        return max(1, min(v, 100))
+        return max(1, min(v, 200))
 
     @field_validator("rerank_n")
     @classmethod
     def _clamp_rerank_n(cls, v: int) -> int:
-        return max(10, min(v, 500))
+        return max(1, min(v, 200))
 
     @field_validator("fuzziness")
     @classmethod

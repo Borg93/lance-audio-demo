@@ -21,9 +21,9 @@
    */
   let {
     kind,
-    resultN = $bindable('30'),
+    resultN = $bindable('100'),
     rerank = $bindable(false),
-    rerankN = $bindable('100'),
+    rerankN = $bindable('20'),
     weightPct = $bindable<number | null>(null),
     style = $bindable('loose'),
   }: {
@@ -35,11 +35,11 @@
     style?: string;
   } = $props();
 
-  const resultOptions: SelectOption[] = [10, 20, 30, 50, 100].map((n) => ({
+  const resultOptions: SelectOption[] = [20, 50, 100, 200].map((n) => ({
     value: String(n),
     label: String(n),
   }));
-  const rerankOptions: SelectOption[] = [50, 100, 200, 500].map((n) => ({
+  const rerankOptions: SelectOption[] = [10, 20, 50, 100].map((n) => ({
     value: String(n),
     label: String(n),
   }));
@@ -93,8 +93,8 @@
       </Field>
       {#if rerank}
         <Field
-          label="Candidates scored"
-          description="Cross-encoder re-scores this many top candidates, then trims to the result count. Slower but more accurate."
+          label="Rerank top"
+          description="Cross-encoder re-scores this many top results (the rest keep their order). Smaller = faster, more precise head."
           inline
         >
           <Select bind:value={rerankN} options={rerankOptions} ariaLabel="Rerank candidates" class="w-24" />

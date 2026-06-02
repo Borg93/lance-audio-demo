@@ -31,7 +31,8 @@
   } from 'lucide-svelte';
 
   const PAGE_STEP = 30;
-  let spec = $state<SearchSpec>({ q: '', n: PAGE_STEP, mode: 'fts' });
+  // Default result count shown per search (the Settings "Results to return").
+  let spec = $state<SearchSpec>({ q: '', n: 100, mode: 'fts' });
 
   // ── Search results (when there's a query or image) ──
   let hits = $state<Hit[]>([]);

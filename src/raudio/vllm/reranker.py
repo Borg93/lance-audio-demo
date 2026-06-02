@@ -1,6 +1,6 @@
 """Cross-encoder reranker: re-orders the top-K hits via the vLLM
 Qwen3-VL-Reranker-2B server. Counterpart to the bi-encoder in
-:mod:`raudio.clients.embedding` — a bi-encoder embeds query and document
+:mod:`raudio.vllm.embedding` — a bi-encoder embeds query and document
 independently and compares vectors; a cross-encoder reads the (query, document)
 pair together and scores relevance directly (slower, more accurate), so it only
 re-orders what cheaper retrieval already found.

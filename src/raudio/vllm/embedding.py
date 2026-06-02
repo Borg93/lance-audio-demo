@@ -2,7 +2,7 @@
 
 The *bi-encoder* half of retrieval — it encodes text and images independently
 into vectors for Lance storage and cosine search. Its counterpart, the
-cross-encoder reranker, lives in :mod:`raudio.clients.reranker`.
+cross-encoder reranker, lives in :mod:`raudio.vllm.reranker`.
 
 The model is Qwen3-VL-Embedding-2B, served by a long-running vLLM HTTP server
 (`make embed-server`) so it loads once and stays warm across the feature CLI

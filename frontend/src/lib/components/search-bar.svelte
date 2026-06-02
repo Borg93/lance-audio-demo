@@ -23,8 +23,8 @@
   );
   let style = $state<string>(spec.phrase ? 'phrase' : spec.fuzziness === 2 ? 'fuzzy' : 'loose');
   let rerank = $state(spec.rerank ?? false);
-  let rerankN = $state(String(spec.rerankN ?? 100));
-  let resultN = $state(String(spec.n ?? 30));
+  let rerankN = $state(String(spec.rerankN ?? 20));
+  let resultN = $state(String(spec.n ?? 100));
   // Hybrid blend: 0 = pure FTS, 100 = pure vector; null = parameter-free RRF.
   let weightPct = $state<number | null>(
     spec.weight === undefined || spec.weight === null ? null : Math.round(spec.weight * 100),

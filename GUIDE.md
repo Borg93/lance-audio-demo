@@ -152,8 +152,8 @@ so frames go into their own append-only table: `extract-chunk-frames` writes new
 fragments, `feature frame_embedding` attaches `frame_embedding` via
 `dataset.add_columns(...)`. No `merge_insert`. Visual / cross-modal search runs
 the frame-vector query against `chunk_frames` and joins back to `chunks` for the
-hit payload (`backend/app.py::_frame_search`); `chunks` carries **no** `frame_*`
-columns.
+hit payload (`backend/search/service.py::_frame_search`); `chunks` carries **no**
+`frame_*` columns.
 
 **Blob V2 cheat-sheet** (load-bearing constraints):
 
@@ -314,7 +314,8 @@ concurrency needs:
 - **Backend serving path** (`/api/search`): one query at a time, lazily connects,
   and lets `httpx.HTTPError` propagate so the API layer can translate it into a
   single structured **503** ("embedding service unavailable"). The error boundary
-  lives in `backend/app.py`, **not** in the client — keep it that way.
+  lives in `backend/search/service.py` (`run_search` wraps the embed calls),
+  **not** in the client — keep it that way.
 
 A planned async-per-query path for the backend (see [TODO.md](TODO.md)) must
 **preserve the sync ThreadPoolExecutor batch path** — the two coexist.
@@ -324,10 +325,15 @@ Two subtleties worth knowing:
   duplicated between the `_PREFIX`/`_SUFFIX` constants in `vllm/reranker.py`
   (which build `/v1/rerank` strings) and `retrieval/qwen3_vl_reranker.jinja` (the chat
   template the server applies). They must stay in sync; treat edits as risky.
-- **Image pinning:** `_IMAGE_SIDE = 448` square center-crop is a vLLM
-  warmup-buffer workaround — every image must yield the exact same vision-token
-  count (64 after 2× spatial merge) or the engine dies with `num_tokens > buffer`.
-  Aspect ratio is sacrificed on purpose.
+- **Image pinning:** `_IMAGE_SIDE = 392` square center-crop (`vllm/image.py`) is a
+  vLLM warmup-buffer workaround. vLLM sizes the Qwen3-VL deepstack buffer once at
+  warmup, so every runtime image must yield the same vision-token count or the
+  engine dies with `num_tokens > buffer`. Sending each image at exactly the area
+  the server pins via `min_pixels == max_pixels` (392 × 392 = 153 664 px — see the
+  `embed-server` / `embed-server-docker` Makefile targets) keeps the runtime token
+  count at the warmup ceiling. (448 × 448 = 200 704 px overran it — the recurring
+  crash.) Aspect ratio is sacrificed on purpose; if you change the side length,
+  change the Makefile pixel pin to match (`side² == pin`).
 
 ---
 
@@ -460,7 +466,7 @@ the authoritative, commented description of how every process fits together.
 | Change how transcripts become rows | `src/raudio/ingest/ingest.py` (`flatten_chunks`, `_document_row`) |
 | Add/modify a CLI command | `src/raudio/cli/` |
 | Add/modify a feature column (embed/summary/caption) | `src/raudio/features/columns.py` (+ `features/engine.py`) |
-| Change search behavior / add a mode | `backend/search/` (`_run_search`, `_vector_search`, `_rrf_fuse`) |
+| Change search behavior / add a mode | `backend/search/service.py` (`run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`) |
 | Add an API endpoint | the relevant router under `backend/` (`search/`, `media/`, `system/`) |
 | Change the embedding/rerank wire format | `src/raudio/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
 | Touch the search UI | `frontend/src/routes/+page.svelte` + `frontend/src/lib/components/` |

@@ -5,7 +5,7 @@
 > between the schema and the Lance file format**. Read it when you touch
 > [`src/raudio/model/schema.py`](../src/raudio/model/schema.py),
 > [`src/raudio/ingest/ingest.py`](../src/raudio/ingest/ingest.py), or the blob/range code in
-> [`backend/app.py`](../backend/app.py). For the indexation gotchas that bit us
+> [`backend/media/blobs.py`](../backend/media/blobs.py). For the indexation gotchas that bit us
 > (the `merge_insert` crash, `nprobes` recall) see [INVESTIGATION.md](INVESTIGATION.md).
 
 Everything raudio stores — transcript text, metadata, word alignments, two
@@ -22,9 +22,12 @@ format 2.2** capabilities:
 | **JSONB** (`pa.json_()`) | Word-alignment trees as queryable binary JSON, no nested-struct decode | `chunks.alignments_json` |
 | **Native indexes** | Tantivy BM25 FTS + IVF_PQ cosine ANN over the same rows | `text`, `text_embedding`, `frame_embedding` |
 
-`blob_field` (and therefore any of the three blob columns) **requires**
-`data_storage_version="2.2"`. That single constraint shapes how `ingest/ingest.py`
-writes (see [§ Why `lance.write_dataset` not `create_table`](#why-lancewrite_dataset-not-create_table)).
+A `blob_field` column **requires** `data_storage_version="2.2"`. Today only
+`documents` (`media_blob`, `thumbnail`) and `chunk_frames` (`frame_blob`) carry
+blob columns; `chunks` no longer does (frames moved to `chunk_frames`), but all
+three tables are pinned to `"2.2"` for consistency. That constraint shapes how
+`ingest/ingest.py` and `media/frames.py` write their first dataset
+(see [§ Why `lance.write_dataset` not `create_table`](#why-lancewrite_dataset-not-create_table)).
 
 ---
 
@@ -73,17 +76,17 @@ erDiagram
 All three are physical Lance datasets under one directory:
 `transcripts.lance/{chunks,documents,chunk_frames}.lance`. They are joined **only
 by key columns**, never by a stored foreign-key relation — the backend resolves
-keys to row IDs with SQL filters (`_index_for_chunk`, `_index_for_doc_id` in
-[`backend/app.py`](../backend/app.py)).
+keys to stable row ids with SQL filters (`_rowid_for_filter`, `rowid_for_doc_id`
+in [`backend/media/blobs.py`](../backend/media/blobs.py)).
 
 ### The keys
 
 - **`doc_id = sha1(audio_path)[:16]`** — a 16-char hex string. Deterministic, so
   re-ingesting the same file produces the same id (idempotent). Computed by
-  `_doc_id()` in `ingest/ingest.py`. The backend validates it with the regex
-  `^[a-f0-9]{16}$` before it ever reaches a SQL filter (`_valid_doc_id`).
+  `_doc_id()` in `ingest/ingest.py`. The backend validates it against the regex
+  `^[a-f0-9]{16}$` before it ever reaches a SQL filter (`valid_doc_id`).
 - **`(doc_id, speech_id, chunk_id)`** — the composite chunk key. `speech_id` is
-  the easytranscriber speech index; `chunk_id` is the 0-based position of the
+  the speech index from the transcript; `chunk_id` is the 0-based position of the
   chunk within that speech (`enumerate(speech.chunks)` in `flatten_chunks`).
 - **`(doc_id, speech_id, chunk_id, frame_idx)`** — the composite `chunk_frames`
   key. A single chunk can hold N frames (`frame_idx` 0..K-1); `frame_idx=0` is
@@ -91,26 +94,24 @@ keys to row IDs with SQL filters (`_index_for_chunk`, `_index_for_doc_id` in
 
 ### `chunks` — the scan-cheap text table
 
-One row per ~30 s transcript chunk ([`CHUNK_SCHEMA`](../src/raudio/model/schema.py)).
-It deliberately carries **no audio bytes** — those live on `documents` keyed by
-`doc_id` — so FTS and metadata scans stay cheap no matter how much media the DB
-holds. Notable columns:
+One row per transcript chunk ([`CHUNK_SCHEMA`](../src/raudio/model/schema.py)).
+It deliberately carries **no audio bytes** — the source media lives on the
+`documents` table keyed by `doc_id`, and the audio rides inside the source MP4
+served by the backend — so FTS and metadata scans stay cheap no matter how much
+media the DB holds. Notable columns:
 
 - `text` (`nullable=False`) — the column the Tantivy FTS index is built on.
 - `alignments_json` (`pa.json_()`) — JSONB word-alignment tree (§3).
-- `text_embedding` (`list_(float32, 2048)`, nullable) — the semantic-search
-  vector. **Not in the base schema**: `raudio feature text_embedding` attaches it
-  after ingest with `dataset.add_columns(...)` (Lance data evolution, via
-  `upsert_scan_column` in `raudio.features.engine`), so ingest never writes a
-  placeholder column.
-- **Legacy** `frame_blob` / `frame_mime` / `frame_width` / `frame_height` /
-  `frame_embedding` — the Phase-2-v1 per-chunk frame columns. Superseded by the
-  `chunk_frames` table; the backend only reads them as a fallback for old
-  datasets (`chunk_frame()` in `app.py`). See [TODO.md](../TODO.md) for removal.
+- `text_embedding` (`FixedSizeList<float32, 2048>`, nullable) — the
+  semantic-search vector. **Not in the base schema**: `raudio feature text_embedding`
+  attaches it after ingest with `dataset.add_columns(...)` (Lance data
+  evolution, via `upsert_scan_column` in `raudio.features.engine`), so ingest
+  never writes a placeholder column.
 
 Riksarkivet archival metadata (`referenskod`, `namn`, `bildid`, `extraid`) is
 **denormalised** onto every chunk row so retrieval needs no join — the search
-projection `_HIT_COLUMNS` reads them straight off the hit.
+projection `_HIT_COLUMNS` (in `backend/search/service.py`) reads them straight
+off the hit.
 
 ### `documents` — the portable media catalog
 
@@ -122,7 +123,7 @@ the only table with media-bearing columns, and both are Blob V2:
 
 This table is *optional*: `ingest_many` only writes it when one of
 `audio_root` / `media_base_uri` / `thumbnail_dir` is supplied. The backend
-guards every media/thumbnail endpoint with `if docs_ds is None`.
+guards every media/thumbnail endpoint with `if state.docs_ds is None`.
 
 ### `chunk_frames` — the append-only frame table
 
@@ -133,16 +134,16 @@ One row per extracted video frame, captured via ffmpeg
 captured at `chunk.start`. `frame_blob` is **Blob V2 Inline** (~50 KB JPEG,
 comfortably under the 64 KB inline threshold).
 
-**Why it is a separate table and not just the `frame_*` columns on `chunks`** —
+**Why it is a separate table and not just `frame_*` columns on `chunks`** —
 this is the single most load-bearing schema decision. Lance 4.0's `merge_insert`
-crashes its encoder when backfilling blob columns post-hoc on the *wide* `chunks`
-schema (multiple extension types at once), failing with
+crashes its encoder when backfilling blob columns post-hoc on a *wide* schema
+(multiple extension types at once), failing with
 `Invalid user input: there were more fields in the schema than provided column
 indices / infos` (decoder.rs:438), reproduced at 1, 100, and 145k rows. The Lance
 2.2 docs recommend "append + `add_columns`" for data-evolution workloads instead,
 so:
 
-- `extract-chunk-frames` **appends** new fragments (no `merge_insert`).
+- `raudio extract-chunk-frames` **appends** new fragments (no `merge_insert`).
 - `raudio feature frame_embedding` attaches `frame_embedding` via
   `dataset.add_columns(...)` — a column-level append that never touches existing
   files and bypasses the `merge_insert` join entirely.
@@ -172,8 +173,8 @@ raudio uses exactly **two** of these tiers, on purpose:
   column stores a **URI** — `file://` (local dev), `hf://` (Hugging Face), or
   `s3://` — *not the bytes*. This keeps `documents.lance` a tiny portable catalog
   while the media stays where it already is. URIs are composed by
-  `compose_media_uri()` and written with `lance.blob_array([uri, ...])` in
-  `_write_documents_table`.
+  `compose_media_uri()` (in `ingest/audio.py`) and written with
+  `lance.blob_array([uri, ...])` in `_write_documents_table`.
 
 > **Why `allow_external_blob_outside_bases=True`** — our URIs (`file://…`,
 > `hf://…`) don't map to registered Lance "base paths" yet, so the writer passes
@@ -183,9 +184,10 @@ raudio uses exactly **two** of these tiers, on purpose:
 ### How writes wrap blob columns
 
 A `blob_field` (or `pa.json_()`) column **cannot** be built with
-`pa.array(values, type=...)` — that raises a schema mismatch. Both writers in
-`ingest/ingest.py` special-case this: every non-blob column is built per its declared
-field type, and blob columns are wrapped with `lance.blob_array(...)`:
+`pa.array(values, type=...)` — that raises a schema mismatch. The writers in
+`ingest/ingest.py` and `media/frames.py` special-case this: every non-blob
+column is built per its declared field type, and blob columns are wrapped with
+`lance.blob_array(...)`:
 
 ```python
 # _write_documents_table — media_blob is External URIs, thumbnail is Inline bytes
@@ -193,14 +195,15 @@ media_col = blob_array(cols.pop("media_blob"))   # ["file://…", "hf://…", �
 thumb_col = blob_array(cols.pop("thumbnail"))    # [b"\xff\xd8…", None, …]
 ```
 
-`_build_chunks_table` does the same for `frame_blob` (`blob_cols = {"frame_blob"}`).
+`media/frames.py` does the same for `frame_blob`
+(`"frame_blob": blob_array([f.jpeg_bytes for f in good])`).
 
 ### Why `lance.write_dataset` not `create_table`
 
 `lancedb.create_table` does not expose `data_storage_version`, but any
-`blob_field` column **requires** `"2.2"`. So `ingest/ingest.py` writes the *first*
-dataset directly via `lance.write_dataset(...)` and then re-opens it through
-lancedb:
+`blob_field` column **requires** `"2.2"`. So the *first* write of each dataset
+goes directly through `lance.write_dataset(...)`, and the table is then re-opened
+through lancedb:
 
 ```python
 lance.write_dataset(
@@ -211,8 +214,8 @@ lance.write_dataset(
 table = db.open_table(table_name)                      # re-open via lancedb
 ```
 
-The three `*_STORAGE_VERSION` constants in `model/schema.py` are all `"2.2"` and typed
-`Final` so they satisfy Lance's `Literal["2.2"]` parameter type.
+The three `*_STORAGE_VERSION` constants in `model/schema.py` are all `"2.2"` and
+typed `Final` so they satisfy Lance's `Literal["2.2"]` parameter type.
 
 ### The blob read path (HTTP Range → `seek()` + `read()`)
 
@@ -225,34 +228,37 @@ never a full download.
 
 ```mermaid
 flowchart TD
-    A["GET /api/media/:doc_id<br/>Range: bytes=start-end"] --> B["_valid_doc_id(doc_id)<br/>regex ^[a-f0-9]{16}$"]
-    B --> C["_index_for_doc_id<br/>SQL filter -> _rowid"]
-    C --> D["_doc_blob_size<br/>take_blobs(...).size()"]
-    D --> E["_parse_range(header, total)<br/>clamp to [0, total-1]"]
-    E -->|"valid range"| F["_stream_blob_range"]
+    A["GET /api/media/:doc_id<br/>Range: bytes=start-end"] --> B["valid_doc_id(doc_id)<br/>regex ^[a-f0-9]{16}$"]
+    B --> C["rowid_for_doc_id<br/>SQL filter -> stable _rowid"]
+    C --> D["doc_blob_size<br/>take_blobs(...).size()"]
+    D --> E["parse_range(header, total)<br/>clamp to [0, total-1]"]
+    E -->|"valid range"| F["stream_blob_range"]
     E -->|"unsatisfiable"| G["416 + Content-Range: bytes */total"]
-    F --> H["blob = ds.take_blobs('media_blob', indices=[idx])[0]"]
+    F --> H["blob = ds.take_blobs('media_blob', ids=[rowid])[0]"]
     H --> I["f.seek(start)"]
     I --> J["loop: f.read(min(1 MiB, remaining))<br/>yield chunk"]
     J --> K["206 Partial Content<br/>Content-Range, Accept-Ranges: bytes"]
 ```
 
-Key facts grounded in `backend/app.py`:
+Key facts grounded in `backend/media/blobs.py` and `backend/media/router.py`:
 
-- `_stream_blob_range` opens the blob with `with blob as f:`, `f.seek(start)`,
+- Blobs are read by **`ds.take_blobs(column, ids=[rowid])`**. `ids` are *stable
+  logical row ids* that survive deletes and compaction; positional `indices` are
+  not stable, so they are never used here. Every endpoint first resolves its key
+  (`doc_id`, or the `(doc_id, speech_id, chunk_id, frame_idx)` tuple) to a
+  `_rowid` via a SQL filter (`with_row_id=True`), then takes the blob by that id.
+- `stream_blob_range` opens the blob with `with blob as f:`, `f.seek(start)`,
   then yields `f.read(min(_STREAM_CHUNK, remaining))` until satisfied.
   `_STREAM_CHUNK = 1 << 20` (1 MiB) — big enough to amortize seek cost, small
   enough to bound memory under concurrent streams.
-- `_doc_blob_size` probes size *without* reading body: tries `f.size()`, falls
+- `doc_blob_size` probes size *without* reading the body: tries `f.size()`, falls
   back to `f.seek(0, 2); f.tell()`.
 - `thumbnail` and `chunk_frame` read the whole small blob in one `f.read()` and
   return it with `Cache-Control: public, max-age=86400`; `media` uses
   `Cache-Control: no-store` because it is range-streamed.
-- `chunk_frame` (`/api/chunk-frame/{doc}/{s}/{c}?frame_idx=N`, default
-  `frame_idx=0`) reads `chunk_frames.frame_blob` via `take_blobs(..., ids=[rowid])`
-  (row IDs are not stable across appends, so it resolves the
-  `(doc_id, speech_id, chunk_id, frame_idx)` key to a `_rowid` first). `chunks`
-  carries no frame blob — 404 until frames are extracted.
+- `chunk_frame` (`GET /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}?frame_idx=N`,
+  default `frame_idx=0`) reads `chunk_frames.frame_blob`. It returns 404 until
+  `raudio extract-chunk-frames` has populated the `chunk_frames` table.
 
 ---
 
@@ -283,10 +289,12 @@ in `model/schema.py` but deliberately not used for this column):
 > column with its *declared* field type, which promotes the JSON strings into the
 > extension array.
 
-On read, `parse_alignments_json` (in [`src/raudio/retrieval/search.py`](../src/raudio/retrieval/search.py))
+On read, `parse_alignments_json` (in
+[`src/raudio/retrieval/search.py`](../src/raudio/retrieval/search.py))
 defensively handles both shapes: if Lance already decoded it (not a `str`) it
 passes through; otherwise `json.loads`. The backend calls this in
-`_postprocess_hits` so every search hit ships an `alignments` list.
+`_postprocess_hits` (`backend/search/service.py`) so every search hit ships an
+`alignments` list.
 
 ---
 
@@ -306,14 +314,19 @@ flowchart LR
     TE -->|"create_index IVF_PQ"| ANN["IVF_PQ cosine<br/>num_partitions=256<br/>num_sub_vectors=64"]
     DI -->|"create_scalar_index BTREE"| BT["BTREE scalar<br/>(key lookups)"]
     FTS --> Q1["mode=fts (BM25)"]
-    ANN --> Q2["mode=semantic / hybrid / all"]
-    FTS --> Q3["mode=hybrid (FTS + vector + RRF)"]
+    ANN --> Q2["mode=semantic"]
+    FTS --> Q3["mode=hybrid (FTS + text-vector, fused)"]
     ANN --> Q3
 ```
 
+(The `frame_embedding` IVF_PQ index on `chunk_frames` backs `mode=visual` and the
+frame leg of `mode=all`; see [EMBEDDINGS.md](EMBEDDINGS.md) for the full
+search-mode map.)
+
 ### Tantivy full-text (BM25)
 
-Built by `ingest_many` (and rebuilt standalone by `reindex_fts`):
+Built by `ingest_many` (and rebuilt standalone by `reindex_fts`, exposed as
+`raudio reindex-fts`):
 
 ```python
 table.create_fts_index(
@@ -324,10 +337,10 @@ table.create_fts_index(
 )
 ```
 
-The three non-default flags are each load-bearing:
+The non-default flags are each load-bearing:
 
-- **`with_position=True`** — stores token positions so `PhraseQuery` (used by the
-  `phrase=true` search flag in `app.py`) can match exact word order.
+- **`with_position=True`** — stores token positions so a `PhraseQuery` (used by
+  the `phrase=true` search flag) can match exact word order.
 - **`remove_stop_words=False`** — keeps stop words in the index so a phrase like
   `"spring of hope"` matches verbatim instead of silently degrading to
   `"spring hope"`.
@@ -338,46 +351,51 @@ The three non-default flags are each load-bearing:
   re-ingesting** — only the inverted index is rewritten.
 
 Two **BTREE scalar indexes** are also built, on `doc_id` and `audio_path`, to
-speed the key-lookup filters the backend runs constantly
-(`_index_for_doc_id`, `_index_for_chunk`).
+speed the key-lookup filters the backend runs constantly.
 
 ### IVF_PQ cosine vector index
 
 Built by `ensure_vector_index` (in `raudio.features.engine`, called from
 `raudio feature text_embedding`, `raudio feature frame_embedding`, and
-`compact --rebuild-indexes` in [`src/raudio/cli/`](../src/raudio/cli/)):
+`raudio compact` when it rebuilds indexes — see [`src/raudio/cli/`](../src/raudio/cli/)):
 
 ```python
 table.create_index(
     metric="cosine",
     vector_column_name=column,        # "text_embedding" or "frame_embedding"
     index_type="IVF_PQ",
-    num_partitions=256,               # IVF: 256 coarse partitions
-    num_sub_vectors=64,               # PQ: split each 2048-d vector into 64 sub-quantizers
+    num_partitions=num_partitions,    # default 256: IVF coarse partitions
+    num_sub_vectors=num_sub_vectors,  # default 64: PQ sub-quantizers per vector
     replace=True,
 )
 ```
 
-- **IVF** (inverted file) clusters vectors into `num_partitions=256` coarse cells;
-  a query only scans a few cells.
+- **IVF** (inverted file) clusters vectors into `num_partitions` (default 256)
+  coarse cells; a query only scans a few cells.
 - **PQ** (product quantization) compresses each 2048-d vector into
-  `num_sub_vectors=64` quantized codes, shrinking the index and speeding distance
-  math.
+  `num_sub_vectors` (default 64) quantized codes, shrinking the index and
+  speeding distance math.
 - **cosine** matches the embedding contract: Qwen3-VL vectors are the full
   2048-d output, **L2-normalized**, and `text_embedding` + `frame_embedding` share
   the *same* 2048-d space, so cross-modal (image→frame, text→frame) search is a
   direct cosine compare.
 
-Two guard rails to know about:
+Two guard rails to know about, both enforced by `ensure_vector_index`:
 
-- **Won't index a column with nulls.** `ensure_vector_index` refuses to run while
-  the column still has any `NULL` row (Lance's builder mishandles partial-NULL
-  vector columns), so `raudio feature text_embedding` fully populates the column
-  before the index is built.
+- **Won't index a column with nulls.** It refuses to run while the column still
+  has any `NULL` row (Lance's IVF trainer mishandles partial-NULL vector
+  columns), so the embedding feature fully populates the column before the index
+  is built.
+- **Won't index below `num_partitions` rows.** IVF k-means needs at least one
+  training vector per partition; below `num_partitions` rows the build is skipped
+  and Lance falls back to flat (brute-force) search until the table grows.
+
+A third operational fact:
+
 - **Compaction invalidates ANN indexes.** Many small append writes
   (`extract-chunk-frames` flushes, incremental ingests) leave a long tail of small
-  fragments and partly-stale indexes; `raudio compact` runs
-  `optimize.compact_files(...)` then rebuilds only the embedding indexes that are
+  fragments and stale index row addresses; `raudio compact` runs
+  `ds.optimize.compact_files(...)` then rebuilds whichever embedding indexes are
   fully populated.
 
 > **`IVF_HNSW_SQ` as an option** — for the frame-embedding index, Lance's
@@ -385,14 +403,15 @@ Two guard rails to know about:
 > better recall could let `nprobes` stay low. Tracked as a stretch item in
 > [TODO.md](../TODO.md).
 
-### Query-time recall gotcha (`nprobes`)
+### Query-time recall (`nprobes` + `refine_factor`)
 
-The IVF_PQ index defaults to **`nprobes=1`** — it scans only 1 of the 256
-partitions, which is fast but low-recall (the "feels broken, re-query" reflex).
-`_vector_search` in `app.py` does not yet raise it. The recommended fix is
-`.nprobes(20)` (≈ √256) plus `.refine_factor(3)` to re-score the top-K with
-full-precision vectors. This and the `merge_insert` crash are the two storage
-gotchas documented in [INVESTIGATION.md](INVESTIGATION.md).
+Lance's IVF_PQ default probes too few partitions (`nprobes=1` scans only 1 of the
+256 cells) for good recall — the "feels broken, re-query" reflex. The backend
+fixes this in `backend/search/service.py`: every vector query is issued with
+`.nprobes(_VECTOR_NPROBES)` and `.refine_factor(_VECTOR_REFINE_FACTOR)`, where
+`_VECTOR_NPROBES = 20` (≈ √256) and `_VECTOR_REFINE_FACTOR = 3` re-scores the top
+candidates with full-precision vectors. The history of this gotcha (and the
+`merge_insert` crash) is documented in [INVESTIGATION.md](INVESTIGATION.md).
 
 ---
 
@@ -400,21 +419,23 @@ gotchas documented in [INVESTIGATION.md](INVESTIGATION.md).
 
 | Table.column | Lance feature | Tier / type | Built/written by |
 |---|---|---|---|
-| `chunks.text` | Tantivy FTS | BM25 inverted index | `create_fts_index` |
+| `chunks.text` | Tantivy FTS | BM25 inverted index | `create_fts_index` (ingest / `raudio reindex-fts`) |
 | `chunks.text_embedding` | Vector index | IVF_PQ cosine, 2048-d | `raudio feature text_embedding` (`add_columns`) → `ensure_vector_index` |
 | `chunks.alignments_json` | JSONB | `pa.json_()` | `flatten_chunks` (`json.dumps`) |
 | `chunks.doc_id`, `audio_path` | Scalar index | BTREE | `create_scalar_index` |
 | `documents.media_blob` | Blob V2 | **External** (URI) | `_write_documents_table` (`blob_array`) |
 | `documents.thumbnail` | Blob V2 | Inline (bytes) | `_write_documents_table` (`blob_array`) |
-| `chunk_frames.frame_blob` | Blob V2 | Inline (bytes) | `extract-chunk-frames` (append) |
-| `chunk_frames.frame_embedding` | Vector index | IVF_PQ cosine, 2048-d | `raudio feature frame_embedding` (`add_columns`) |
+| `chunk_frames.frame_blob` | Blob V2 | Inline (bytes) | `raudio extract-chunk-frames` (append, `blob_array`) |
+| `chunk_frames.frame_embedding` | Vector index | IVF_PQ cosine, 2048-d | `raudio feature frame_embedding` (`add_columns`) → `ensure_vector_index` |
 
 ---
 
 ## See also
 
 - [GUIDE.md](../GUIDE.md) — architecture & onboarding map (write side vs read side).
+- [EMBEDDINGS.md](EMBEDDINGS.md) — the embedding + search-mode contract (RRF, rerank).
 - [INVESTIGATION.md](INVESTIGATION.md) — the `merge_insert` crash and `nprobes` recall, in depth.
 - [`src/raudio/model/schema.py`](../src/raudio/model/schema.py) — the authoritative PyArrow schemas.
 - [`src/raudio/ingest/ingest.py`](../src/raudio/ingest/ingest.py) — how blob/JSON columns are written.
-- [`backend/app.py`](../backend/app.py) — the blob read path and search router.
+- [`backend/media/blobs.py`](../backend/media/blobs.py) — the Blob V2 + HTTP-Range read path.
+- [`backend/search/service.py`](../backend/search/service.py) — the framework-free search core.

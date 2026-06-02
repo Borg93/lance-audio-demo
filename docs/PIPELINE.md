@@ -109,11 +109,13 @@ torchaudio==2.11.0+cu128   # from the explicit pytorch-cu128 index
 ```
 
 The comment is load-bearing: *"driver 570.x supports up to CUDA 12.8, and cu130
-wheels fail to initialize (driver too old)."* The whole transcribe stack
-(`easytranscriber` + torch + pyannote) is an **optional extra** — install it
-with `uv sync --extra transcribe`. `transcribe.py` lazily imports
-`easytranscriber`/`easyaligner` inside `run_transcribe` and raises a clear
-install hint if the extra is missing, so the FTS-only path needs no GPU at all.
+wheels fail to initialize (driver too old)."* `easytranscriber`, `easyaligner`,
+and `torch` are **core dependencies** (installed by a plain `uv sync`), but
+heavy — so `transcribe.py` imports them **lazily** inside `run_transcribe` and
+raises a clear hint to re-run `uv sync` if they are somehow missing. That keeps
+`raudio --help` fast and lets the FTS-only / search-only paths run without
+touching the GPU. (The only *optional* extra is `multimodal`, the client-side
+embedding/reranker stack — unrelated to ASR.)
 
 ---
 
@@ -127,16 +129,17 @@ classifies it, and sorts files into `<audio-dir>/<lang>/` subfolders that
 
 ```mermaid
 flowchart TD
-    F["each file in audio-dir"] --> SMP
-    subgraph SMP["Sample 3 windows (robust to silent intros)"]
-        O["read_audio_segment @ 16 kHz<br/>offsets = sample_offset × (1, 3, 5)<br/>default 60s → 60s / 180s / 300s<br/>each 30s long"]
+    F["each file in audio-dir<br/>(audio/video extensions only)"] --> DUR
+    DUR["_probe_duration_s — cheap ffmpeg<br/>fast-seek to estimate length"] --> SMP
+    subgraph SMP["_plan_sample_starts (duration-aware)"]
+        O["read_audio_segment @ 16 kHz<br/>--num-windows clips (default 8)<br/>evenly spread across 5–95% of file<br/>each --sample-seconds long (default 30s)"]
     end
     SMP --> CLS{"--model"}
     CLS -->|"facebook/mms-lid-*"| MMS["Wav2Vec2ForSequenceClassification<br/>softmax → ISO 639-3 (eng, swe, ...)"]
-    CLS -->|"openai/whisper-*"| WHI["Whisper LID head (ct2)<br/>→ ISO 639-1 (sv, en, ...)"]
+    CLS -->|"openai/whisper-* (default)"| WHI["Whisper LID head (ct2)<br/>→ ISO 639-1 (sv, en, ...)"]
     MMS --> VOTE
     WHI --> VOTE
-    VOTE["sum probability per language<br/>across the 3 windows; argmax wins"] --> MAP["ISO 639-3 → 639-1 map<br/>(swe→sv, eng→en, ...)"]
+    VOTE["sum probability per language<br/>across the windows; argmax wins"] --> MAP["ISO 639-3 → 639-1 map<br/>(swe→sv, eng→en, ...)"]
     MAP --> MV["move file → audio-dir/&lt;lang&gt;/<br/>(unless --no-move / --dry-run)"]
 ```
 
@@ -147,22 +150,28 @@ Grounded details from [`detect_language.py`](../src/raudio/asr/detect_language.p
   labels (MMS-LID emits ISO 639-3); `_whisper_probe` runs a multilingual
   Whisper's LID head through CTranslate2 (emits ISO 639-1 like `<|sv|>`, braces
   stripped). The module docstring calls `facebook/mms-lid-256` *"state-of-the-art
-  for this exact task"* and the `--model` help text names it the recommended
-  classifier.
+  for this exact task"*.
 - **The CLI default is `openai/whisper-large-v3`** (`cmd_detect_language`'s
-  `--model` default in `cli/`) — a multilingual Whisper, *not* a
-  language-fine-tuned one. Both the CLI help and the module docstring warn:
-  **never** pass `KBLab/kb-whisper-large` here — fine-tuned models over-predict
-  their training language so every file comes back `sv`.
-- **3-offset voting.** `OFFSET_MULTIPLIERS = (1.0, 3.0, 5.0)` — it samples at
-  `sample_offset × each`, sums each language's probability across windows, and
-  takes the argmax. One 30 s window might land on silence, a leader tone, or an
-  archive voiceover; voting across 60/180/300 s is robust to that.
+  `--model` default) — a multilingual Whisper, *not* a language-fine-tuned one;
+  `facebook/mms-lid-256` is the recommended higher-accuracy alternative. Both
+  the CLI help and the module docstring warn: **never** pass
+  `KBLab/kb-whisper-large` here — fine-tuned models over-predict their training
+  language so every file comes back `sv`.
+- **Duration-aware multi-window voting.** Each file's length is first estimated
+  cheaply (`_probe_duration_s` binary-searches the EOF with tiny ffmpeg
+  fast-seek reads — no full decode). `_plan_sample_starts` then spreads
+  `--num-windows` clips (default **8**, each `--sample-seconds` = **30 s**)
+  evenly across ~5–95% of the duration. The probe runs on every clip and the
+  per-language probabilities are summed; the argmax language wins, reported with
+  its mean top-1 probability. Spreading across the whole recording (rather than
+  fixed early offsets) keeps a long file from being judged by its intro and
+  avoids sampling past the end of a short one — a single 30 s window can land on
+  silence, a leader tone, or an archive voiceover.
 - **ISO 639-3 → 639-1 mapping.** `ISO_639_3_TO_1` translates MMS output
   (`swe`, `eng`, `nor`, `dan`, …) into the 2-letter codes the transcribe
   pipeline expects (`sv`, `en`, `no`, `da`, …); unmapped codes pass through
-  unchanged. A `✓` is printed when the detected language has a default
-  emissions model, `!` otherwise.
+  unchanged. A `✓` is logged when the detected language has a default
+  emissions model in `DEFAULT_EMISSIONS_MODEL`, `!` otherwise.
 
 ---
 

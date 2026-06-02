@@ -41,10 +41,22 @@ class TestDefaults:
 class TestClampN:
     @pytest.mark.parametrize(
         ("given", "expected"),
-        [(-5, 1), (0, 1), (1, 1), (50, 50), (100, 100), (101, 100), (10_000, 100)],
+        [(-5, 1), (0, 1), (1, 1), (50, 50), (200, 200), (201, 200), (10_000, 200)],
     )
-    def test_clamped_to_1_100(self, given: int, expected: int) -> None:
+    def test_clamped_to_1_200(self, given: int, expected: int) -> None:
         assert SearchSpec(n=given).n == expected
+
+
+class TestClampRerankN:
+    @pytest.mark.parametrize(
+        ("given", "expected"),
+        [(0, 1), (1, 1), (20, 20), (200, 200), (500, 200)],
+    )
+    def test_clamped_to_1_200(self, given: int, expected: int) -> None:
+        assert SearchSpec(rerank_n=given).rerank_n == expected
+
+    def test_default_is_20(self) -> None:
+        assert SearchSpec().rerank_n == 20
 
 
 class TestClampFuzziness:
