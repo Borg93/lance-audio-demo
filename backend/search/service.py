@@ -71,8 +71,13 @@ def _build_where_clause(
     namn: str | None,
     referenskod: str | None,
     extraid: str | None,
+    raw: str | None = None,
 ) -> str | None:
-    """Compose the SQL WHERE clause for metadata filters."""
+    """Compose the SQL WHERE clause for metadata filters.
+
+    ``raw`` is a user-typed SQL expression ANDed in verbatim (wrapped in parens)
+    — intentionally *not* quoted, since it is meant to be SQL, not a value.
+    """
     clauses: list[str] = []
     if language:
         clauses.append(f"language = '{_sql_quote(language)}'")
@@ -82,6 +87,8 @@ def _build_where_clause(
         clauses.append(f"referenskod LIKE '%{_sql_quote(referenskod)}%'")
     if extraid:
         clauses.append(f"extraid = '{_sql_quote(extraid)}'")
+    if raw and raw.strip():
+        clauses.append(f"({raw})")
     return " AND ".join(clauses) if clauses else None
 
 
@@ -103,6 +110,27 @@ def _rrf_fuse(rankings: list[list[dict[str, Any]]], k: int = 60) -> list[dict[st
             rep.setdefault(key, hit)
     fused = sorted(rep.values(), key=lambda h: -scored[(h["doc_id"], h["chunk_id"])])
     return fused
+
+
+def _rerank_by_text(
+    get_reranker: Callable[[], VLLMReranker],
+    query: str,
+    hits: list[dict[str, Any]],
+    n: int,
+) -> list[dict[str, Any]]:
+    """Cross-encoder rerank ``hits`` by ``query`` against each hit's transcript
+    ``text``, returning the top ``n``.
+
+    The reranker is text-only: it scores the query string jointly with each
+    candidate's transcript and ignores vectors/images. No-op (plain top-``n``)
+    when there is no query text or no candidates — so image-only searches, which
+    have no query text, fall through to their first-stage order.
+    """
+    if not query or not hits:
+        return hits[:n]
+    scores = get_reranker().rerank(query, [h["text"] for h in hits])
+    ranked = [h for _, h in sorted(zip(scores, hits, strict=False), key=lambda p: -p[0])]
+    return ranked[:n]
 
 
 def run_search(
@@ -128,9 +156,10 @@ def run_search(
         namn=spec.namn,
         referenskod=spec.referenskod,
         extraid=spec.extraid,
+        raw=spec.where,
     )
 
-    # ── FTS-only (today's path, unchanged behaviour) ──────────────
+    # ── FTS ───────────────────────────────────────────────────────
     if spec.mode == "fts":
         from lancedb.query import MatchQuery, PhraseQuery
 
@@ -138,13 +167,18 @@ def run_search(
             fts_query = PhraseQuery(spec.q, "text")
         else:
             fts_query = MatchQuery(spec.q, "text", fuzziness=spec.fuzziness)
+        # When reranking, pull a wider BM25 pool (rerank_n) for the cross-encoder
+        # to reorder; otherwise just the top n.
+        limit = max(spec.n, spec.rerank_n) if spec.rerank else spec.n
         try:
-            qb = chunks.search(fts_query).select(_HIT_COLUMNS).limit(spec.n)
+            qb = chunks.search(fts_query).select(_HIT_COLUMNS).limit(limit)
             if where:
-                qb = qb.where(where, prefilter=False)
+                qb = qb.where(where, prefilter=spec.prefilter)
             raw = qb.to_list()
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"search failed: {e}") from e
+        if spec.rerank:
+            raw = _rerank_by_text(get_reranker, spec.q, raw, spec.n)
         return _postprocess_hits(raw)
 
     # All remaining modes need the embedding client.
@@ -153,11 +187,14 @@ def run_search(
     # Build query vector(s). Convert connection / network errors into a
     # structured 503 so the frontend shows a meaningful message instead
     # of "Internal Server Error".
+    # The vector leg may use a distinct query string (spec.q_vec); the FTS leg
+    # always uses spec.q. Empty q_vec falls back to q.
+    vec_text = spec.q_vec or spec.q
     text_vec = None
     image_vec = None
     try:
-        if spec.q:
-            text_vec = client.embed_text([spec.q])[0]
+        if vec_text:
+            text_vec = client.embed_text([vec_text])[0]
         if image_bytes:
             image_vec = client.embed_image([image_bytes])[0]
     except Exception as e:
@@ -178,8 +215,14 @@ def run_search(
                 detail="text embeddings not built yet — run `raudio embed-chunks`",
             )
         vec = text_vec if text_vec is not None else image_vec
-        return _postprocess_hits(_vector_search(chunks, vec, "text_embedding", spec.n, where))
+        limit = max(spec.n, spec.rerank_n) if spec.rerank else spec.n
+        hits = _vector_search(chunks, vec, "text_embedding", limit, where, prefilter=spec.prefilter)
+        if spec.rerank:
+            hits = _rerank_by_text(get_reranker, spec.q, hits, spec.n)
+        return _postprocess_hits(hits)
     if spec.mode == "visual":
+        # Image-only: the text reranker has no query text to score, so results
+        # keep their frame-similarity order regardless of the rerank toggle.
         vec = image_vec if image_vec is not None else text_vec
         return _postprocess_hits(_frame_search(chunk_frames, chunks, vec, spec.n, where))
 
@@ -193,6 +236,7 @@ def run_search(
                 detail="text embeddings not built yet — run `raudio embed-chunks`",
             )
         try:
+            from lancedb.query import MatchQuery, PhraseQuery
             from lancedb.rerankers import LinearCombinationReranker, RRFReranker
 
             from raudio.vllm.reranker import QwenVLReranker
@@ -208,19 +252,30 @@ def run_search(
                 reranker = LinearCombinationReranker(weight=spec.weight)
             else:
                 reranker = RRFReranker()
+            # FTS leg honours phrase/fuzziness like the dedicated 'fts' branch.
+            if spec.phrase:
+                fts_query = PhraseQuery(spec.q, "text")
+            else:
+                fts_query = MatchQuery(spec.q, "text", fuzziness=spec.fuzziness)
+            # Candidate pool the reranker sees before we trim to spec.n. When
+            # cross-encoder rerank is on, honour spec.rerank_n; otherwise fetch
+            # n*3 so RRF/linear fusion has room to reorder. Lance's hybrid
+            # builder exposes a single .limit shared by both legs + the fused
+            # output; the final slice to spec.n happens below.
+            candidates = max(spec.n, spec.rerank_n) if spec.rerank else spec.n * 3
             qb = (
                 chunks.search(query_type="hybrid")
                 .vector(text_vec.tolist())
-                .text(spec.q)
+                .text(fts_query)
                 .rerank(reranker)
                 .nprobes(_VECTOR_NPROBES)
                 .refine_factor(_VECTOR_REFINE_FACTOR)
                 .select(_PAYLOAD_COLUMNS)
-                .limit(spec.n)
+                .limit(candidates)
             )
             if where:
-                qb = qb.where(where, prefilter=False)
-            raw = qb.to_list()
+                qb = qb.where(where, prefilter=spec.prefilter)
+            raw = qb.to_list()[: spec.n]
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"hybrid search failed: {e}") from e
         return _postprocess_hits(raw)
@@ -239,25 +294,31 @@ def run_search(
                     .limit(spec.n * 3)
                 )
                 if where:
-                    fts_hits = fts_hits.where(where, prefilter=False)
+                    fts_hits = fts_hits.where(where, prefilter=spec.prefilter)
                 rankings.append(fts_hits.to_list())
             except Exception:  # noqa: BLE001
                 pass
 
         # Text vector branch
         if text_vec is not None:
-            rankings.append(_vector_search(chunks, text_vec, "text_embedding", spec.n * 3, where))
+            rankings.append(
+                _vector_search(
+                    chunks, text_vec, "text_embedding", spec.n * 3, where, prefilter=spec.prefilter
+                )
+            )
         # Frame vector branch — searches the chunk_frames table (same shared
         # 2048-d space), joined back to chunks. Empty until frames are embedded.
         vec_for_frames = image_vec if image_vec is not None else text_vec
         if vec_for_frames is not None:
             rankings.append(_frame_search(chunk_frames, chunks, vec_for_frames, spec.n * 3, where))
 
-        fused = _rrf_fuse(rankings)[: spec.n]
-        # Optional cross-encoder rerank on fused top-K
-        if spec.rerank and spec.q and fused:
-            scores = get_reranker().rerank(spec.q, [h["text"] for h in fused])
-            fused = [h for _, h in sorted(zip(scores, fused, strict=False), key=lambda p: -p[0])]
+        fused = _rrf_fuse(rankings)
+        # Optional cross-encoder rerank on the fused top-(rerank_n) candidates,
+        # then trim to spec.n. Without rerank we just take the fused top-n.
+        if spec.rerank:
+            fused = _rerank_by_text(get_reranker, spec.q, fused[: max(spec.n, spec.rerank_n)], spec.n)
+        else:
+            fused = fused[: spec.n]
         return _postprocess_hits(fused)
 
     # Unreachable — SearchSpec validation rejects unknown modes up-front.
@@ -270,6 +331,8 @@ def _vector_search(
     column: str,
     n: int,
     where: str | None,
+    *,
+    prefilter: bool = True,
 ) -> list[dict[str, Any]]:
     """Run a cosine vector search on ``column``; returns raw list of dicts.
 
@@ -289,7 +352,7 @@ def _vector_search(
             .limit(n)
         )
         if where:
-            qb = qb.where(where, prefilter=False)
+            qb = qb.where(where, prefilter=prefilter)
         return qb.to_list()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"vector search failed: {e}") from e

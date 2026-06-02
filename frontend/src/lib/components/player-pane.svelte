@@ -13,23 +13,32 @@
   let mediaError = $state<string | null>(null);
 
   /**
-   * Whenever `hit` changes, dispose the old media and seek the new one to
-   * `hit.start`. The cleanup function ensures we never leak a playing
-   * video when the user clicks a different hit (the bug that haunted the
-   * old vanilla frontend).
+   * Whenever `hit` changes, seek the player to `hit.start` and play.
+   *
+   * `src` is owned reactively by the `<video src={mediaUrl(hit.doc_id)}>`
+   * binding below — this effect must NOT touch it. The old code called
+   * `el.removeAttribute('src'); el.load()` in cleanup; when the next hit was
+   * in the *same* document the bound URL didn't change, so Svelte never
+   * re-applied `src` and the element was left sourceless and wedged (the
+   * "second click freezes the player until full refresh" bug).
+   *
+   * We read `hit.doc_id` + `hit.start` so the effect re-runs on either a new
+   * document (src changes → metadata reloads → seek on `loadedmetadata`) or a
+   * new chunk in the same already-loaded document (seek immediately, since
+   * `loadedmetadata`/`canplay` won't fire again).
    */
   $effect(() => {
     mediaError = null;
     if (!hit || !mediaEl) return;
 
     const el = mediaEl;
-    let sought = false;
-    const seekOnce = () => {
-      if (sought) return;
-      sought = true;
+    const start = hit.start;
+    let cancelled = false;
+    const seek = () => {
+      if (cancelled) return;
       try {
-        el.currentTime = hit.start;
-      } catch (e) {
+        el.currentTime = start;
+      } catch {
         // ignore — some browsers throw if metadata isn't fully ready
       }
       el.play().catch(() => {});
@@ -44,39 +53,41 @@
       };
       mediaError = err ? (codes[err.code] ?? 'unknown') : 'unknown';
     };
-    el.addEventListener('loadedmetadata', seekOnce);
-    el.addEventListener('canplay', seekOnce);
+
+    if (el.readyState >= 1 /* HAVE_METADATA */) {
+      seek();
+    } else {
+      el.addEventListener('loadedmetadata', seek, { once: true });
+      el.addEventListener('canplay', seek, { once: true });
+    }
     el.addEventListener('error', onError);
 
     return () => {
-      el.removeEventListener('loadedmetadata', seekOnce);
-      el.removeEventListener('canplay', seekOnce);
+      cancelled = true;
+      el.removeEventListener('loadedmetadata', seek);
+      el.removeEventListener('canplay', seek);
       el.removeEventListener('error', onError);
-      try {
-        el.pause();
-        el.removeAttribute('src');
-        el.load();
-      } catch (e) {
-        // ignore — element may already be detached
-      }
+      el.pause();
     };
   });
 </script>
 
-<div class="flex h-full flex-col gap-4 overflow-y-auto p-6">
+<div class="flex h-full min-h-0 flex-col gap-3 p-4">
   {#if !hit}
     <div class="m-auto text-sm text-muted-foreground">Click a hit to play.</div>
   {:else}
-    <div class="text-sm font-medium">
+    <div class="shrink-0 text-sm font-medium">
       {hit.audio_path} · {fmtTime(hit.start)} → {fmtTime(hit.end)}
     </div>
 
+    <!-- Grow to fill the pane height; object-contain keeps the aspect ratio
+         (letterboxed) instead of the old fixed 320px cap. -->
     <video
       bind:this={mediaEl}
       controls
       preload="auto"
       src={mediaUrl(hit.doc_id)}
-      class="max-h-[320px] w-full rounded-lg bg-black"
+      class="min-h-0 w-full flex-1 rounded-lg bg-black object-contain"
     >
       <track kind="captions" />
     </video>

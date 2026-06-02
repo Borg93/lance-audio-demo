@@ -85,10 +85,18 @@ export interface SearchSpec {
     n?: number | undefined;
     mode?: SearchMode | undefined;
     rerank?: boolean | undefined;
+    /** How many candidates the cross-encoder reranker scores (when rerank=true). */
+    rerankN?: number | undefined;
     fuzziness?: (0 | 1 | 2) | undefined;
     phrase?: boolean | undefined;
     /** Hybrid weight ∈ [0,1]: 0 = pure FTS, 1 = pure vector. Undefined = RRF. */
     weight?: number | undefined;
+    /** Separate text for the vector leg of hybrid/semantic/all; falls back to `q` when empty. */
+    qVec?: string | undefined;
+    /** Raw SQL WHERE expression ANDed with the structured metadata filters. */
+    where?: string | undefined;
+    /** Apply filter before vector/FTS search (prefilter) vs after (postfilter). Defaults true server-side. */
+    prefilter?: boolean | undefined;
     language?: string | undefined;
     namn?: string | undefined;
     referenskod?: string | undefined;
@@ -131,7 +139,11 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
         fd.append('n', n);
         fd.append('mode', mode);
         if (spec.rerank) fd.append('rerank', 'true');
+        if (spec.rerank && spec.rerankN !== undefined) fd.append('rerank_n', String(spec.rerankN));
         if (spec.weight !== undefined) fd.append('weight', String(spec.weight));
+        if (spec.qVec) fd.append('q_vec', spec.qVec);
+        if (spec.where) fd.append('where', spec.where);
+        if (spec.prefilter === false) fd.append('prefilter', 'false');
         if (spec.language) fd.append('language', spec.language);
         if (spec.namn) fd.append('namn', spec.namn);
         if (spec.referenskod) fd.append('referenskod', spec.referenskod);
@@ -144,7 +156,11 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
     if (spec.fuzziness) params.set('fuzziness', String(spec.fuzziness));
     if (spec.phrase) params.set('phrase', 'true');
     if (spec.rerank) params.set('rerank', 'true');
+    if (spec.rerank && spec.rerankN !== undefined) params.set('rerank_n', String(spec.rerankN));
     if (spec.weight !== undefined) params.set('weight', String(spec.weight));
+    if (spec.qVec) params.set('q_vec', spec.qVec);
+    if (spec.where) params.set('where', spec.where);
+    if (spec.prefilter === false) params.set('prefilter', 'false');
     if (spec.language) params.set('language', spec.language);
     if (spec.namn) params.set('namn', spec.namn);
     if (spec.referenskod) params.set('referenskod', spec.referenskod);
@@ -180,6 +196,16 @@ export async function listDocuments(
 ): Promise<DocumentsResponse> {
     const r = await fetcher(`/api/documents?page=${page}&per_page=${perPage}`);
     return asJson(r, DocumentsResponseSchema);
+}
+
+// ── Filterable columns ───────────────────────────────────────────────────
+export const ColumnSchema = z.object({ name: z.string(), type: z.string() });
+export type ColumnInfo = z.infer<typeof ColumnSchema>;
+
+/** The chunks table's filterable scalar columns (name + friendly type). */
+export async function listColumns(fetcher: typeof fetch = fetch): Promise<ColumnInfo[]> {
+    const r = await fetcher('/api/columns');
+    return asJson(r, z.array(ColumnSchema));
 }
 
 /** URL helpers — used directly as `<img src=...>`, no fetch. */

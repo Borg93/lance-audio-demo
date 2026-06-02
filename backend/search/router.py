@@ -30,6 +30,7 @@ def search_get(
     n: Annotated[int, Query()] = 20,
     mode: Annotated[SearchMode, Query()] = SearchMode.FTS,
     rerank: Annotated[bool, Query()] = False,
+    rerank_n: Annotated[int, Query()] = 100,
     language: Annotated[str | None, Query()] = None,
     namn: Annotated[str | None, Query()] = None,
     referenskod: Annotated[str | None, Query()] = None,
@@ -37,12 +38,16 @@ def search_get(
     fuzziness: Annotated[int, Query()] = 0,
     phrase: Annotated[bool, Query()] = False,
     weight: Annotated[float | None, Query()] = None,
+    q_vec: Annotated[str, Query()] = "",
+    where: Annotated[str | None, Query()] = None,
+    prefilter: Annotated[bool, Query()] = True,
 ) -> list[dict[str, Any]]:
     spec = SearchSpec(
         q=q.strip(),
         n=n,
         mode=mode,
         rerank=rerank,
+        rerank_n=rerank_n,
         language=language,
         namn=namn,
         referenskod=referenskod,
@@ -50,6 +55,9 @@ def search_get(
         fuzziness=fuzziness,
         phrase=phrase,
         weight=weight,
+        q_vec=q_vec,
+        where=where,
+        prefilter=prefilter,
     )
     if not spec.q:
         return []
@@ -68,17 +76,22 @@ async def search_post(
     n: Annotated[int, Form()] = 20,
     mode: Annotated[SearchMode, Form()] = SearchMode.HYBRID,
     rerank: Annotated[bool, Form()] = False,
+    rerank_n: Annotated[int, Form()] = 100,
     weight: Annotated[float | None, Form()] = None,
     language: Annotated[str | None, Form()] = None,
     namn: Annotated[str | None, Form()] = None,
     referenskod: Annotated[str | None, Form()] = None,
     extraid: Annotated[str | None, Form()] = None,
+    q_vec: Annotated[str, Form()] = "",
+    where: Annotated[str | None, Form()] = None,
+    prefilter: Annotated[bool, Form()] = True,
 ) -> list[dict[str, Any]]:
     spec = SearchSpec(
         q=q.strip(),
         n=n,
         mode=mode,
         rerank=rerank,
+        rerank_n=rerank_n,
         language=language,
         namn=namn,
         referenskod=referenskod,
@@ -86,6 +99,9 @@ async def search_post(
         fuzziness=0,
         phrase=False,
         weight=weight,
+        q_vec=q_vec,
+        where=where,
+        prefilter=prefilter,
     )
     image_bytes = await image.read() if image is not None else None
     if not spec.q and not image_bytes:

@@ -32,6 +32,9 @@ class SearchSpec(BaseModel):
     n: int = 20
     mode: SearchMode = SearchMode.FTS
     rerank: bool = False
+    # How many candidates the cross-encoder reranker scores before trimming to
+    # ``n``. Only used when ``rerank`` is True. Clamped, never rejected.
+    rerank_n: int = 100
     language: str | None = None
     namn: str | None = None
     referenskod: str | None = None
@@ -40,11 +43,24 @@ class SearchSpec(BaseModel):
     phrase: bool = False
     # weight ∈ [0, 1]: bias toward FTS (0) or vector (1). None = neutral RRF.
     weight: float | None = None
+    # Optional separate text for the vector leg of hybrid/semantic/all; falls
+    # back to ``q`` when empty. The FTS leg always uses ``q``.
+    q_vec: str = ""
+    # Raw user-typed SQL WHERE expression, ANDed with the structured metadata
+    # filters (e.g. "duration > 60 AND namn LIKE '%alkohol%'").
+    where: str | None = None
+    # True => filter applies BEFORE vector/FTS search (prefilter); False => after.
+    prefilter: bool = True
 
     @field_validator("n")
     @classmethod
     def _clamp_n(cls, v: int) -> int:
         return max(1, min(v, 100))
+
+    @field_validator("rerank_n")
+    @classmethod
+    def _clamp_rerank_n(cls, v: int) -> int:
+        return max(10, min(v, 500))
 
     @field_validator("fuzziness")
     @classmethod

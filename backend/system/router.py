@@ -41,6 +41,38 @@ def health(state: StateDep) -> dict[str, Any]:
     }
 
 
+_COLUMN_EXCLUDE = {"alignments_json"}
+
+
+@router.get("/api/columns")
+def columns(state: StateDep) -> list[dict[str, str]]:
+    """Filterable scalar columns of the ``chunks`` table (name + friendly type).
+
+    Lets the UI show *what* can go in a WHERE filter. Vector / blob / list /
+    embedding columns are omitted — they can't appear in a SQL filter anyway.
+    """
+    import pyarrow as pa
+
+    out: list[dict[str, str]] = []
+    for field in state.chunks.schema:
+        name = field.name
+        if name in _COLUMN_EXCLUDE or name.endswith("_embedding"):
+            continue
+        t = field.type
+        if pa.types.is_integer(t) or pa.types.is_floating(t):
+            kind = "number"
+        elif pa.types.is_boolean(t):
+            kind = "boolean"
+        elif pa.types.is_temporal(t):
+            kind = "time"
+        elif pa.types.is_string(t) or pa.types.is_large_string(t):
+            kind = "text"
+        else:
+            continue  # list / struct / binary / vector — not filterable in SQL
+        out.append({"name": name, "type": kind})
+    return out
+
+
 @router.get("/api/documents")
 def documents(
     state: StateDep,

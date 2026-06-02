@@ -3,14 +3,17 @@
     search,
     listDocuments,
     ApiError,
+    thumbnailUrl,
     type Hit,
     type SearchSpec,
     type Document,
   } from '$lib/api';
+  import { fmtTime } from '$lib/utils';
   import SearchBar from '$lib/components/search-bar.svelte';
   import ActiveFilters from '$lib/components/active-filters.svelte';
   import HitList from '$lib/components/hit-list.svelte';
   import HitCard from '$lib/components/hit-card.svelte';
+  import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
   import DocTile from '$lib/components/doc-tile.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import ResizableSplit from '$lib/components/resizable-split.svelte';
@@ -18,6 +21,7 @@
   import {
     LayoutGrid,
     List as ListIcon,
+    Table as TableIcon,
     Loader2,
     ChevronLeft,
     ChevronRight,
@@ -49,7 +53,43 @@
   let loadingDocs = $state(false);
 
   // ── Layout ──
-  let view = $state<'list' | 'grid'>('list');
+  let view = $state<'list' | 'grid' | 'table'>('list');
+  // Which result columns the table view shows (persisted). Defaults to a
+  // readable subset; the chooser bar toggles any of TABLE_COLUMNS.
+  let tableCols = $state<string[]>(['thumbnail', 'namn', 'start', 'end', 'duration', 'text']);
+
+  // Columns shown in the browse-mode (pre-search) documents table. Documents
+  // carry fewer fields than search hits, so this is its own small set.
+  const DOC_COLUMNS: { key: string; label: string; get: (d: Document) => string }[] = [
+    { key: 'thumbnail', label: 'Thumb', get: () => '' },
+    { key: 'namn', label: 'Name', get: (d) => d.namn ?? '' },
+    { key: 'referenskod', label: 'Ref', get: (d) => d.referenskod ?? '' },
+    { key: 'bildid', label: 'Bild ID', get: (d) => d.bildid ?? '' },
+    { key: 'extraid', label: 'Internal ID', get: (d) => d.extraid ?? '' },
+    { key: 'duration', label: 'Dur', get: (d) => (d.duration != null ? fmtTime(d.duration) : '') },
+    { key: 'audio_path', label: 'File', get: (d) => d.audio_path },
+  ];
+  $effect(() => {
+    if (typeof localStorage === 'undefined') return;
+    const v = localStorage.getItem('raudio-table-cols-v2');
+    if (v) {
+      try {
+        tableCols = JSON.parse(v) as string[];
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+  function toggleCol(key: string) {
+    tableCols = tableCols.includes(key)
+      ? tableCols.filter((k) => k !== key)
+      : [...tableCols, key];
+    try {
+      localStorage.setItem('raudio-table-cols-v2', JSON.stringify(tableCols));
+    } catch {
+      /* ignore */
+    }
+  }
   // Grid column count, persisted in localStorage so it sticks.
   let gridCols = $state<number>(3);
   $effect(() => {
@@ -130,6 +170,25 @@
    * filter — it then silently stuck across the next search and produced 0
    * hits. Now nothing is implicitly filtered.
    */
+  /**
+   * Global keyboard affordances:
+   *   "/"    focus the search box (unless already typing in a field)
+   *   Esc    return from a playing hit back to the results list
+   */
+  function onWindowKeydown(e: KeyboardEvent) {
+    const t = e.target as HTMLElement | null;
+    const typing =
+      !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    if (e.key === '/' && !typing) {
+      e.preventDefault();
+      const el = document.querySelector<HTMLInputElement>('input[type="search"]');
+      el?.focus();
+      el?.select();
+    } else if (e.key === 'Escape' && active && !typing) {
+      active = null;
+    }
+  }
+
   function openDoc(doc: Document) {
     active = {
       _score: 0,
@@ -150,6 +209,8 @@
     };
   }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <div class="grid h-full grid-rows-[auto_1fr] min-h-0">
   <div class="border-b border-border bg-card/40">
@@ -223,6 +284,14 @@
           >
             <LayoutGrid class="size-4" />
           </Button>
+          <Button
+            variant={view === 'table' ? 'secondary' : 'ghost'}
+            size="icon"
+            title="Table view — see column values per row"
+            onclick={() => (view = 'table')}
+          >
+            <TableIcon class="size-4" />
+          </Button>
         </div>
       </div>
 
@@ -245,6 +314,66 @@
                   onclick={() => openDoc(doc)}
                 />
               {/each}
+            </div>
+          {:else if view === 'table'}
+            {@const docCols = DOC_COLUMNS.filter((c) => tableCols.includes(c.key))}
+            <div class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-3 py-2 text-[11px]">
+              <span class="mr-1 text-muted-foreground">Columns:</span>
+              {#each DOC_COLUMNS as c (c.key)}
+                <button
+                  type="button"
+                  onclick={() => toggleCol(c.key)}
+                  class={'rounded border px-1.5 py-0.5 transition-colors ' +
+                    (tableCols.includes(c.key)
+                      ? 'border-primary bg-primary/10 text-foreground'
+                      : 'border-border text-muted-foreground hover:text-foreground')}
+                >
+                  {c.label}
+                </button>
+              {/each}
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full border-collapse text-xs">
+                <thead>
+                  <tr class="sticky top-0 z-10 border-b border-border bg-card text-left text-muted-foreground">
+                    {#each docCols as c (c.key)}
+                      <th class="px-3 py-2 font-medium whitespace-nowrap">{c.label}</th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each docs as doc (doc.doc_id)}
+                    <tr
+                      class={'cursor-pointer border-b border-border/60 hover:bg-secondary/40 ' +
+                        (activeDocId === doc.doc_id
+                          ? 'bg-primary/15 font-medium [box-shadow:inset_3px_0_0_0_var(--color-primary)]'
+                          : '')}
+                      onclick={() => openDoc(doc)}
+                    >
+                      {#each docCols as c (c.key)}
+                        {#if c.key === 'thumbnail'}
+                          <td class="px-3 py-1.5 align-top">
+                            <img
+                              src={thumbnailUrl(doc.doc_id)}
+                              loading="lazy"
+                              alt=""
+                              class="h-9 w-16 rounded bg-muted object-cover"
+                              onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
+                            />
+                          </td>
+                        {:else}
+                          <td
+                            class="max-w-[28rem] truncate px-3 py-1.5 align-top whitespace-nowrap text-muted-foreground"
+                            title={c.get(doc)}
+                          >
+                            {c.get(doc)}
+                          </td>
+                        {/if}
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
             </div>
           {:else}
             <ul class="divide-y divide-border">
@@ -314,6 +443,24 @@
               />
             {/each}
           </div>
+        {:else if view === 'table'}
+          <!-- Column chooser: click a column to show/hide it in the table. -->
+          <div class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-3 py-2 text-[11px]">
+            <span class="mr-1 text-muted-foreground">Columns:</span>
+            {#each TABLE_COLUMNS as c (c.key)}
+              <button
+                type="button"
+                onclick={() => toggleCol(c.key)}
+                class={'rounded border px-1.5 py-0.5 transition-colors ' +
+                  (tableCols.includes(c.key)
+                    ? 'border-primary bg-primary/10 text-foreground'
+                    : 'border-border text-muted-foreground hover:text-foreground')}
+              >
+                {c.label}
+              </button>
+            {/each}
+          </div>
+          <HitTable {hits} {active} visible={tableCols} query={spec.q} onselect={(h) => (active = h)} />
         {:else}
           <HitList
             {hits}

@@ -72,8 +72,11 @@
   --radius: 0.375rem;
 }
 
-/* ── design tokens — DARK (raudio boots here; toggle removes .dark) ── */
-:where(.dark) {
+/* ── design tokens — DARK (raudio boots here; toggle removes .dark) ──
+ * Must be `.dark`, NOT `:where(.dark)`: `:where()` has zero specificity, so the
+ * `:root` light block (specificity 0,1,0) would always win and dark mode would
+ * never apply. `.dark` ties `:root` on specificity and wins by source order. */
+.dark {
   --bg: #0d0d0f;
   --surface: #131316;
   --surface2: #1a1a1e;
