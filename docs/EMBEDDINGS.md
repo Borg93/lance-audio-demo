@@ -8,10 +8,11 @@
 > deep-dive in **[INVESTIGATION.md](INVESTIGATION.md)** — read that before you
 > touch image resolution or vLLM warmup.
 
-Source of truth: [`src/raudio/retrieval/embeddings.py`](../src/raudio/retrieval/embeddings.py),
+Source of truth: [`src/raudio/vllm/embedding.py`](../src/raudio/vllm/embedding.py),
+[`src/raudio/vllm/reranker.py`](../src/raudio/vllm/reranker.py),
 [`Makefile`](../Makefile) (the `embed-server` / `rerank-server` / `*-docker`
-targets), [`src/raudio/cli.py`](../src/raudio/cli.py) (`embed-chunks`,
-`embed-chunk-frames`), [`backend/app.py`](../backend/app.py) (`_run_search`), and
+targets), [`src/raudio/cli/`](../src/raudio/cli/) (`feature text_embedding`,
+`feature frame_embedding`), [`backend/app.py`](../backend/app.py) (`_run_search`), and
 the chat template [`src/raudio/retrieval/qwen3_vl_reranker.jinja`](../src/raudio/retrieval/qwen3_vl_reranker.jinja).
 
 ---
@@ -33,7 +34,7 @@ servers. The embedder produces vectors; the reranker produces relevance scores.
 | GPU (Makefile) | `EMBED_GPU ?= 2` | `RERANK_GPU ?= 1` |
 
 The Python defaults live in the client constructors (`VLLMEmbeddingClient` in
-`retrieval/embeddings.py`, `VLLMReranker` in `retrieval/reranker.py`) and the
+`vllm/embedding.py`, `VLLMReranker` in `vllm/reranker.py`) and the
 module constants `EMBED_MODEL`, `RERANK_MODEL`, `DEFAULT_EMBED_URL`,
 `DEFAULT_RERANK_URL`. The vector width is `EMBED_DIM = 2048` in
 [`model/schema.py`](../src/raudio/model/schema.py) — the single source of truth.
@@ -42,10 +43,10 @@ module constants `EMBED_MODEL`, `RERANK_MODEL`, `DEFAULT_EMBED_URL`,
 2048-d vector. It is Matryoshka-trained, so you *could* slice to a shorter prefix
 (e.g. 1024) to halve storage + index cost — but `raudio` keeps the full width for
 maximum retrieval fidelity. The only transform is L2-normalization (the vLLM
-pooler returns un-normalized vectors), in `retrieval/utils.py::l2_normalize`:
+pooler returns un-normalized vectors), in `vllm/image.py::l2_normalize`:
 
 ```python
-# retrieval/utils.py — l2_normalize()
+# vllm/image.py — l2_normalize()
 norms = np.linalg.norm(arr, axis=1, keepdims=True)
 return (arr / norms).astype(np.float32)     # unit vectors, full 2048-d
 ```
@@ -67,7 +68,7 @@ them.
 ```mermaid
 flowchart LR
     subgraph clients["raudio process(es) — HTTP clients only"]
-        CLI["raudio CLI<br/>embed-chunks / embed-chunk-frames<br/>(ThreadPoolExecutor, text_concurrency=32)"]
+        CLI["raudio CLI<br/>feature text_embedding / feature frame_embedding<br/>(ThreadPoolExecutor, text_concurrency=32)"]
         API["FastAPI backend<br/>_run_search (one query at a time)"]
     end
 
@@ -95,7 +96,7 @@ flowchart LR
    `uvx`-managed ephemeral env so the two trees never have to resolve together.
 2. **Cold start is expensive.** Loading the embedding model takes **tens of seconds** and pins
    **several GB** of GPU memory (2B weights ~4.4 GB; total scales with `--gpu-memory-utilization`). If that happened per CLI
-   invocation, every `raudio embed-chunks` resume would re-pay it; every FastAPI
+   invocation, every `raudio feature text_embedding` resume would re-pay it; every FastAPI
    restart would re-load. A long-lived server amortizes the load — the model
    stays *warm* across all uses.
 3. **Free throughput.** A persistent server gives vLLM's continuous batcher
@@ -190,15 +191,15 @@ use.
 
 ## 4. The shared seam: one client, two callers
 
-`retrieval/embeddings.py` exposes `VLLMEmbeddingClient` (`embed_text`,
-`embed_image`); `retrieval/reranker.py` exposes `VLLMReranker` (`rerank`) plus
+`vllm/embedding.py` exposes `VLLMEmbeddingClient` (`embed_text`,
+`embed_image`); `vllm/reranker.py` exposes `VLLMReranker` (`rerank`) plus
 the `QwenVLReranker` LanceDB adapter. The two callers drive them differently.
 
 ```mermaid
 flowchart TD
     subgraph offline["OFFLINE — CLI batch path"]
-        EC["embed-chunks<br/>batch_size=256 texts"]
-        EF["embed-chunk-frames<br/>batch_size=16 frames"]
+        EC["feature text_embedding<br/>batch_size=256 texts"]
+        EF["feature frame_embedding<br/>batch_size=16 frames"]
         TPE["ThreadPoolExecutor<br/>concurrency_text=32 / concurrency_image=8<br/>floods vLLM's continuous batcher"]
         EC --> TPE
         EF --> TPE
@@ -214,13 +215,13 @@ flowchart TD
     BND -->|"HTTP"| V
 ```
 
-**Offline (`embed-chunks` / `embed-chunk-frames`).** vLLM's chat-embeddings
+**Offline (`feature text_embedding` / `feature frame_embedding`).** vLLM's chat-embeddings
 endpoint takes one chat at a time, but the engine batches internally — so the
 client fires many requests *concurrently* via a `ThreadPoolExecutor`
 (`concurrency_text=32`, `concurrency_image=8`) and lets vLLM's continuous batcher
 fuse them into one GPU pass. The docstring claims ~10–15× over serial RTT. The
-CLI layers an outer batch on top (`embed-chunks --batch-size 256`,
-`embed-chunk-frames --batch-size 16`).
+CLI layers an outer batch on top (`feature text_embedding --batch-size 256`,
+`feature frame_embedding --batch-size 16`).
 
 **Online (`_run_search`).** The backend issues **one query at a time**
 (`client.embed_text([spec.q])[0]`, `client.embed_image([image_bytes])[0]`). It
@@ -287,7 +288,7 @@ flowchart LR
     POST --> J --> H --> SC["relevance_score ∈ [0,1] per doc"]
 ```
 
-In Python (`embeddings.py`), `rerank()` wraps the query and each document in the
+In Python (`vllm/reranker.py`), `rerank()` wraps the query and each document in the
 model-card scaffolding before posting:
 
 ```python
@@ -391,21 +392,21 @@ fused top-K.
 > **Frame data still pending:** `mode=visual` / the `mode=all` frame branch now
 > query the `chunk_frames` table (`_frame_search`, joined back to `chunks`), not a
 > column on `chunks`. The wiring is done; it returns hits only once
-> `embed-chunk-frames` has populated `chunk_frames.frame_embedding` — still gated
+> `feature frame_embedding` has populated `chunk_frames.frame_embedding` — still gated
 > on the vLLM image-embed crash ([INVESTIGATION.md](INVESTIGATION.md)).
 
 ---
 
 ## 7. The recurring crash: image resolution mismatch (448 vs 392)
 
-This is **the** bug that has blocked `embed-chunk-frames` from ever completing
+This is **the** bug that has blocked `feature frame_embedding` from ever completing
 end-to-end. It deserves the full deep-dive in
 **[INVESTIGATION.md](INVESTIGATION.md)**; the short version, grounded in the
 code comments:
 
 ```mermaid
 flowchart TD
-    C["embeddings.py client<br/>_IMAGE_SIDE = 448<br/>448 px square crop"]
+    C["vllm/image.py client<br/>_IMAGE_SIDE = 448<br/>448 px square crop"]
     C --> CT["(448 / 28)² = 256 vision tokens"]
     S["docker embed server<br/>min==max==153664 px = 392²<br/>(--mm-processor-kwargs)"]
     S --> ST["(392 / 28)² = 196 vision tokens"]
@@ -428,7 +429,7 @@ The mechanics (from the comment block above `_IMAGE_SIDE`):
 The mismatch: the **client crops to 448** (`_IMAGE_SIDE = 448`) → **256** tokens,
 which overflows the server's 196-token buffer. The documented fix is to set
 `_IMAGE_SIDE = 392` so client and server agree. It is **left at 448 pending
-end-to-end GPU validation** — `embed-chunk-frames` has never completed a full
+end-to-end GPU validation** — `feature frame_embedding` has never completed a full
 run, so the change hasn't been verified. (See the inline comment marked
 "⚠️ KNOWN MISMATCH", [TODO.md](../TODO.md) item #2, and
 [INVESTIGATION.md](INVESTIGATION.md).)
@@ -440,8 +441,8 @@ whole-image similarity. Whatever you set `_IMAGE_SIDE` to, **it must satisfy
 
 > Two unblock options are on the table (TODO #2), both ~80 LOC: **(A)** an
 > in-process `transformers` `HFClient` that bypasses vLLM image internals
-> entirely (you'd add a second client class in `retrieval/` —
-> only `vllm` is implemented today), or **(B)** a different vLLM tag. Ask before
+> entirely (you'd add a second client class in `vllm/` —
+> only the vLLM transport is implemented today), or **(B)** a different vLLM tag. Ask before
 > implementing.
 
 ---
@@ -450,22 +451,24 @@ whole-image similarity. Whatever you set `_IMAGE_SIDE` to, **it must satisfy
 
 | Command | Reads | Writes | Index | Resumable |
 |---|---|---|---|---|
-| `embed-chunks` | `chunks.text` | `chunks.text_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — checkpointed UDF; `--all` rebuilds |
-| `embed-chunk-frames` | `chunk_frames.frame_blob` | `chunk_frames.frame_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | one-shot (skips if column exists) |
+| `feature text_embedding` | `chunks.text` | `chunks.text_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — checkpointed UDF; `--all` rebuilds |
+| `feature frame_embedding` | `chunk_frames.frame_blob` | `chunk_frames.frame_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | one-shot (skips if column exists) |
 
 Both default to `--embed-url http://127.0.0.1:8001` and build the IVF_PQ index
 with `num_partitions=256`, `num_sub_vectors=64` on completion. Both attach the
 vector column with `dataset.add_columns(...)` (Lance "data evolution" — one new
-column file, no fragment rewrites), implemented in `raudio.retrieval.embed`.
-They differ only in how the UDF gets its input:
+column file, no fragment rewrites), implemented in `raudio.features.engine`
+(`upsert_scan_column` / `upsert_blob_column` / `ensure_vector_index`) and driven by
+the `embed_text_column` / `embed_frame_column` feature definitions in
+`raudio.features.columns`. They differ only in how the UDF gets its input:
 
-- `embed-chunks` is **single-pass**: a `lance.batch_udf` reads each batch's own
+- `feature text_embedding` is **single-pass**: a `lance.batch_udf` reads each batch's own
   `text` column and returns that batch's `text_embedding`, so there is no
   cross-scan alignment to get wrong. Crash-resumable via `--checkpoint`. Re-runs
   are a no-op; `--all` drops and rebuilds. Residual `NULL` rows from a later
   ingest are topped up with `merge_insert` on the chunk key — safe because
   `chunks` carries no blob column.
-- `embed-chunk-frames` is **two-pass**: a frame's JPEG lives in a Blob V2 column
+- `feature frame_embedding` is **two-pass**: a frame's JPEG lives in a Blob V2 column
   a scan doesn't materialise, so pass 1 reads each blob via
   `take_blobs(ids=row_ids)` and embeds it keyed by `_rowid`; pass 2's
   `add_columns` UDF reads `_rowid` and looks each vector up by id —
@@ -475,7 +478,7 @@ They differ only in how the UDF gets its input:
 
 `ensure_vector_index` **refuses to build while the column still has NULLs** —
 Lance's IVF_PQ builder mishandles partially-NULL vector columns. So the full
-chain is `embed-chunks → extract-chunk-frames → embed-chunk-frames → compact`
+chain is `feature text_embedding → extract-chunk-frames → feature frame_embedding → compact`
 (see `make pipeline-multimodal`), with `compact` consolidating fragments and
 rebuilding the indexes after the bulk writes.
 
@@ -485,12 +488,12 @@ rebuilding the indexes after the bulk writes.
 
 | I want to… | Look at |
 |---|---|
-| Change the embed/rerank wire format | [`src/raudio/retrieval/embeddings.py`](../src/raudio/retrieval/embeddings.py) **and** [`qwen3_vl_reranker.jinja`](../src/raudio/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
-| Change the MRL dim / normalization | `EMBED_DIM` in `model/schema.py`; `l2_normalize()` in `retrieval/utils.py` |
-| Change image resolution (the crash) | `_IMAGE_SIDE`, `_square_crop_resize()` + [INVESTIGATION.md](INVESTIGATION.md) |
+| Change the embed/rerank wire format | [`src/raudio/vllm/embedding.py`](../src/raudio/vllm/embedding.py) / [`src/raudio/vllm/reranker.py`](../src/raudio/vllm/reranker.py) **and** [`qwen3_vl_reranker.jinja`](../src/raudio/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
+| Change the MRL dim / normalization | `EMBED_DIM` in `model/schema.py`; `l2_normalize()` in `vllm/image.py` |
+| Change image resolution (the crash) | `_IMAGE_SIDE`, `_square_crop_resize()` in `vllm/image.py` + [INVESTIGATION.md](INVESTIGATION.md) |
 | Launch / configure the vLLM servers | [`Makefile`](../Makefile) — `embed-server*`, `rerank-server*` targets |
 | Change which GPU each server uses | `EMBED_GPU` / `RERANK_GPU` in the Makefile |
 | Change search fusion / add a mode | [`backend/app.py`](../backend/app.py) — `_run_search`, `_vector_search`, `_rrf_fuse` |
-| Add a non-vLLM backend (e.g. HF) | add a client class in `retrieval/` and wire it into `backend/app.py` / `cli.py` |
-| Run the offline embed passes | `embed-chunks` / `embed-chunk-frames` in [`cli.py`](../src/raudio/cli.py) |
+| Add a non-vLLM backend (e.g. HF) | add a client class in `vllm/` and wire it into `backend/app.py` / `cli/` |
+| Run the offline embed passes | `feature text_embedding` / `feature frame_embedding` in [`cli/`](../src/raudio/cli/); column definitions in [`features/columns.py`](../src/raudio/features/columns.py) |
 | Understand the open blockers | [TODO.md](../TODO.md) (items #2–#5) |

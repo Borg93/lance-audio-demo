@@ -29,6 +29,8 @@ input/sv/*.mp4                 ← source videos
         │
    embed-chunks                → chunks.text_embedding           (Qwen3-VL → 2048 dims)
    extract-chunk-frames        → transcripts.lance/chunk_frames  (NEW table, append-only)
+                                   ↳ keyed (doc_id, speech_id, chunk_id, frame_idx) — N frames/chunk,
+                                     frame_idx=0 is the representative frame
                                    ↳ frame_blob (Blob V2 inline ~50 KB JPEG)
                                    ↳ frame_mime, frame_width, frame_height
    embed-chunk-frames          → chunk_frames.frame_embedding    (Qwen3-VL on each frame,
@@ -65,20 +67,24 @@ Optional `rerank=true` swaps the default RRF for a Qwen3-VL-Reranker cross-encod
 
 ```
 lance-audio-demo/
-├── backend/app.py             FastAPI: /api/search, /api/media, /api/thumbnail,
-│                              /api/chunk-frame, /api/health, Range streaming
+├── backend/                   FastAPI package: app.py (create_app), state.py, deps.py,
+│                              clients.py, search/ media/ system/ routers. Serves
+│                              /api/search, /api/media, /api/thumbnail, /api/chunk-frame,
+│                              /api/health, Range streaming
 ├── frontend/                  SvelteKit + Tailwind v4 viewer (main UI)
 │   ├── src/                   routes + components
 │   └── server.ts              Bun static-file server + /api/* proxy
 ├── demo/                      Secondary SvelteKit app (transformers.js audio demo)
 ├── src/raudio/                Python ingestion + search core
-│   ├── cli.py                 typer CLI: ingest, embed-chunks, extract-…, serve
-│   ├── ingest.py              JSON → Lance writer (chunks + documents tables)
-│   ├── schema.py              PyArrow schemas (text_embedding, frame_blob, …)
-│   ├── embeddings.py          vLLM HTTP client (text + image) + Qwen reranker
-│   ├── frames.py              ffmpeg per-chunk frame extractor
-│   └── search.py              FTS + vector + hybrid query helpers
-├── tools/                     Jinja templates, NVIDIA toolkit installer
+│   ├── cli/                   typer CLI: ingest, feature, extract-…, serve
+│   ├── model/                 PyArrow schemas (schema.py) + Pydantic DTOs (datamodel.py)
+│   ├── asr/                   in-process Whisper/wav2vec2 (transcribe.py, detect_language.py)
+│   ├── ingest/                JSON → Lance writer (ingest.py, audio.py)
+│   ├── media/                 ffmpeg frames (frames.py), download.py, thumbnails.py
+│   ├── vllm/                  HTTP clients to remote vLLM: embedding.py, reranker.py,
+│   │                          caption.py, summarize.py, image.py, base.py (transport)
+│   ├── features/              data-evolution engine.py + columns.py (FEATURES registry)
+│   └── retrieval/             FTS + query helpers (search.py) + qwen3_vl_reranker.jinja
 ├── Makefile                   end-to-end developer commands
 ├── pyproject.toml             uv-managed Python deps (+ [multimodal] extra)
 └── transcripts.lance/         Lance dataset (gitignored — local only)
@@ -193,7 +199,7 @@ backend  →  chunks.query()
               .nearest_to(image_vec, vector_column_name="frame_embedding")
               .distance_type("cosine").limit(n)
 backend  →  json hits including chunk-frame URLs
-frontend →  /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}  (Lance Blob V2 fetch)
+frontend →  /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}?frame_idx=0  (Lance Blob V2 fetch)
 ```
 
 ### Playback
@@ -247,7 +253,7 @@ column to query against.)
 | `POST /api/search` (multipart `image=…&mode=visual`) | Image / cross-modal search |
 | `GET /api/documents?page=1&per_page=24` | Paginated browse |
 | `GET /api/thumbnail/{doc_id}` | Document thumbnail (Inline Blob) |
-| `GET /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}` | Chunk frame (Inline Blob) |
+| `GET /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}?frame_idx=N` | Chunk frame (Inline Blob; `frame_idx=0` is the representative frame) |
 | `GET /api/media/{doc_id}` | Stream the MP4 (External Blob, Range-friendly) |
 
 The viewer's status badge (top-right of the navbar) hits `/api/health` every 10 s — green = embed/rerank reachable, red = down.

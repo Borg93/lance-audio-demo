@@ -32,7 +32,7 @@ sidecar JSON files or disk walks at query time.
 flowchart LR
     subgraph WRITE["WRITE SIDE — offline, CLI (src/raudio/)"]
         direction TB
-        CLI["raudio CLI<br/>transcribe → ingest → embed-chunks<br/>→ extract-chunk-frames → embed-chunk-frames"]
+        CLI["raudio CLI<br/>transcribe → ingest → feature text_embedding<br/>→ extract-chunk-frames → feature frame_embedding"]
     end
 
     subgraph DB["transcripts.lance/ (single Lance dataset)"]
@@ -61,7 +61,7 @@ flowchart LR
 ```
 
 > Both the CLI batch path and the backend serving path call the **same**
-> `src/raudio/retrieval/embeddings.py` client (the "shared seam", §7) → the same
+> `src/raudio/vllm/embedding.py` client (the "shared seam", §7) → the same
 > out-of-process vLLM servers.
 
 - **Write side** = `src/raudio/` (the `raudio` Typer CLI + the ingest/extract
@@ -69,7 +69,7 @@ flowchart LR
 - **Read side** = `backend/` (FastAPI) + `frontend/` (SvelteKit). Run online,
   mostly CPU; only the embedding step needs a GPU and that lives in a **separate
   vLLM process** reached over HTTP, so FTS-only use works with no GPU at all.
-- **`src/raudio/retrieval/embeddings.py` is the one module both sides share** — see §7.
+- **`src/raudio/vllm/embedding.py` is the one module both sides share** — see §7.
 - **`demo/` is unrelated** — a standalone in-browser (transformers.js/WebGPU)
   transcription playground. It shares zero code with raudio. See §9.
 
@@ -107,7 +107,7 @@ working data). Schemas: [`src/raudio/model/schema.py`](src/raudio/model/schema.p
 |---|---|---|---|
 | **`chunks`** | one row per ~30 s transcript chunk | FTS text, metadata, alignments JSON, `text_embedding` (2048-d) | `(doc_id, speech_id, chunk_id)` |
 | **`documents`** | one row per source media file | `media_blob` (Blob V2 *External* URI), `thumbnail` (Blob V2 *Inline* bytes), metadata | `doc_id` |
-| **`chunk_frames`** | one row per chunk's representative frame | `frame_blob` (Blob V2 Inline JPEG), `frame_embedding` (2048-d, added later) | `(doc_id, speech_id, chunk_id)` |
+| **`chunk_frames`** | one row per extracted frame (a chunk can hold N frames, `frame_idx` 0..K-1; `frame_idx=0` is the single representative frame) | `frame_blob` (Blob V2 Inline JPEG), `frame_embedding` (2048-d, added later) | `(doc_id, speech_id, chunk_id, frame_idx)` |
 
 `doc_id` is `sha1(audio_path)[:16]` — deterministic, so re-ingesting the same
 file is stable.
@@ -136,6 +136,7 @@ erDiagram
         string doc_id FK
         int speech_id
         int chunk_id
+        int frame_idx "0..K-1; 0 = representative frame"
         blob frame_blob "Blob V2 Inline — JPEG"
         vector frame_embedding "2048-d cosine IVF_PQ"
     }
@@ -148,7 +149,7 @@ fact): Lance 4.0's `merge_insert` crashes its encoder when backfilling blob
 columns post-hoc on the *wide* `chunks` schema (multiple extension types at
 once). The Lance 2.2 docs recommend "append + `add_columns`" for data evolution,
 so frames go into their own append-only table: `extract-chunk-frames` writes new
-fragments, `embed-chunk-frames` attaches `frame_embedding` via
+fragments, `feature frame_embedding` attaches `frame_embedding` via
 `dataset.add_columns(...)`. No `merge_insert`. Visual / cross-modal search runs
 the frame-vector query against `chunk_frames` and joins back to `chunks` for the
 hit payload (`backend/app.py::_frame_search`); `chunks` carries **no** `frame_*`
@@ -164,10 +165,10 @@ columns.
   `BlobFile`. This is why HTTP Range maps cleanly to `seek(start) + read(len)`.
 - You **cannot** build a `blob_field` or `pa.json_()` column with
   `pa.array(values, type=...)`; you must wrap blob columns with `blob_array(...)`
-  and build JSON columns per-declared-field-type. Both writers in `ingest.py`
+  and build JSON columns per-declared-field-type. Both writers in `ingest/ingest.py`
   special-case these.
 - Blob columns require `data_storage_version="2.2"`, which `lancedb.create_table`
-  can't set — so `ingest.py` writes the first dataset via
+  can't set — so `ingest/ingest.py` writes the first dataset via
   `lance.write_dataset(mode="create", data_storage_version="2.2", allow_external_blob_outside_bases=True)`
   then re-opens it through lancedb.
 
@@ -185,9 +186,9 @@ flowchart TD
     C --> E
     D --> E
     E["raudio ingest<br/>JSON → chunks + documents · FTS + scalar indexes"] --> F
-    F["raudio embed-chunks<br/>Qwen3-VL text → text_embedding · IVF_PQ"] --> G
+    F["raudio feature text_embedding<br/>Qwen3-VL text → text_embedding · IVF_PQ"] --> G
     G["raudio extract-chunk-frames<br/>ffmpeg → chunk_frames.lance (append-only)"] --> H
-    H["raudio embed-chunk-frames<br/>Qwen3-VL image → frame_embedding (add_columns)"] --> DB["(transcripts.lance)<br/>self-contained dataset"]
+    H["raudio feature frame_embedding<br/>Qwen3-VL image → frame_embedding (add_columns)"] --> DB["(transcripts.lance)<br/>self-contained dataset"]
 
     classDef done fill:#1a1a1e,stroke:#34d399,color:#e9e9ea;
     classDef blocked fill:#1a1a1e,stroke:#f87171,color:#e9e9ea;
@@ -195,7 +196,8 @@ flowchart TD
     class G,H blocked;
 ```
 
-> 🟢 = validated · 🔴 = the frame stages (`extract-`/`embed-chunk-frames`) are
+> 🟢 = validated · 🔴 = the frame stages (`extract-chunk-frames` /
+> `feature frame_embedding`) are
 > blocked on the vLLM image-embed crash — see [`docs/INVESTIGATION.md`](docs/INVESTIGATION.md).
 > Detailed pipeline + models: [`docs/PIPELINE.md`](docs/PIPELINE.md).
 
@@ -234,7 +236,8 @@ Detailed embedding/serving flow: [`docs/EMBEDDINGS.md`](docs/EMBEDDINGS.md).
    → BlobFile.seek(start) + read(len) streamed back as 206 Partial Content
 ```
 
-Per-chunk frames are fetched on demand from `/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}`;
+Per-chunk frames are fetched on demand from `/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}?frame_idx=N`
+(`frame_idx` defaults to 0, the representative frame);
 the frontend stops asking after the first 404 (frames not extracted yet) via the
 `feature-flags.svelte.ts` singleton.
 
@@ -244,31 +247,44 @@ the frontend stops asking after the first 404 (frames not extracted yet) via the
 
 ```
 src/raudio/                Python pipeline — the WRITE side + search/embedding library
-├── cli.py                 Typer app: 12 subcommands (the operator entry point)
+├── cli/                 Typer app: subcommands (the operator entry point)
 ├── __init__.py            library public API (re-exports model / ingest / retrieval)
 ├── model/                 DATA CONTRACTS
 │   ├── datamodel.py        Pydantic v2 models mirroring easytranscriber JSON
-│   └── schema.py           PyArrow/Lance schemas for the 3 tables (+ storage version)
+│   └── schema.py           PyArrow/Lance schemas (incl. CHUNK_FRAMES_SCHEMA) + storage version
 ├── ingest/                WRITE PATH
 │   ├── ingest.py           JSON → chunks + documents tables; FTS/scalar indexes
 │   └── audio.py            source-path resolution + media URI / MIME composition
 ├── media/                 FFMPEG / DOWNLOAD side-steps
-│   ├── frames.py           single-frame ffmpeg extraction (thread-pool batcher)
+│   ├── frames.py           ffmpeg frame extraction + write_chunk_frames (thread-pool batcher)
 │   ├── thumbnails.py       per-file thumbnail / waveform generation (ffmpeg)
 │   └── download.py         bulk media download from a video_batcher CSV (httpx async)
-├── asr/                   UPSTREAM ASR wrappers
-│   ├── transcribe.py       easytranscriber pipeline wrapper
+├── asr/                   UPSTREAM ASR wrappers (in-process pipeline STAGE)
+│   ├── transcribe.py       easytranscriber pipeline wrapper (Whisper/wav2vec2)
 │   └── detect_language.py  MMS-LID / Whisper language detection + sort into <lang>/
-└── retrieval/             READ PATH (shared by CLI + backend)
+├── vllm/                  CLIENTS to remote vLLM servers (shared by CLI + backend)
+│   ├── base.py             VLLMTransport: shared httpx pool + concurrent fan-out
+│   ├── embedding.py        VLLMEmbeddingClient + EmbeddingClient Protocol — SHARED SEAM
+│   ├── reranker.py         cross-encoder: VLLMReranker + QwenVLReranker (Lance adapter)
+│   ├── caption.py          image caption client
+│   ├── summarize.py        text summary client
+│   └── image.py            pure helpers: l2_normalize, image_to_data_url
+├── features/             DATA-EVOLUTION engine (type-agnostic column upserts)
+│   ├── engine.py           upsert_scan_column / upsert_blob_column / ensure_vector_index
+│   └── columns.py          embed_text_column / embed_frame_column / summary_column /
+│                           caption_column + the FEATURES registry
+└── retrieval/             READ PATH
     ├── search.py           FTS query + pure parsing/formatting helpers (timecode, …)
-    ├── embeddings.py       bi-encoder: VLLMEmbeddingClient (text+image embed) — SHARED SEAM
-    ├── reranker.py         cross-encoder: VLLMReranker + QwenVLReranker (Lance adapter)
-    ├── utils.py            pure helpers: l2_normalize, image_to_data_url
     └── qwen3_vl_reranker.jinja  vLLM chat template for the reranker server
 
-backend/
-├── app.py                 FastAPI factory create_app() + all endpoints + search core
-└── __init__.py            re-exports create_app, run
+backend/                   FastAPI package (the read-side serving app)
+├── app.py                 create_app() factory wiring the routers together
+├── state.py               app state / Lance handles
+├── deps.py                FastAPI dependencies
+├── clients.py             vLLM client wiring for the backend
+├── search/                /api/search router + search core
+├── media/                 /api/media /thumbnail /chunk-frame router
+└── system/                health / system router
 
 frontend/                  primary SvelteKit 2 / Svelte 5 SPA (the viewer UI)
 ├── src/lib/api.ts         typed, Zod-validated client for the backend (the ONLY data boundary)
@@ -285,14 +301,14 @@ tests/                     pytest: unit (pure logic) + dataset-gated backend smo
 
 ---
 
-## 7. The shared seam: `retrieval/` clients
+## 7. The shared seam: `vllm/` clients
 
-This is the most important coupling fact for onboarding. The `retrieval/` clients
-— `VLLMEmbeddingClient` (`embeddings.py`, the bi-encoder) and `VLLMReranker`
+This is the most important coupling fact for onboarding. The `vllm/` clients
+— `VLLMEmbeddingClient` (`embedding.py`, the bi-encoder) and `VLLMReranker`
 (`reranker.py`, the cross-encoder) — are used by **two** consumers with different
 concurrency needs:
 
-- **CLI batch path** (`embed-chunks` / `embed-chunk-frames`): floods vLLM's
+- **CLI batch path** (`feature text_embedding` / `feature frame_embedding`): floods vLLM's
   continuous batcher with a `ThreadPoolExecutor` (`text_concurrency=32`,
   `image_concurrency=8`) for ~10–15× throughput over serial RTT.
 - **Backend serving path** (`/api/search`): one query at a time, lazily connects,
@@ -305,7 +321,7 @@ A planned async-per-query path for the backend (see [TODO.md](TODO.md)) must
 
 Two subtleties worth knowing:
 - **Reranker double-scaffolding:** the model-card prefix/suffix framing is
-  duplicated between the `_PREFIX`/`_SUFFIX` constants in `retrieval/reranker.py`
+  duplicated between the `_PREFIX`/`_SUFFIX` constants in `vllm/reranker.py`
   (which build `/v1/rerank` strings) and `retrieval/qwen3_vl_reranker.jinja` (the chat
   template the server applies). They must stay in sync; treat edits as risky.
 - **Image pinning:** `_IMAGE_SIDE = 448` square center-crop is a vLLM
@@ -325,7 +341,7 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
   and list fields use `Field(default_factory=list)` — never bare `= []`, which
   would share one mutable list across instances.
 - **Lazy *module* imports from CLI commands / the backend.** The heavy modules
-  (`lance`, `torch`-backed ASR, the `retrieval/` vLLM clients) are imported inside
+  (`lance`, `torch`-backed ASR, the `vllm/` clients) are imported inside
   the function body that needs them, so `raudio --help` stays instant and the
   optional `[multimodal]`/transcribe extras stay optional. Within those modules
   imports are normal top-level — the optionality comes from *the module not being
@@ -441,11 +457,12 @@ the authoritative, commented description of how every process fits together.
 | I want to… | Look at |
 |---|---|
 | Change the table schema | `src/raudio/model/schema.py` |
-| Change how transcripts become rows | `src/raudio/ingest.py` (`flatten_chunks`, `_document_row`) |
-| Add/modify a CLI command | `src/raudio/cli.py` |
-| Change search behavior / add a mode | `backend/app.py` (`_run_search`, `_vector_search`, `_rrf_fuse`) |
-| Add an API endpoint | `backend/app.py` (inside `create_app`) |
-| Change the embedding/rerank wire format | `src/raudio/retrieval/embeddings.py` (+ `retrieval/qwen3_vl_reranker.jinja`) |
+| Change how transcripts become rows | `src/raudio/ingest/ingest.py` (`flatten_chunks`, `_document_row`) |
+| Add/modify a CLI command | `src/raudio/cli/` |
+| Add/modify a feature column (embed/summary/caption) | `src/raudio/features/columns.py` (+ `features/engine.py`) |
+| Change search behavior / add a mode | `backend/search/` (`_run_search`, `_vector_search`, `_rrf_fuse`) |
+| Add an API endpoint | the relevant router under `backend/` (`search/`, `media/`, `system/`) |
+| Change the embedding/rerank wire format | `src/raudio/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
 | Touch the search UI | `frontend/src/routes/+page.svelte` + `frontend/src/lib/components/` |
 | Change the API client / response shapes | `frontend/src/lib/api.ts` (Zod schemas) |
 | Change how processes are launched | `Makefile` |

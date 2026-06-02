@@ -51,7 +51,7 @@ Observed on vLLM 0.20.0 / Qwen3-VL-Embedding-8B: the warmup-time
 deepstack-input-embeds buffer is sized differently from runtime, even
 when `--mm-processor-kwargs '{"min_pixels": …, "max_pixels": …}'` is set.
 The pin is now 0.22.0 / Qwen3-VL-Embedding-2B, and the client crop
-(`_IMAGE_SIDE` in `retrieval/utils.py`) still mismatches the server pixel pin
+(`_IMAGE_SIDE` in `vllm/image.py`) still mismatches the server pixel pin
 (392px) — re-verify on the current pin before calling it fixed (see the Makefile
 pixel-pin note + INVESTIGATION.md).
 Single image request kills the engine with:
@@ -68,7 +68,7 @@ We have not been able to find a vLLM config that consistently avoids this.
 - **(A)** In-process HF transformers fallback. Load
   Qwen3-VL-Embedding-2B once at backend startup via `transformers`,
   embed images directly. Slower (~2 s/query) but immune to vLLM internals.
-  Add a second embedding client class in `src/raudio/retrieval/` with the same
+  Add a second embedding client class in `src/raudio/vllm/` with the same
   `embed_text`/`embed_image` surface as `VLLMEmbeddingClient`, then wire it into
   `backend/app.py` (`_get_embedder`) and `cli.py`.
 - **(B)** Different vLLM tag (`v0.21.0+` once released, or back to `v0.10.x`).
@@ -79,10 +79,11 @@ User has not chosen yet. Ask before implementing.
 ### ❌ 3. `chunk_frames` IVF_PQ index build (depends on #2)
 
 Once frame embeddings exist, `dataset.add_columns(...)` writes the
-`frame_embedding` column, then `_ensure_vector_index` builds the cosine
+`frame_embedding` column, then `ensure_vector_index` builds the cosine
 IVF_PQ index. Code path is in place at
-`src/raudio/cli.py` (`cmd_embed_chunk_frames`) — runs automatically when
-the embed step completes.
+`src/raudio/features/engine.py` (`ensure_vector_index`), driven by
+`raudio feature frame_embedding` — runs automatically when the embed step
+completes.
 
 ---
 
@@ -330,7 +331,7 @@ responds. Two improvements:
    concurrently with `asyncio.gather`. (Already mentioned in the
    search-perf section above — the same change benefits both.)
 
-Code path: `src/raudio/retrieval/embeddings.py` `VLLMEmbeddingClient._embed_one(...)`.
+Code path: `src/raudio/vllm/embedding.py` `VLLMEmbeddingClient._embed_one(...)`.
 Concurrent-batch path (`embed-chunks`) already uses `ThreadPoolExecutor` —
 keep that for the CLI batch case; only swap to async for the per-query
 serving path.
@@ -486,7 +487,7 @@ split by group (ingest / search / embed / maintenance) is feasible and low-risk
 not a fix — the lazy-import discipline already provides most of the decoupling.
 
 #### 📋 `print()` → `logging` in library code
-`thumbnails.py`, `download.py`, `detect_language.py` print progress directly.
+`media/thumbnails.py`, `media/download.py`, `asr/detect_language.py` print progress directly.
 Library modules should log (or return data) and let the CLI render; this matters
 if they're ever imported by the backend.
 
@@ -495,8 +496,8 @@ if they're ever imported by the backend.
 `ingest_many`'s 9-param signature; `frames._extract_one` takes an untyped
 `args: tuple` (lost the 8-element typing); `detect_language` probe closures lack
 annotations; `iter_matching_words` uses bare `dict`/`list` params; the reranker
-prefix/suffix constants in `embeddings.py` and `qwen3_vl_reranker.jinja` want a
-one-line cross-reference comment (they must stay in sync). All low priority.
+prefix/suffix constants in `vllm/reranker.py` and `retrieval/qwen3_vl_reranker.jinja`
+want a one-line cross-reference comment (they must stay in sync). All low priority.
 
 ### Frontend & demo
 

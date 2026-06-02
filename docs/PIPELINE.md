@@ -64,7 +64,7 @@ only used to *time* it. This is the same split popularized by WhisperX, which
 ## 2. The models this repo pins
 
 All values below are the **actual defaults** in
-[`src/raudio/cli.py`](../src/raudio/cli.py) (`cmd_transcribe`) and the
+[`src/raudio/cli/`](../src/raudio/cli/) (`cmd_transcribe`) and the
 `DEFAULT_EMISSIONS_MODEL` map in
 [`src/raudio/asr/transcribe.py`](../src/raudio/asr/transcribe.py) — not invented.
 
@@ -150,7 +150,7 @@ Grounded details from [`detect_language.py`](../src/raudio/asr/detect_language.p
   for this exact task"* and the `--model` help text names it the recommended
   classifier.
 - **The CLI default is `openai/whisper-large-v3`** (`cmd_detect_language`'s
-  `--model` default in `cli.py`) — a multilingual Whisper, *not* a
+  `--model` default in `cli/`) — a multilingual Whisper, *not* a
   language-fine-tuned one. Both the CLI help and the module docstring warn:
   **never** pass `KBLab/kb-whisper-large` here — fine-tuned models over-predict
   their training language so every file comes back `sv`.
