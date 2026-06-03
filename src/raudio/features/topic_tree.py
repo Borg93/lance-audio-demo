@@ -28,11 +28,17 @@ logger = logging.getLogger(__name__)
 # Noise rows (cluster -1) are stored as NULL; surface them as one labelled bucket
 # so every path reaches full depth and only true leaves carry a value (d3 sums
 # leaf values up — a branch that also held a value would be double-counted).
-_NOISE_LABEL = "(övrigt)"
+# Public + surfaced via /api/topics so the frontend never re-hardcodes it.
+NOISE_LABEL = "(övrigt)"
 
 
-def _topic_layer_columns(schema_names: list[str]) -> list[str]:
-    """``topic_l0 … topic_l{N-1}`` present on the table, finest-first."""
+def topic_layer_columns(schema_names: list[str]) -> list[str]:
+    """``topic_l0 … topic_l{N-1}`` present on the table, finest-first.
+
+    The single source of truth for "which columns are topic layers", shared by
+    the tree builder, the search topic filter, and the atlas colour channel so
+    they can't drift from each other.
+    """
     return sorted(
         (c for c in schema_names if c.startswith("topic_l")),
         key=lambda c: int(c.removeprefix("topic_l")),
@@ -48,7 +54,9 @@ def _nest(rows: list[dict[str, Any]], broad_to_fine: list[str]) -> dict[str, Any
     """
     counts: Counter[tuple[str, ...]] = Counter()
     for row in rows:
-        counts[tuple(row[col] or _NOISE_LABEL for col in broad_to_fine)] += 1
+        # Explicit None test (not falsy) so only true NULLs — HDBSCAN noise —
+        # fall into the bucket; a real (if empty) label stays its own path.
+        counts[tuple(NOISE_LABEL if row[col] is None else row[col] for col in broad_to_fine)] += 1
     return _subtree("Alla ämnen", counts)
 
 
@@ -84,9 +92,11 @@ def build_topic_tree(db_path: str | Path) -> int:
     import lance
     import pyarrow as pa
 
+    from raudio.model.schema import CHUNK_STORAGE_VERSION
+
     db_path = Path(db_path)
     chunks = lance.dataset(str(db_path / "chunks.lance"))
-    layer_cols = _topic_layer_columns(chunks.schema.names)
+    layer_cols = topic_layer_columns(chunks.schema.names)
     if not layer_cols:
         raise ValueError(
             f"no topic_l* columns on {db_path}/chunks.lance — run `raudio feature topics` first."
@@ -105,6 +115,8 @@ def build_topic_tree(db_path: str | Path) -> int:
         }
     )
     topics_path = db_path / "topics.lance"
-    lance.write_dataset(table, str(topics_path), mode="overwrite", data_storage_version="2.2")
+    lance.write_dataset(
+        table, str(topics_path), mode="overwrite", data_storage_version=CHUNK_STORAGE_VERSION
+    )
     logger.info(f"wrote topic tree: {len(rows)} chunks · {n_layers} layers → {topics_path}")
     return len(rows)

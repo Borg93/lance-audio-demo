@@ -61,7 +61,7 @@ def search_get(
         where=where,
         prefilter=prefilter,
     )
-    if not spec.q and not spec.topic:
+    if not spec.q and not spec.q_vec and not spec.topic:
         return []
     return run_search(
         state.chunks, state.chunk_frames_tbl, get_embedder, get_reranker, spec, image_bytes=None
@@ -108,7 +108,7 @@ async def search_post(
         prefilter=prefilter,
     )
     image_bytes = await image.read() if image is not None else None
-    if not spec.q and not image_bytes and not spec.topic:
+    if not spec.q and not spec.q_vec and not image_bytes and not spec.topic:
         return []
     # run_search makes blocking vLLM (httpx) + Lance calls — keep the event loop free.
     return await run_in_threadpool(

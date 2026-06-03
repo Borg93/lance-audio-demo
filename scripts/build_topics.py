@@ -173,7 +173,7 @@ def main() -> int:
 
     doc_ids = tbl.column("doc_id").to_pylist()
     broadest = layer_names[f"topic_l{n_layers - 1}"]
-    votes: dict[object, Counter] = {}
+    votes: dict[str, Counter[str]] = {}
     for doc_id, name in zip(doc_ids, broadest, strict=True):
         if name is not None:
             votes.setdefault(doc_id, Counter())[name] += 1

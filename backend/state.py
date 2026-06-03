@@ -31,6 +31,9 @@ class AppState(BaseModel):
     db_path: Path
     names: list[str]
     chunks: Any  # lancedb.table.Table — the abstract stub omits .search()/.to_lance()
+    # `chunks_ds` is `chunks.to_lance()` resolved once at startup. Re-wrapping per
+    # request re-seeds the dataset's metadata/index cache, so we share one handle.
+    chunks_ds: Any  # lance.LanceDataset — typed Any to match the `chunks` stub
     docs_ds: lance.LanceDataset | None = None
     chunk_frames_tbl: Any | None = None  # lancedb.table.Table
     chunk_frames_ds: lance.LanceDataset | None = None
@@ -48,6 +51,7 @@ def open_resources(db_path: str | Path) -> AppState:
     if "chunks" not in names:
         raise RuntimeError(f"'chunks' table missing in {db_path}")
     chunks = db.open_table("chunks")
+    chunks_ds = chunks.to_lance()  # resolve once; reused by every read path
 
     # `documents` is optional (only present after `ingest --audio-root …`).
     docs_ds = lance.dataset(str(db_path / "documents.lance")) if "documents" in names else None
@@ -72,6 +76,7 @@ def open_resources(db_path: str | Path) -> AppState:
         db_path=db_path,
         names=names,
         chunks=chunks,
+        chunks_ds=chunks_ds,
         docs_ds=docs_ds,
         chunk_frames_tbl=chunk_frames_tbl,
         chunk_frames_ds=chunk_frames_ds,

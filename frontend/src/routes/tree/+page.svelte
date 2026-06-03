@@ -19,6 +19,7 @@
   let phase = $state<Phase>('loading');
   let errorMsg = $state<string | null>(null);
   let hierarchy = $state<TopicNode | null>(null);
+  let noiseLabel = $state('');
 
   $effect(() => {
     if (!browser) return;
@@ -33,6 +34,7 @@
           return;
         }
         hierarchy = res.hierarchy;
+        noiseLabel = res.noise_label;
         phase = 'ready';
       } catch (e) {
         if (!cancelled) {
@@ -64,7 +66,7 @@
       Failed to load topics: {errorMsg}
     </div>
   {:else if phase === 'ready' && hierarchy}
-    <TopicTreemap {hierarchy} />
+    <TopicTreemap {hierarchy} {noiseLabel} />
   {:else}
     <div class="grid h-full place-items-center text-sm text-muted-foreground">Loading…</div>
   {/if}

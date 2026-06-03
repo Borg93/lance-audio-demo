@@ -20,10 +20,19 @@ import lance
 from fastapi import APIRouter
 
 from backend.deps import StateDep
+from raudio.features.topic_tree import NOISE_LABEL
 
 router = APIRouter(prefix="/api/topics", tags=["topics"])
 
-_NOT_BUILT: dict[str, Any] = {"built": False, "layers": 0, "n_chunks": 0, "hierarchy": None}
+# `noise_label` is the bucket name the tree builder uses for unclustered chunks;
+# surfaced so the frontend treemap reads it instead of re-hardcoding the string.
+_NOT_BUILT: dict[str, Any] = {
+    "built": False,
+    "layers": 0,
+    "n_chunks": 0,
+    "hierarchy": None,
+    "noise_label": NOISE_LABEL,
+}
 
 
 def _decode_jsonb(raw: Any) -> Any:
@@ -40,10 +49,14 @@ def get_topics(state: StateDep) -> dict[str, Any]:
     rows = lance.dataset(str(path)).to_table().to_pylist()
     if not rows:
         return _NOT_BUILT
+    # The columns are a writer-guaranteed contract (build_topic_tree always writes
+    # all three non-null), so index directly — a schema drift should 500 loudly,
+    # not silently return a built-but-empty payload the treemap can't render.
     row = rows[0]
     return {
         "built": True,
-        "layers": int(row.get("layers") or 0),
-        "n_chunks": int(row.get("n_chunks") or 0),
-        "hierarchy": _decode_jsonb(row.get("hierarchy")),
+        "layers": int(row["layers"]),
+        "n_chunks": int(row["n_chunks"]),
+        "hierarchy": _decode_jsonb(row["hierarchy"]),
+        "noise_label": NOISE_LABEL,
     }

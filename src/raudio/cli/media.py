@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from ._app import _Ctx, _require_table, app
+
+logger = logging.getLogger(__name__)
 
 
 @app.command("thumbnail")
@@ -283,3 +286,14 @@ def cmd_compact(
                 num_partitions=num_partitions,
                 num_sub_vectors=num_sub_vectors,
             )
+
+    # Compaction rewrites row addresses, which also invalidates the scalar
+    # (BTREE) indexes ingest builds for per-row lookups — recreate them or
+    # `doc_id`/`audio_path` filters silently fall back to full scans. Mirrors
+    # ingest.py: only the chunks table carries these columns, so guard on it.
+    for col in ("doc_id", "audio_path"):
+        if col in table.schema.names:
+            try:
+                table.create_scalar_index(col, index_type="BTREE", replace=True)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"scalar index ({col}) skipped: {e}")

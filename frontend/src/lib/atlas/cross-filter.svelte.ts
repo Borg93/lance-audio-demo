@@ -22,8 +22,9 @@
 
 import type { Hit, AtlasSpace } from '$lib/api';
 
-/** Colour channel for the scatter (legend + per-point recolour). */
-export type ColorBy = 'cluster' | 'language' | 'none';
+/** Colour channel for the scatter (legend + per-point recolour). `topic` =
+ *  chunk broad topic (topic_l2); `doc_topic` = per-video topic. */
+export type ColorBy = 'cluster' | 'language' | 'topic' | 'doc_topic' | 'none';
 
 /** Build a `'doc|speech|chunk' → point index` map once per loaded space. */
 export function buildKeyIndex(

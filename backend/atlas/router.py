@@ -14,8 +14,8 @@ frontend's custom Atlas tab:
 * ``GET /chunk/..`` — the full hit for one chunk (text + alignments + paths),
   fetched lazily when a point is selected, for the detail pane + playback.
 
-All are pure ``StateDep`` reads via the native-LanceDB scan idiom
-(``chunks.to_lance().to_table(...)``, the same one ``search/service.py`` uses).
+All are pure ``StateDep`` reads via the native-LanceDB scan idiom over the cached
+``state.chunks_ds`` handle (the same dataset ``search/service.py`` reads from).
 """
 
 from typing import Any, Literal
@@ -26,8 +26,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.deps import StateDep
+from raudio.features.topic_tree import topic_layer_columns
 
 router = APIRouter(prefix="/api/atlas", tags=["atlas"])
+
+#: Memoized /points payloads keyed on (space, dataset version). The full 145k-row
+#: scan + factorize is identical for a given dataset version, so we compute it once
+#: per space and serve the cached dict thereafter. The dataset version bumps on any
+#: rewrite (and a backend restart reopens `chunks_ds` anyway), invalidating stale
+#: entries. A plain dict suffices: writes are idempotent (same input → same output),
+#: so a concurrent double-compute just overwrites with an equal value.
+_POINTS_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
 
 #: The two projection spaces and their column triplets. ``text`` is the default
 #: (``raudio feature atlas``, from ``text_embedding``); ``visual`` is the
@@ -115,38 +124,31 @@ def atlas_status(
     return {"projected": projected, "rows": rows, "space": space, "spaces": spaces}
 
 
-@router.get("/points")
-def atlas_points(
-    state: StateDep,
-    space: Literal["text", "visual", "caption"] = Query(
-        "text", description="Projection space to read."
-    ),
-) -> JSONResponse:
-    """Compact arrays for the scatter renderer (coords + colour codes + keys)."""
+def _build_points(state: StateDep, space: str) -> dict[str, Any]:
+    """The expensive part of /points: full-table scan + factorize into ``out``.
+
+    Pulled out so :func:`atlas_points` can memoize the result per (space, version).
+    """
     cols = _space_cols(space)
     x_col, y_col, cluster_col = cols["x"], cols["y"], cols["cluster"]
-    if not _is_projected(state, space):
-        hint = (
-            "raudio feature atlas" if space == "text" else f"raudio feature atlas --space {space}"
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=f"{space} 2D projection not built yet — run `{hint}`",
-        )
-
     schema = set(state.chunks.schema.names)
     columns = ["doc_id", "speech_id", "chunk_id", x_col, y_col]
-    for optional in (cluster_col, "language", "namn"):
-        if optional in schema:
+    # The broadest topic layer (data-dependent — `topic_l{N-1}`, not always l2)
+    # colours the map into named regions; `doc_topic` is the per-video roll-up.
+    # Both are low-cardinality (~19) so they factorize into a small label list.
+    topic_cols = topic_layer_columns(list(schema))
+    broad_topic_col = topic_cols[-1] if topic_cols else None
+    for optional in (cluster_col, "language", "namn", broad_topic_col, "doc_topic"):
+        if optional and optional in schema:
             columns.append(optional)
 
     # `with_row_id` ships each point's stable Lance row address (`_rowid`) so the
     # selection table can be fetched with an O(selection) `take` (see /chunks)
     # instead of a per-key filtered full-table scan.
     tbl = (
-        state.chunks.to_lance()
-        .scanner(columns=columns, filter=f"{x_col} IS NOT NULL", with_row_id=True)
-        .to_table()
+        state.chunks_ds.scanner(
+            columns=columns, filter=f"{x_col} IS NOT NULL", with_row_id=True
+        ).to_table()
     )
 
     def floats(name: str) -> list[float]:
@@ -180,6 +182,46 @@ def atlas_points(
         namn_codes, namn_labels = _factorize(tbl.column("namn").to_pylist())
         out["namn"] = namn_codes
         out["namns"] = namn_labels
+    if broad_topic_col and broad_topic_col in columns:
+        # Broadest chunk topic — colours the map into named regions. Unclustered
+        # chunks are NULL → "" label, rendered muted on the map.
+        topic_codes, topic_labels = _factorize(tbl.column(broad_topic_col).to_pylist())
+        out["topic"] = topic_codes
+        out["topics"] = topic_labels
+    if "doc_topic" in columns:
+        # Per-video dominant topic; NULL → "" label when a video's chunks are all
+        # noise (so not strictly 100% — most videos do get a topic).
+        dt_codes, dt_labels = _factorize(tbl.column("doc_topic").to_pylist())
+        out["doc_topic"] = dt_codes
+        out["doc_topics"] = dt_labels
+
+    return out
+
+
+@router.get("/points")
+def atlas_points(
+    state: StateDep,
+    space: Literal["text", "visual", "caption"] = Query(
+        "text", description="Projection space to read."
+    ),
+) -> JSONResponse:
+    """Compact arrays for the scatter renderer (coords + colour codes + keys)."""
+    if not _is_projected(state, space):
+        hint = (
+            "raudio feature atlas" if space == "text" else f"raudio feature atlas --space {space}"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"{space} 2D projection not built yet — run `{hint}`",
+        )
+
+    # Memoize on (space, dataset version): the scan+factorize is identical until
+    # the dataset is rewritten (version bump) or the backend restarts.
+    key = (space, state.chunks_ds.version)
+    out = _POINTS_CACHE.get(key)
+    if out is None:
+        out = _build_points(state, space)
+        _POINTS_CACHE[key] = out
 
     return JSONResponse(out, headers={"Cache-Control": "public, max-age=300"})
 
@@ -193,7 +235,7 @@ def atlas_chunk(state: StateDep, doc_id: str, speech_id: int, chunk_id: int) -> 
     columns = [c for c in _HIT_COLUMNS if c in schema]
     safe_doc = doc_id.replace("'", "''")
     where = f"doc_id = '{safe_doc}' AND speech_id = {speech_id} AND chunk_id = {chunk_id}"
-    rows = state.chunks.to_lance().to_table(columns=columns, filter=where).to_pylist()
+    rows = state.chunks_ds.to_table(columns=columns, filter=where).to_pylist()
     if not rows:
         raise HTTPException(status_code=404, detail="chunk not found")
 
@@ -230,9 +272,7 @@ def atlas_chunks(state: StateDep, body: ChunkRowIds) -> list[dict[str, Any]]:
     schema = set(state.chunks.schema.names)
     columns = [c for c in _HIT_COLUMNS if c in schema]
     csv = ",".join(str(int(r)) for r in rowids)
-    rows = (
-        state.chunks.to_lance().to_table(columns=columns, filter=f"_rowid in ({csv})").to_pylist()
-    )
+    rows = state.chunks_ds.to_table(columns=columns, filter=f"_rowid in ({csv})").to_pylist()
     for hit in rows:
         hit["alignments"] = parse_alignments_json(hit.pop("alignments_json", None))
     return rows

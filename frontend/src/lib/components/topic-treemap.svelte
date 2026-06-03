@@ -20,10 +20,10 @@
   import { ChevronRight, ArrowRight } from 'lucide-svelte';
   import type { TopicNode } from '$lib/api';
 
-  let { hierarchy }: { hierarchy: TopicNode } = $props();
+  // `noiseLabel` is the unclustered-bucket name, sourced from /api/topics
+  // (topic_tree.py:NOISE_LABEL) — never hardcoded here, so the two can't drift.
+  let { hierarchy, noiseLabel }: { hierarchy: TopicNode; noiseLabel: string } = $props();
 
-  /** Noise bucket label — keep in sync with `topic_tree.py:_NOISE_LABEL`. */
-  const NOISE = '(övrigt)';
   const fmt = (n: number) => n.toLocaleString('sv-SE');
 
   // Drill stack: branches descended into below the root. The breadcrumb is the
@@ -43,9 +43,9 @@
 
   const color = scaleOrdinal<string, string>(schemeTableau10);
   const fillFor = (node: TopicNode) =>
-    node.name === NOISE ? 'var(--color-muted)' : color(node.name);
+    node.name === noiseLabel ? 'var(--color-muted)' : color(node.name);
 
-  const isInteractive = (node: TopicNode) => node.name !== NOISE;
+  const isInteractive = (node: TopicNode) => node.name !== noiseLabel;
 
   let hovered = $state<string | null>(null);
 

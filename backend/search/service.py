@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import HTTPException
 
 from backend.search.spec import SearchSpec
+from raudio.features.topic_tree import topic_layer_columns
 
 if TYPE_CHECKING:
     from raudio.vllm.embedding import VLLMEmbeddingClient
@@ -209,11 +210,9 @@ def run_search(
     All paths return the same hit shape (alignments_json parsed into
     `alignments`). The frontend renders one card type for everything.
     """
-    topic_columns = (
-        [name for name in chunks.schema.names if name.startswith("topic_l")]
-        if spec.topic
-        else None
-    )
+    # Reuse the tree builder's source of truth so the filter columns can't drift
+    # from the topic layers the hierarchy/atlas are built on.
+    topic_columns = topic_layer_columns(list(chunks.schema.names)) if spec.topic else None
     where = _build_where_clause(
         language=spec.language,
         namn=spec.namn,

@@ -28,6 +28,9 @@
     type Hit,
   } from '$lib/api';
   import { crossFilter, buildKeyIndex, type ColorBy } from './cross-filter.svelte';
+  import { buildGrid, nearestIndex, type SpatialGrid } from './atlas-grid';
+  import { hexToRgb, hueRgb, hueCss, buildHuePalette, type Rgb } from './atlas-colors';
+  import { indicesInPolygon, type Pt } from './atlas-geometry';
   import AtlasTooltip from './AtlasTooltip.svelte';
   import { Button, Select, type SelectOption } from '$lib/components/ui';
   import { Loader2, Lasso, X, Eye, EyeOff, Hand } from 'lucide-svelte';
@@ -85,52 +88,8 @@
     return () => obs.disconnect();
   });
 
-  // ── uniform spatial grid (built once per space) for O(1)-ish hover picking ──
-  // Linear-scanning ~145k points on every pointermove is the dominant lag.
-  // Instead we bucket point indices into a GRID×GRID lattice over the x/y
-  // extent once, then a hover only scans the target cell + its neighbour ring.
-  type SpatialGrid = {
-    cells: number[][]; // row-major GRID*GRID buckets of point indices
-    cols: number;
-    rows: number;
-    minX: number;
-    minY: number;
-    invW: number; // 1 / cellWidth
-    invH: number; // 1 / cellHeight
-  };
-  const GRID = 256;
-
-  function buildGrid(xs: Float32Array, ys: Float32Array): SpatialGrid {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (let i = 0; i < xs.length; i++) {
-      const xi = xs[i]!;
-      const yi = ys[i]!;
-      if (xi < minX) minX = xi;
-      if (xi > maxX) maxX = xi;
-      if (yi < minY) minY = yi;
-      if (yi > maxY) maxY = yi;
-    }
-    if (!Number.isFinite(minX)) {
-      minX = 0;
-      minY = 0;
-      maxX = 1;
-      maxY = 1;
-    }
-    const spanX = maxX - minX || 1;
-    const spanY = maxY - minY || 1;
-    const invW = GRID / spanX;
-    const invH = GRID / spanY;
-    const cells: number[][] = Array.from({ length: GRID * GRID }, () => []);
-    for (let i = 0; i < xs.length; i++) {
-      const cx = Math.min(GRID - 1, Math.max(0, ((xs[i]! - minX) * invW) | 0));
-      const cy = Math.min(GRID - 1, Math.max(0, ((ys[i]! - minY) * invH) | 0));
-      cells[cy * GRID + cx]!.push(i);
-    }
-    return { cells, cols: GRID, rows: GRID, minX, minY, invW, invH };
-  }
+  // Spatial-grid hover picking (`buildGrid`/`nearestIndex`) lives in ./atlas-grid;
+  // lasso geometry in ./atlas-geometry; colour math in ./atlas-colors — all pure.
 
   // ── load points for a space + (re)build the shared key→index map ──────────
   async function load(space: AtlasSpace): Promise<void> {
@@ -190,52 +149,11 @@
     crossFilter.setSpace(space);
   }
 
-  // ── colour helpers (no dep): HSL/hex → {r,g,b} bytes ──────────────────────
-  type Rgb = { r: number; g: number; b: number };
-
-  function hslToRgb(h: number, s: number, l: number): Rgb {
-    // h in [0,360), s/l in [0,1]
-    const c = (1 - Math.abs(2 * l - 1)) * s;
-    const hp = (((h % 360) + 360) % 360) / 60;
-    const xCol = c * (1 - Math.abs((hp % 2) - 1));
-    let r1 = 0;
-    let g1 = 0;
-    let b1 = 0;
-    if (hp < 1) [r1, g1, b1] = [c, xCol, 0];
-    else if (hp < 2) [r1, g1, b1] = [xCol, c, 0];
-    else if (hp < 3) [r1, g1, b1] = [0, c, xCol];
-    else if (hp < 4) [r1, g1, b1] = [0, xCol, c];
-    else if (hp < 5) [r1, g1, b1] = [xCol, 0, c];
-    else [r1, g1, b1] = [c, 0, xCol];
-    const m = l - c / 2;
-    return {
-      r: Math.round((r1 + m) * 255),
-      g: Math.round((g1 + m) * 255),
-      b: Math.round((b1 + m) * 255),
-    };
-  }
-
-  function hexToRgb(hex: string): Rgb {
-    let h = hex.trim().replace('#', '');
-    if (h.length === 3) h = h[0]! + h[0]! + h[1]! + h[1]! + h[2]! + h[2]!;
-    const n = Number.parseInt(h, 16);
-    if (!Number.isFinite(n)) return { r: 0, g: 0, b: 0 };
-    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-  }
-
-  /** Ranked hue for index i of n distinct categories (matches old `hsl()`). */
-  function hueRgb(i: number, n: number): Rgb {
-    const hue = Math.round((i * 360) / Math.max(1, n));
-    return hslToRgb(hue, 0.62, isDark ? 0.58 : 0.48);
-  }
-  /** CSS string for the same hue (legend swatches read this). */
-  function hueCss(i: number, n: number): string {
-    return `hsl(${Math.round((i * 360) / Math.max(1, n))} 62% ${isDark ? 58 : 48}%)`;
-  }
-
+  // Colour math (hslToRgb / hexToRgb / hueRgb / hueCss / buildHuePalette) is in
+  // ./atlas-colors; the derived swatch/point colours below pass the live theme.
   const NOISE_RGB = $derived(hexToRgb(isDark ? '#52525b' : '#cccccc'));
   const OTHER_RGB = $derived(hexToRgb(isDark ? '#71717a' : '#a1a1aa'));
-  const ACCENT_RGB = $derived(hueRgb(1, 4));
+  const ACCENT_RGB = $derived(hueRgb(1, 4, isDark));
   const BG_COLOR = $derived(isDark ? '#0a0a0a' : '#ffffff');
 
   const DIM_ALPHA = 30; // selection-dimmed (lasso context): faint but present
@@ -257,6 +175,18 @@
     ranked.forEach(([id], rank) => slotOf.set(id, rank < MAX_DISTINCT ? rank : -1));
     return { slotOf, distinct };
   });
+
+  type CategoryChannel = { codes: readonly number[]; labels: readonly string[] };
+  /** The factorized (codes, labels) pair backing a categorical colour mode.
+   *  `cluster` is NOT here — it has its own noise/#id/hide semantics. */
+  function channelFor(p: AtlasPoints | null, mode: ColorBy): CategoryChannel | null {
+    if (!p) return null;
+    if (mode === 'language' && p.language && p.languages) return { codes: p.language, labels: p.languages };
+    if (mode === 'topic' && p.topic && p.topics) return { codes: p.topic, labels: p.topics };
+    if (mode === 'doc_topic' && p.doc_topic && p.doc_topics)
+      return { codes: p.doc_topic, labels: p.doc_topics };
+    return null;
+  }
 
   /**
    * Per-point RGBA buffer (length 4*count). Replaces the old category/
@@ -287,6 +217,7 @@
       const r = clusterRanking;
       if (!r) return null;
       const { slotOf, distinct } = r;
+      const palette = buildHuePalette(distinct, isDark); // distinct hues once, not per point
       const cl = p.cluster;
       const hidden = crossFilter.hiddenClusters;
       const noise = NOISE_RGB;
@@ -305,7 +236,7 @@
           base = NOISE_ALPHA;
         } else {
           const rank = slotOf.get(c) ?? -1;
-          col = rank < 0 ? other : hueRgb(rank + 1, distinct + 1);
+          col = rank < 0 ? other : palette[rank]!;
           base = 255;
         }
         const alpha = alphaFor(i, base);
@@ -317,19 +248,22 @@
       return buf;
     }
 
-    if (colorBy === 'language' && p.language && p.languages) {
-      const lang = p.language;
-      const distinct = Math.min(MAX_DISTINCT, p.languages.length);
+    const channel = channelFor(p, colorBy);
+    if (channel) {
+      const { codes, labels } = channel;
+      const distinct = Math.min(MAX_DISTINCT, labels.length);
+      const palette = buildHuePalette(distinct, isDark); // distinct hues once, not per point
       const other = OTHER_RGB;
+      const noise = NOISE_RGB;
       for (let i = 0; i < n; i++) {
         const o = i * 4;
-        const code = lang[i] ?? 0;
-        const col = code < distinct ? hueRgb(code + 1, distinct + 1) : other;
-        const alpha = alphaFor(i, 255);
+        const code = codes[i] ?? 0;
+        const empty = (labels[code] ?? '') === ''; // unclustered/noise → muted grey
+        const col = empty ? noise : code < distinct ? palette[code]! : other;
         buf[o] = col.r;
         buf[o + 1] = col.g;
         buf[o + 2] = col.b;
-        buf[o + 3] = alpha;
+        buf[o + 3] = alphaFor(i, empty ? NOISE_ALPHA : 255);
       }
       return buf;
     }
@@ -361,7 +295,8 @@
     return [...counts.entries()]
       .map(([id, count]) => {
         const rank = slotOf.get(id) ?? -1;
-        const color = rank < 0 ? (isDark ? '#71717a' : '#a1a1aa') : hueCss(rank + 1, distinct + 1);
+        const color =
+          rank < 0 ? (isDark ? '#71717a' : '#a1a1aa') : hueCss(rank + 1, distinct + 1, isDark);
         return { id, color, count };
       })
       .sort((a, b) => b.count - a.count);
@@ -381,32 +316,56 @@
     return { total: ids.size, noise };
   });
 
-  const languageLegend = $derived.by((): { code: number; label: string; color: string; count: number }[] => {
-    const p = pts;
-    if (!p?.language || !p.languages) return [];
-    const lang = p.language;
-    const labels = p.languages;
+  type CategoryLegendRow = { code: number; label: string; color: string; count: number; empty: boolean };
+  /** Legend rows for the active categorical colour mode (language / topic /
+   *  doc_topic) — same hues the map uses, clickable to select that category. */
+  const categoryLegend = $derived.by((): CategoryLegendRow[] => {
+    const ch = channelFor(pts, crossFilter.colorBy);
+    if (!ch) return [];
+    const { codes, labels } = ch;
     const distinct = Math.min(MAX_DISTINCT, labels.length);
+    const grey = isDark ? '#71717a' : '#a1a1aa';
+    const noiseCss = isDark ? '#52525b' : '#cccccc';
     const counts = new Map<number, number>();
-    for (const code of lang) counts.set(code, (counts.get(code) ?? 0) + 1);
+    for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
     return [...counts.entries()]
-      .map(([code, count]) => ({
-        code,
-        label: labels[code] || '—',
-        color: code < distinct ? hueCss(code + 1, distinct + 1) : isDark ? '#71717a' : '#a1a1aa',
-        count,
-      }))
+      .map(([code, count]) => {
+        const raw = labels[code] ?? '';
+        const empty = raw === '';
+        return {
+          code,
+          count,
+          empty,
+          label: empty ? '(ej klustrad)' : raw,
+          color: empty ? noiseCss : code < distinct ? hueCss(code + 1, distinct + 1, isDark) : grey,
+        };
+      })
       .sort((a, b) => b.count - a.count);
   });
 
-  const languageTotal = $derived(pts?.languages?.length ?? 0);
+  const categoryTotal = $derived(channelFor(pts, crossFilter.colorBy)?.labels.length ?? 0);
+  const categoryTitle = $derived(
+    crossFilter.colorBy === 'language'
+      ? 'Languages'
+      : crossFilter.colorBy === 'topic'
+        ? 'Topics'
+        : crossFilter.colorBy === 'doc_topic'
+          ? 'Video topics'
+          : '',
+  );
 
-  const colorOptions = [
-    { value: 'cluster', label: 'Cluster' },
-    { value: 'language', label: 'Language' },
-    { value: 'none', label: 'None' },
-  ] satisfies (SelectOption & { value: ColorBy })[];
-  const isColorBy = (v: string): v is ColorBy => colorOptions.some((o) => o.value === v);
+  // Topic modes appear only once the columns are built (factorized into the
+  // points payload); cluster + none are always available.
+  const colorOptions = $derived.by((): (SelectOption & { value: ColorBy })[] => {
+    const opts: (SelectOption & { value: ColorBy })[] = [{ value: 'cluster', label: 'Cluster' }];
+    if (pts?.language) opts.push({ value: 'language', label: 'Language' });
+    if (pts?.topic) opts.push({ value: 'topic', label: 'Topic' });
+    if (pts?.doc_topic) opts.push({ value: 'doc_topic', label: 'Video topic' });
+    opts.push({ value: 'none', label: 'None' });
+    return opts;
+  });
+  const ALL_COLOR_BY: ColorBy[] = ['cluster', 'language', 'topic', 'doc_topic', 'none'];
+  const isColorBy = (v: string): v is ColorBy => (ALL_COLOR_BY as string[]).includes(v);
   let colorByValue = $state<string>('cluster');
   $effect(() => {
     // The Select binds a plain string; narrow it to the store's literal union
@@ -415,8 +374,6 @@
   });
 
   // ── selection helpers (data-space) ────────────────────────────────────────
-  type Pt = { x: number; y: number };
-
   function keyAt(i: number): [string, number, number] | null {
     const p = pts;
     if (!p) return null;
@@ -428,68 +385,13 @@
     return [doc, s, c];
   }
 
-  function pointInPolygon(px: number, py: number, poly: Pt[]): boolean {
-    let inside = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const a = poly[i]!;
-      const b = poly[j]!;
-      if (a.y > py !== b.y > py && px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y) + a.x) {
-        inside = !inside;
-      }
-    }
-    return inside;
+  // Pure geometry/grid helpers live in ./atlas-geometry + ./atlas-grid; these
+  // thin wrappers bind them to the component's currently-loaded points/grid.
+  function indicesInLasso(poly: Pt[]): number[] {
+    return x && y ? indicesInPolygon(x, y, poly) : [];
   }
-
-  function indicesInPolygon(poly: Pt[]): number[] {
-    const xs = x;
-    const ys = y;
-    if (!xs || !ys) return [];
-    const out: number[] = [];
-    for (let i = 0; i < xs.length; i++) {
-      if (pointInPolygon(xs[i]!, ys[i]!, poly)) out.push(i);
-    }
-    return out;
-  }
-
-  /** Nearest point index to data (qx, qy) via the spatial grid: scan the target
-   *  cell and widening neighbour rings until a hit is found within the radius. */
-  function nearestIndex(qx: number, qy: number): number | null {
-    const xs = x;
-    const ys = y;
-    const g = grid;
-    if (!xs || !ys || !g) return null;
-    const unit = 1 / Math.max(g.invW, g.invH); // ~one grid cell in data units
-    const maxR = unit * 12; // same pick radius as before
-    const cx = Math.min(g.cols - 1, Math.max(0, ((qx - g.minX) * g.invW) | 0));
-    const cy = Math.min(g.rows - 1, Math.max(0, ((qy - g.minY) * g.invH) | 0));
-    let best = -1;
-    let bestD = Infinity;
-    for (let r = 0; r < g.cols; r++) {
-      const x0 = Math.max(0, cx - r);
-      const x1 = Math.min(g.cols - 1, cx + r);
-      const y0 = Math.max(0, cy - r);
-      const y1 = Math.min(g.rows - 1, cy + r);
-      for (let gy = y0; gy <= y1; gy++) {
-        for (let gx = x0; gx <= x1; gx++) {
-          if (r > 0 && gx > x0 && gx < x1 && gy > y0 && gy < y1) continue; // interior already scanned
-          const bucket = g.cells[gy * g.cols + gx]!;
-          for (const i of bucket) {
-            const dx = xs[i]! - qx;
-            const dy = ys[i]! - qy;
-            const d = dx * dx + dy * dy;
-            if (d < bestD) {
-              bestD = d;
-              best = i;
-            }
-          }
-        }
-      }
-      const ringEdge = r / Math.max(g.invW, g.invH);
-      if (best >= 0 && ringEdge * ringEdge > bestD) break;
-      if (ringEdge > maxR) break;
-    }
-    if (best < 0 || Math.sqrt(bestD) > maxR) return null;
-    return best;
+  function pickIndex(qx: number, qy: number): number | null {
+    return grid && x && y ? nearestIndex(grid, x, y, qx, qy) : null;
   }
 
   // ── load the table for a set of indices (1000-cap; full set stays in store) ─
@@ -532,7 +434,7 @@
   // ── GpuScatter callbacks ──────────────────────────────────────────────────
   // hover → nearest index → tooltip + crossFilter.hovered (anchored at cursor)
   function onScatterHover(dataX: number, dataY: number): void {
-    const i = nearestIndex(dataX, dataY);
+    const i = pickIndex(dataX, dataY);
     hoverIndex = i;
     crossFilter.hovered = i;
     if (i != null) {
@@ -547,7 +449,7 @@
 
   // click a point → load full hit into the shared player
   async function onScatterPick(dataX: number, dataY: number): Promise<void> {
-    const i = nearestIndex(dataX, dataY);
+    const i = pickIndex(dataX, dataY);
     if (i == null) return;
     const key = keyAt(i);
     if (!key) return;
@@ -565,7 +467,7 @@
       poly.push({ x: polyDataXY[i]!, y: polyDataXY[i + 1]! });
     }
     if (poly.length < 3) return;
-    const idx = indicesInPolygon(poly);
+    const idx = indicesInLasso(poly);
     crossFilter.setSelectedIndices(idx); // untruncated — drives the dim recolour
     await loadTableForIndices(idx);
   }
@@ -578,11 +480,13 @@
     await loadTableForIndices([...crossFilter.selectedIds]);
   }
 
-  async function pickLanguage(code: number): Promise<void> {
-    const lang = pts?.language;
-    if (!lang) return;
+  /** Select every point in a category (language / topic / doc_topic) → table +
+   *  seedable search. The atlas analog of the Tree page's "show results". */
+  async function pickCategory(code: number): Promise<void> {
+    const ch = channelFor(pts, crossFilter.colorBy);
+    if (!ch) return;
     const idx: number[] = [];
-    for (let i = 0; i < lang.length; i++) if (lang[i] === code) idx.push(i);
+    for (let i = 0; i < ch.codes.length; i++) if (ch.codes[i] === code) idx.push(i);
     crossFilter.setSelectedIndices(idx);
     await loadTableForIndices(idx);
   }
@@ -790,19 +694,20 @@
             </div>
           {/if}
         </div>
-      {:else if legendMode === 'language' && languageLegend.length}
-        <div class="absolute right-3 top-3 max-h-[60%] w-48 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur">
-          <div class="mb-1 font-medium text-muted-foreground">Languages · {languageTotal.toLocaleString()}</div>
-          {#each languageLegend as l (l.code)}
+      {:else if (legendMode === 'language' || legendMode === 'topic' || legendMode === 'doc_topic') && categoryLegend.length}
+        <div class="absolute right-3 top-3 max-h-[60%] w-60 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur">
+          <div class="mb-1 font-medium text-muted-foreground">{categoryTitle} · {categoryTotal.toLocaleString()}</div>
+          {#each categoryLegend as c (c.code)}
             <button
               type="button"
               class="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-secondary/50"
-              onclick={() => pickLanguage(l.code)}
-              title="Select language {l.label}"
+              class:opacity-60={c.empty}
+              onclick={() => pickCategory(c.code)}
+              title="Select {c.label}"
             >
-              <span class="size-2.5 shrink-0 rounded-full" style:background={l.color}></span>
-              <span class="uppercase text-foreground">{l.label}</span>
-              <span class="ml-auto font-mono text-muted-foreground">{l.count.toLocaleString()}</span>
+              <span class="size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
+              <span class="truncate text-foreground" class:uppercase={legendMode === 'language'}>{c.label}</span>
+              <span class="ml-auto shrink-0 font-mono text-muted-foreground">{c.count.toLocaleString()}</span>
             </button>
           {/each}
         </div>

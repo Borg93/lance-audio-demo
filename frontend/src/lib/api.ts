@@ -280,6 +280,13 @@ export interface AtlasPoints {
     languages?: string[];
     namn?: number[];
     namns?: string[];
+    /** Chunk broad topic (`topic_l2`) factorized: `topic[i]` indexes `topics`.
+     *  Empty label ('') = unclustered/noise. */
+    topic?: number[];
+    topics?: string[];
+    /** Per-video topic (`doc_topic`) factorized: `doc_topic[i]` indexes `doc_topics`. */
+    doc_topic?: number[];
+    doc_topics?: string[];
 }
 
 /** Fetch the point arrays for a space. Skips per-element zod (the payload is
@@ -292,7 +299,8 @@ export async function getAtlasPoints(
     // whose payload shape differed — notably entries from before `rowid` was
     // added, which would silently break the selection table. Bump when the
     // points payload shape changes; the backend ignores the extra param.
-    const r = await fetcher(`/api/atlas/points?space=${space}&v=2`);
+    // v=3: added factorized `topic`/`doc_topic` colour channels.
+    const r = await fetcher(`/api/atlas/points?space=${space}&v=3`);
     if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new ApiError(r.status, body?.detail ?? r.statusText);
@@ -357,6 +365,9 @@ export const TopicsResponseSchema = z.object({
     layers: z.number().int(),
     n_chunks: z.number().int(),
     hierarchy: TopicNodeSchema.nullable(),
+    // The bucket name the backend uses for unclustered chunks (source of truth in
+    // topic_tree.py:NOISE_LABEL) — the treemap reads it instead of hardcoding it.
+    noise_label: z.string(),
 });
 export type TopicsResponse = z.infer<typeof TopicsResponseSchema>;
 
