@@ -7,6 +7,7 @@ deterministic fakes. The vector features are covered in ``test_embed.py``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import lance
@@ -96,6 +97,30 @@ class TestCaptionColumn:
         write_synthetic_frames(frames_path, n=3)
         caption_column(frames_path, client=FakeCaptionClient())
         assert caption_column(frames_path, client=FakeCaptionClient()) == 0
+
+    def test_resumes_from_checkpoint(self, tmp_path: Path) -> None:
+        # A killed run leaves a {ckpt}.values.jsonl sidecar; the resume must REUSE
+        # those values (not recompute) and clean the sidecar up on success.
+        frames_path = tmp_path / "chunk_frames.lance"
+        write_synthetic_frames(frames_path, n=3)
+        ckpt = tmp_path / "cap.ckpt"
+
+        ds = lance.dataset(str(frames_path))
+        rid0 = ds.to_table(columns=[], with_row_id=True).column("_rowid")[0].as_py()
+        # Pre-seed row 0 with a sentinel the FakeCaptionClient would never produce.
+        (tmp_path / "cap.ckpt.values.jsonl").write_text(
+            json.dumps({"id": rid0, "v": "RESUMED"}) + "\n", encoding="utf-8"
+        )
+
+        assert caption_column(frames_path, client=FakeCaptionClient(), checkpoint_file=ckpt) == 3
+        out = lance.dataset(str(frames_path)).to_table(columns=[CAPTION_COLUMN], with_row_id=True)
+        by_id = {
+            out.column("_rowid")[i].as_py(): out.column(CAPTION_COLUMN)[i].as_py()
+            for i in range(out.num_rows)
+        }
+        assert by_id[rid0] == "RESUMED"  # taken from the checkpoint, not recomputed
+        assert all(v for v in by_id.values())  # the other rows were captioned normally
+        assert not (tmp_path / "cap.ckpt.values.jsonl").exists()  # cleaned up on success
 
 
 class TestCaptionEmbeddingColumn:

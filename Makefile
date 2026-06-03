@@ -228,6 +228,10 @@ RERANK_MEM_FRAC ?= 0.45
 # wherever your Gemma serves. The client also honours RAUDIO_CAPTION_URL/MODEL.
 CAPTION_URL      ?= http://127.0.0.1:8003
 CAPTION_MODEL    ?= google/gemma-4-31B-it
+# Resume sidecar for captioning. A 145k-frame Gemma pass takes hours; this makes
+# it crash-resumable (each caption persisted to {CAPTION_CKPT}.values.jsonl as it's
+# produced), so a killed run picks up where it left off instead of recomputing.
+CAPTION_CKPT     ?= $(DB).caption.ckpt
 
 # vLLM version pin — set to 0.22.0 (one pinned build across both the uvx and
 # Docker routes; see docs/INVESTIGATION.md on why a single build matters).
@@ -343,8 +347,9 @@ extract-chunk-frames: ## ffmpeg → one JPEG per chunk.start into chunks.frame_b
 embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ index.
 	uv run --extra multimodal raudio --db $(DB) feature frame_embedding --url $(EMBED_URL)
 
-caption-chunk-frames: ## Caption EXISTING frames → chunk_frames.caption (uses your Gemma at $(CAPTION_URL)).
-	uv run --extra multimodal raudio --db $(DB) feature caption --url $(CAPTION_URL) --model $(CAPTION_MODEL)
+caption-chunk-frames: ## Caption EXISTING frames → chunk_frames.caption (resumable; uses your Gemma at $(CAPTION_URL)).
+	uv run --extra multimodal raudio --db $(DB) feature caption \
+		--url $(CAPTION_URL) --model $(CAPTION_MODEL) --checkpoint $(CAPTION_CKPT)
 
 embed-captions:       ## Embed chunk_frames.caption → caption_embedding + IVF_PQ index (needs embed-server).
 	uv run --extra multimodal raudio --db $(DB) feature caption_embedding --url $(EMBED_URL)

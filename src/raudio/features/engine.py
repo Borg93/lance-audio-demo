@@ -21,7 +21,9 @@ client, so a Ray/Ray Data driver can fan them out later.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import lance
@@ -29,11 +31,49 @@ import pyarrow as pa
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     import lancedb
 
 logger = logging.getLogger(__name__)
+
+
+class _ValueCheckpoint:
+    """Append-only ``{row_id: value}`` sidecar so a killed blob-compute can resume.
+
+    The blob-derived columns (captions especially) can take hours: each value is
+    one Gemma call. The compute used to live only in memory and persist via a
+    single ``add_columns`` at the very end, so a mid-run kill lost *everything*.
+    This writes each computed value as one JSONL line as it's produced, so a
+    re-run skips what's already done and a crash costs at most the in-flight
+    batch. A no-op when no checkpoint path is given; the file is removed on success.
+    """
+
+    def __init__(self, base: str | Path | None) -> None:
+        self.path = Path(f"{base}.values.jsonl") if base is not None else None
+
+    def load(self) -> dict[int, Any]:
+        if self.path is None or not self.path.exists():
+            return {}
+        out: dict[int, Any] = {}
+        with self.path.open(encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    rec = json.loads(line)
+                    out[int(rec["id"])] = rec["v"]
+        logger.info(f"resuming blob-compute from {self.path}: {len(out)} value(s) already computed")
+        return out
+
+    def extend(self, pairs: list[tuple[int, Any]]) -> None:
+        if self.path is None or not pairs:
+            return
+        with self.path.open("a", encoding="utf-8") as f:
+            for row_id, value in pairs:
+                f.write(json.dumps({"id": int(row_id), "v": value}, ensure_ascii=False) + "\n")
+            f.flush()
+
+    def cleanup(self) -> None:
+        if self.path is not None:
+            self.path.unlink(missing_ok=True)
 
 
 def upsert_scan_column(
@@ -143,6 +183,11 @@ def upsert_blob_column(
     places each value by id. A row id missing from the map raises (loud failure)
     rather than misaligning, so the result is correct regardless of scan order.
     No null-fill: the column is all-or-nothing (``overwrite`` rebuilds).
+
+    When ``checkpoint_file`` is given, the (potentially hours-long) compute pass is
+    **resumable**: each value is written to a ``{checkpoint_file}.values.jsonl``
+    sidecar as it's produced, so a killed run resumes instead of recomputing. The
+    sidecar is removed once the column is attached.
     """
     ds = lance.dataset(str(dataset_path))
     if name in ds.schema.names:
@@ -156,12 +201,17 @@ def upsert_blob_column(
     if total == 0:
         return 0
 
-    value_by_row_id: dict[int, Any] = {}
+    # Resume from any prior partial run; compute only the rows not already done.
+    ckpt = _ValueCheckpoint(checkpoint_file)
+    value_by_row_id: dict[int, Any] = ckpt.load()
     for batch in ds.to_batches(columns=[], with_row_id=True, batch_size=batch_rows):
         row_ids = batch.column("_rowid").to_pylist()
-        values = compute(_read_blobs(ds, blob_column, row_ids)).to_pylist()
-        for row_id, value in zip(row_ids, values, strict=True):
-            value_by_row_id[row_id] = value
+        todo = [r for r in row_ids if r not in value_by_row_id]
+        if todo:
+            values = compute(_read_blobs(ds, blob_column, todo)).to_pylist()
+            new_pairs = list(zip(todo, values, strict=True))
+            ckpt.extend(new_pairs)  # persist before counting progress — survives a kill
+            value_by_row_id.update(new_pairs)
         if progress is not None:
             progress(len(row_ids))
 
@@ -175,6 +225,7 @@ def upsert_blob_column(
 
     logger.info(f"attaching column {name} ({output_type}) for {len(value_by_row_id)} row(s)")
     ds.add_columns(attach, read_columns=["_rowid"], batch_size=batch_rows)
+    ckpt.cleanup()  # column is durably attached — the sidecar is no longer needed
     return total
 
 
