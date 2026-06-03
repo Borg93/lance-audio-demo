@@ -19,72 +19,55 @@ Living checklist for `raudio`. Update as items land.
 
 ## Active blockers (do these next)
 
-The text/FTS and semantic (`text_embedding`) pipelines are done and serving.
-What remains gated is the **visual / frame** half: extracting frames and
-embedding them. Modes that read frames (`visual`, the frame leg of `all`)
-already work end to end in code — they just return empty until the frame data
-exists.
+The text/FTS, semantic (`text_embedding`), and **visual** (`frame_embedding`)
+pipelines are all done and serving on the live DB. The one cross-modal leg still
+returning empty is **scene** (`caption_embedding`) — the frames have no Swedish
+captions yet. See [Open work: captions](#open-work-captions-scene-search).
 
-### ⏳ 1. Run `extract-chunk-frames` against the `chunk_frames` table
+### ✅ 1. `extract-chunk-frames` ran end to end (RESOLVED)
 
 Architecture writes per-chunk frames into a separate append-only
 `chunk_frames.lance` table (commit `3954ee5`) — never `merge_insert` into the
 wide `chunks` schema (see [docs/INVESTIGATION.md](docs/INVESTIGATION.md) §A1).
-The code path is in place (`raudio extract-chunk-frames`,
-`src/raudio/cli/media.py`); it has **not been validated end to end** on the full
-corpus yet.
+The code path (`raudio extract-chunk-frames`, `src/raudio/cli/media.py`) ran on
+the full corpus: the live DB's `chunk_frames` table holds **145,175 rows**
+(`doc_id, speech_id, chunk_id, frame_idx, frame_blob, frame_mime, frame_width,
+frame_height, frame_embedding`).
 
 ```bash
 make extract-chunk-frames EXTRACT_JOBS=24
 ```
 
-Expected: many small Lance fragments accumulate as it runs (resumable). Verify:
+Verify on the live DB:
 
 ```bash
 uv run python -c "
 import lance
-ds = lance.dataset('./transcripts.lance/chunk_frames.lance')
+ds = lance.dataset('./transcripts_v2.lance/chunk_frames.lance')
 print('rows:', ds.count_rows(), '— cols:', ds.schema.names)
 "
 ```
 
-### ❌ 2. `embed-chunk-frames` blocked by vLLM Qwen3-VL image-embed crash
+### ✅ 2. `embed-chunk-frames` built `frame_embedding` end to end (RESOLVED)
 
 Frame embedding is built via Lance data evolution — `raudio feature
 frame_embedding` (wrapped by `make embed-chunk-frames`), which calls
 `add_columns(...)` to write `chunk_frames.frame_embedding` and then builds the
-cosine IVF_PQ index. The blocker is the **vLLM image-embed path**, not the Lance
-write.
-
-Observed on Qwen3-VL-Embedding: a single image request can kill the engine when
-the warmup-time deepstack-input-embeds buffer is sized differently from runtime:
-
-```
-ValueError: Requested more deepstack tokens than available in buffer:
-            num_tokens=N > buffer=N-k
-```
+cosine IVF index. This **completed on the live DB**: `chunk_frames.frame_embedding`
+is **145,175 / 145,175 rows populated (zero nulls)** and indexed by the IVF index
+`frame_embedding_idx`. The earlier vLLM Qwen3-VL image-embed crash (deepstack
+buffer mismatch) is no longer blocking — the image-embed path produced the full
+column.
 
 Current pin is `vllm==0.22.0` / `Qwen3-VL-Embedding-2B` with the server pixel
 budget pinned via `--mm-processor-kwargs '{"min_pixels": 153664, "max_pixels":
-153664}'` (Makefile). Re-verify whether the client-side crop (`_IMAGE_SIDE` in
-`src/raudio/vllm/image.py`) matches that server pin before calling it fixed —
-see [docs/INVESTIGATION.md](docs/INVESTIGATION.md) Part B.
+153664}'` (Makefile), matched by the client-side crop (`_IMAGE_SIDE` in
+`src/raudio/vllm/image.py`) — see [docs/INVESTIGATION.md](docs/INVESTIGATION.md)
+Part B for the history.
 
-**Two options to unblock — both ~80 LOC:**
-
-- **(A)** In-process HF transformers fallback. Load `Qwen3-VL-Embedding-2B` once
-  at backend startup via `transformers`, embed images directly. Slower
-  (~2 s/query) but immune to vLLM internals. Add a second client class in
-  `src/raudio/vllm/` mirroring `VLLMEmbeddingClient.embed_text`/`embed_image`,
-  then wire it into `backend/clients.py` and the `feature` CLI.
-- **(B)** Different vLLM tag once released. Risk: Blackwell sm_120 compat —
-  unknown until tested.
-
-User has not chosen yet. Ask before implementing.
-
-Once frame embeddings exist, `visual` and the frame leg of `all` light up with
-no further backend changes (`backend/search/service.py::_frame_search` already
-queries `chunk_frames.frame_embedding` and joins back to `chunks`).
+`visual` and the frame leg of `all` are now live: `backend/search/service.py::
+_frame_search` queries `chunk_frames.frame_embedding` and joins back to `chunks`
+by `(doc_id, speech_id, chunk_id)`.
 
 ---
 
@@ -95,12 +78,12 @@ queries `chunk_frames.frame_embedding` and joins back to `chunks`).
 `backend/search/service.py::_frame_search` runs the `visual` / `all` frame leg
 against `chunk_frames.frame_embedding`, then joins back to `chunks` by
 `(doc_id, speech_id, chunk_id)` for text/timestamps/metadata, preserving the
-frame-distance ranking. The legacy all-NULL `chunks.frame_*` columns are gone
-from `CHUNK_SCHEMA`, and `/api/chunk-frame` reads only the `chunk_frames` table.
-Degrades to `[]` until frames are embedded.
+frame-distance ranking. `/api/chunk-frame` reads only the `chunk_frames` table.
 
-**Still gated** on the frame *data* (blockers #1–#2): the happy path is
-unverified end to end — only the graceful-empty path is exercised today.
+**Live end to end:** with `chunk_frames.frame_embedding` populated + indexed
+(145,175 rows), the visual happy path is exercised — not just the graceful-empty
+fallback. The `caption_embedding` (scene) leg still degrades to `[]` until
+captions are built (see [Open work: captions](#open-work-captions-scene-search)).
 
 ### 📋 `/api/health` should report `chunk_frames` state
 
@@ -110,6 +93,38 @@ table list, and `chunks` / `documents` row counts, plus embed/rerank pings.
 logs it). Surface a `chunk_frames` row count + `has_embeddings` boolean in the
 health payload and render it in `frontend/src/lib/components/status-badge.svelte`
 (which today shows only tables/chunks/documents). ~6 LOC each side.
+
+---
+
+## Open work: captions (scene search)
+
+The genuinely-missing cross-modal piece. The `scene` and `scene_fts` search
+modes are wired in code but return **empty** on the live DB because
+`chunk_frames` has no `caption` / `caption_embedding` column yet — its columns
+are `doc_id, speech_id, chunk_id, frame_idx, frame_blob, frame_mime,
+frame_width, frame_height, frame_embedding`. The frame JPEGs and their image
+vectors (`frame_embedding`) already exist; what's left is to *describe* each
+frame in Swedish and embed that description.
+
+### 📋 Run `make captions` to build `caption` + `caption_embedding`
+Two-stage, resumable, reuses the existing frames (never re-extracts):
+
+```bash
+make captions   # = caption-chunk-frames + embed-captions
+```
+
+- **`caption-chunk-frames`** (`raudio feature caption`) generates a Swedish
+  caption per frame from `frame_blob` into `chunk_frames.caption`. **Needs the
+  Gemma server (a generative VLM, Gemma 4) running on `:8003`** (`CAPTION_URL` in
+  the Makefile) — *not* the embed/rerank servers.
+- **`embed-captions`** (`raudio feature caption_embedding`) embeds
+  `chunk_frames.caption` into the shared 2048-d space as `caption_embedding`
+  (+ IVF index) using the embed server on `:8001`.
+
+Once both columns exist, `scene` (cosine over `caption_embedding`), `scene_fts`
+(BM25 over `caption`), and the caption leg of `all` light up with no further
+backend changes — `backend/search/service.py::_frame_search` already queries
+`caption_embedding` and the `scene_fts` BM25 path is in place.
 
 ---
 
@@ -137,17 +152,14 @@ with the existing loading state in `+page.svelte`.
 
 ## Cleanup / hygiene
 
-### 📋 Drop the dead `frame_*` columns from an *existing* `chunks` dataset
-`CHUNK_SCHEMA` no longer declares any `frame_*` columns and the backend never
-reads them, so **new** ingests are clean. An **existing** dataset built with the
-old schema still carries the (all-NULL) columns — drop them in place:
-
-```python
-import lance
-ds = lance.dataset("./transcripts.lance/chunks.lance")
-ds.drop_columns(["frame_blob", "frame_mime", "frame_width",
-                 "frame_height", "frame_embedding"])
-```
+### ✅ No dead `frame_*` columns on `chunks`
+The `chunks` table carries exactly **two** vector columns and both are live:
+`text_embedding` (transcript text, indexed `text_embedding_idx`) and
+`frame_embedding` (a CHUNK-LEVEL 2048-d image vector that backs the visual
+image-atlas — populated on the live DB, *not* dead). The per-frame blob/mime/
+size data lives in the separate `chunk_frames` table, not on `chunks`. There is
+nothing to drop here — do **not** run `drop_columns(["frame_embedding", ...])`
+against `chunks`, it would delete the visual-atlas vector.
 
 ### 📋 `make compact` after multi-stage writes
 `extract-chunk-frames` lands many small fragments and `feature frame_embedding`
@@ -193,11 +205,14 @@ query, different filters) skip the ~50 ms vLLM RTT. Images stay uncached (each
 upload is unique).
 
 ### 📋 Run the legs of `hybrid` / `all` concurrently
-`mode=all` issues FTS + text-vector + frame-vector sequentially before RRF
-(`run_search`'s `all` branch); `hybrid` is fused natively by Lance so it's
-already one call. The three `all` legs are independent — overlap them with
-`asyncio.gather` + `run_in_executor` (Lance is sync). Pairs with the async-client
-item under [vLLM perf](#vllm-performance).
+`mode=all` issues up to four legs sequentially before RRF (`run_search`'s `all`
+branch): FTS (`text`) + text-vector (`text_embedding`) + frame-vector
+(`frame_embedding`; the image vec if an image is attached, else the text vec) +
+caption/scene-vector (`caption_embedding`). `hybrid` is fused natively by Lance
+so it's already one call. The `all` legs are independent and unioned by chunk via
+`_rrf_fuse` (k=60, 0-indexed rank, score = sum of `1/(60+rank)`) — overlap them
+with `asyncio.gather` + `run_in_executor` (Lance is sync). Pairs with the
+async-client item under [vLLM perf](#vllm-performance).
 
 ### 📋 Default the cross-encoder rerank off in the UI
 The cross-encoder (`Qwen3-VL-Reranker-2B`) adds ~200–500 ms when toggled on.
@@ -208,8 +223,9 @@ slower."
 
 ### 📋 (Stretch) Try `IVF_HNSW_SQ` for the frame-embedding index
 Better recall at the cost of memory; might let `nprobes` stay low and end up
-faster overall on `frame_embedding`. Worth a one-shot benchmark after frames are
-embedded.
+faster overall on `frame_embedding`. Now actionable — `frame_embedding` is built
+and indexed (currently IVF_PQ `frame_embedding_idx`); worth a one-shot benchmark
+against an `IVF_HNSW_SQ` rebuild.
 
 ```python
 ds.create_index("frame_embedding", index_type="IVF_HNSW_SQ",
@@ -221,7 +237,7 @@ ds.create_index("frame_embedding", index_type="IVF_HNSW_SQ",
 ```bash
 uv run python -c "
 import time, lancedb, numpy as np
-t = lancedb.connect('./transcripts.lance').open_table('chunks')
+t = lancedb.connect('./transcripts_v2.lance').open_table('chunks')  # populated DB (default ./transcripts.lance is empty)
 q = np.random.randn(2048).astype('float32')
 t.query().nearest_to(q).limit(20).to_list()  # warmup
 n, total = 50, 0
@@ -269,9 +285,13 @@ curl -s http://127.0.0.1:8001/metrics | grep -E "vllm_(time_to_first_token|e2e_r
 - `vllm_gpu_cache_usage_perc` — > 0 if prefix caching helps
 - `vllm_request_queue_time_seconds_*` — ~0 for a single-user demo
 
-### 📋 Confirm the embed server has its GPU to itself
-Embed runs on GPU 2, rerank on GPU 1 (`EMBED_GPU` / `RERANK_GPU` in the
-Makefile). Confirm they aren't co-resident during memory profiling:
+### 📋 Watch the shared-GPU memory budget (both servers co-locate)
+By default **both** servers run on the **same** GPU: `VLLM_GPU ?= 0`,
+`EMBED_GPU ?= $(VLLM_GPU)`, `RERANK_GPU ?= $(VLLM_GPU)`, each capped at
+`EMBED_MEM_FRAC ?= 0.45` / `RERANK_MEM_FRAC ?= 0.45` (both 2B models fit a 96 GB
+card, ~88 GB combined). Start them **sequentially** to avoid the memory-profiling
+race. Confirm the split (or move one to another GPU via `EMBED_GPU=` /
+`RERANK_GPU=`) with:
 
 ```bash
 nvidia-smi --query-gpu=index,memory.used --format=csv,noheader
@@ -289,17 +309,14 @@ structured output / sampling penalties, neither of which we use).
 
 ---
 
-## Backup plan (if `chunk_frames` blocks indefinitely)
+## Backup plan (moot — the Lance frame path succeeded)
 
-If the Lance/vLLM frame path keeps misbehaving, fall back to plain disk:
-
-```
-./frames/{doc_id}/{speech_id}-{chunk_id}.jpg
-```
-
-Backend serves them via `FileResponse`; embeddings go into a separate
-`chunk_frame_embeddings.lance` table (keys + 2048-d vector only — no extension
-types, no `merge_insert`). ~15 min to implement.
+This was the fallback if the Lance/vLLM frame path kept misbehaving: store frames
+on plain disk at `./frames/{doc_id}/{speech_id}-{chunk_id}.jpg`, serve via
+`FileResponse`, and put embeddings in a separate `chunk_frame_embeddings.lance`
+table. **No longer needed** — `chunk_frames.frame_embedding` built end to end in
+Lance (145,175 rows, indexed), so frames live in the `chunk_frames` table as
+designed. Kept here only as historical context.
 
 ---
 

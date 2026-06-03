@@ -25,17 +25,31 @@ input/sv/*.mp4                 ← source videos
         │
    thumbnail                   → thumbnails/{stem}.jpg           (one per doc)
         │
-   ingest-full                 → transcripts.lance/chunks        (FTS + metadata)
-                                 transcripts.lance/documents     (media + thumbnail blobs)
+   ingest-full                 → <DB>/chunks                     (FTS + metadata)
+                                 <DB>/documents                  (media + thumbnail blobs)
+        │   (<DB> = $(DB), Makefile default ./transcripts.lance — but the LIVE,
+        │    served dataset on this machine is transcripts_v2.lance; the default
+        │    ./transcripts.lance is an EMPTY manifest with no tables)
         │
    embed-chunks                → chunks.text_embedding           (Qwen3-VL → 2048-d)
-   extract-chunk-frames        → transcripts.lance/chunk_frames  (separate table, append-only)
+   extract-chunk-frames        → <DB>/chunk_frames               (separate table, append-only)
                                    ↳ keyed (doc_id, speech_id, chunk_id, frame_idx) — N frames/chunk,
                                      frame_idx=0 is the representative frame
                                    ↳ frame_blob (Blob V2 Inline ~50 KB JPEG)
                                    ↳ frame_mime, frame_width, frame_height
    embed-chunk-frames          → chunk_frames.frame_embedding    (Qwen3-VL on each frame,
                                                                   via dataset.add_columns)
+        │   chunks ALSO carries (so it has TWO vector columns):
+        │     ↳ text_embedding (2048) + frame_embedding (2048, chunk-level image
+        │       vector, frame_idx=0, for the image atlas)
+        │     ↳ atlas_x/atlas_y/atlas_cluster        (text-space EVōC projection)
+        │     ↳ atlas_img_x/atlas_img_y/atlas_img_cluster (visual-space EVōC projection)
+        │
+   make captions               → chunk_frames.caption            (Gemma 4 Swedish captions,
+   (caption + caption_embedding)                                  via your VLM on :8003)
+                                 chunk_frames.caption_embedding   (Qwen3-VL → 2048-d, scene search)
+                                   ↳ powers mode=scene (caption-vector) + mode=scene_fts (caption BM25)
+                                   ↳ NOT built on the live DB yet → scene/scene_fts return EMPTY
         │
    make backend                → FastAPI on :8000 (/api/*)
    make frontend               → SvelteKit + Bun proxy on :3000
@@ -52,15 +66,17 @@ adds the `frame_embedding` column via `dataset.add_columns(...)` — no JOIN, no
 
 ### Search modes
 
-The API exposes five modes (`backend/search/spec.py:SearchMode`):
+The API exposes seven modes (`backend/search/spec.py:SearchMode`):
 
 | `mode` | what it matches | requires |
 |---|---|---|
 | `fts` | BM25 keyword search over `chunks.text` (Tantivy + Swedish stemmer) | `chunks.text` |
 | `semantic` | cosine over `chunks.text_embedding` (text-vector) | `embed-chunks` run |
 | `visual` | cosine over `chunk_frames.frame_embedding` (frame-vector), joined back to chunks; query is text *or* image | frames + embeddings |
+| `scene` | cosine over `chunk_frames.caption_embedding` (Swedish-caption text-vector), joined back to chunks | `make captions` run |
+| `scene_fts` | BM25 keyword search over `chunk_frames.caption` (Swedish captions), joined back to chunks | `make captions` run |
 | `hybrid` | `fts` + `semantic`, fused | both |
-| `all` | `fts` + `semantic` + `visual`, fused (3-way) | everything |
+| `all` | `fts` + `semantic` + `visual` + `scene`, fused (up to 4-way) | everything |
 
 The frontend chooses the mode automatically: the Keyword / Vector / Hybrid
 selector maps to `fts` / `semantic` / `hybrid`; attaching an image switches to
@@ -69,10 +85,14 @@ selector maps to `fts` / `semantic` / `hybrid`; attaching an image switches to
 **Fusion.** Reciprocal-rank fusion (RRF, k=60) is the default and the only
 option that scales past two legs — each leg returns a ranked list and a
 candidate scores the sum of `1/(k+rank)` over the lists it appears in. The
-3-way `all` mode *always* uses equal-weight RRF. The 2-way `hybrid` mode uses
-RRF by default, but switches to a `LinearCombinationReranker(weight)` blend
-(`final = weight·vectorScore + (1−weight)·ftsScore`) when the Balance slider
-sets `weight`. There is no per-leg weight for `all` yet.
+`all` mode fuses up to four independent legs — FTS(text) + text-vector
+(`text_embedding`) + frame-vector (`frame_embedding`; the image vector if an
+image is attached, otherwise the text vector) + caption/scene-vector
+(`caption_embedding`) — always with equal-weight RRF (legs are unioned by
+chunk, not chained). The 2-way `hybrid` mode uses RRF by default, but switches
+to a `LinearCombinationReranker(weight)` blend (`final = weight·vectorScore +
+(1−weight)·ftsScore`) when the Balance slider sets `weight`. There is no
+per-leg weight for `all` yet.
 
 **Cross-encoder rerank** (`rerank=true`, optional). This does *not* replace the
 fusion step. After fusion, the Qwen3-VL cross-encoder re-scores only the top
@@ -90,6 +110,7 @@ lance-audio-demo/
 ├── backend/                   FastAPI package: app.py (create_app), state.py, deps.py,
 │   ├── search/                spec.py (SearchSpec), service.py (run_search), router.py
 │   ├── media/                 blobs.py + router.py (thumbnail, chunk-frame, Range-streamed media)
+│   ├── atlas/                 router.py (read-only /api/atlas/* feeding the scatter-plot map)
 │   └── system/                router.py (health, columns, documents)
 ├── frontend/                  SvelteKit + Svelte 5 + Tailwind v4 viewer (main UI)
 │   ├── src/                   routes + components + bits-ui (shadcn-style) ui/ kit
@@ -104,10 +125,12 @@ lance-audio-demo/
 │   ├── vllm/                  HTTP clients to remote vLLM servers: embedding.py, reranker.py,
 │   │                          caption.py, summarize.py, image.py, base.py (transport)
 │   ├── features/              data-evolution engine.py + columns.py (FEATURES registry)
+│   │                          + projection.py (EVōC atlas fit for the 'atlas'/'atlas_visual' features)
 │   └── retrieval/             FTS + query helpers (search.py) + qwen3_vl_reranker.jinja
 ├── Makefile                   end-to-end developer commands
-├── pyproject.toml             uv-managed Python deps (+ [multimodal] extra)
-└── transcripts.lance/         Lance dataset (gitignored — local only)
+├── pyproject.toml             uv-managed Python deps (+ [multimodal] and [atlas] extras)
+└── transcripts.lance/         Lance dataset (gitignored — local only; the populated
+                               one on this machine is transcripts_v2.lance)
 ```
 
 Import paths follow the package layout: `raudio.vllm.embedding`,
@@ -138,8 +161,15 @@ make pipeline      # transcribe + thumbnail + ingest-full
 make ingest-full
 ```
 
-This populates `transcripts.lance/` with two tables: `documents` (one row per
-video, with thumbnail + media URI) and `chunks` (one row per transcript chunk).
+This populates the dataset at `$(DB)` (Makefile `DB ?= ./transcripts.lance`)
+with two tables: `documents` (one row per video, with thumbnail + media URI) and
+`chunks` (one row per transcript chunk).
+
+> **Heads-up on this machine:** the live, served dataset is
+> `transcripts_v2.lance` (chunks 145,175 rows; documents 1,154; chunk_frames
+> 145,175). The Makefile default `./transcripts.lance` is an **empty manifest
+> with no tables** — point `DB=transcripts_v2.lance` (or `make backend
+> DB=transcripts_v2.lance`) at the populated one.
 
 ### 2. Run the viewer
 
@@ -185,9 +215,29 @@ make embed-chunk-frames            # Qwen3-VL image embeddings → frame_embeddi
 ```
 
 Drag-drop an image onto the search bar to query frames (`mode=visual`); add text
-as well and the request becomes `mode=all` (3-way text + image fusion).
+as well and the request becomes `mode=all` (text + image + scene fusion).
 
-### 5. Reranking (optional)
+### 5. Add scene search (optional)
+
+Requires a generative VLM (Gemma 4) you run yourself on `:8003` (`CAPTION_URL`)
+plus the embedding server. `raudio` is only a *client* of the caption model. Two
+stages, both resumable:
+
+```bash
+make caption-chunk-frames          # POST frames → Gemma → chunk_frames.caption
+                                   # (Swedish captions; wraps `raudio feature caption`)
+make embed-captions                # Qwen3-VL embeds captions → caption_embedding + IVF_PQ
+                                   # (wraps `raudio feature caption_embedding`)
+# OR both in one go:
+make captions
+```
+
+This lights up `mode=scene` (caption-vector) and `mode=scene_fts` (caption BM25),
+and adds the scene leg to `mode=all`. Until captions are built, both scene modes
+return empty. (On the live DB this is the genuinely-open piece —
+`frame_embedding` is already built end-to-end and indexed.)
+
+### 6. Reranking (optional)
 
 ```bash
 make rerank-server-docker          # Qwen3-VL-Reranker-2B on :8002
@@ -217,11 +267,13 @@ backend  →  json hits  →  frontend renders list
 browser  →  GET /api/search?q=klimat&mode=hybrid
 backend  →  vLLM /v1/embeddings (Qwen-VL chat shape, system="Represent the user's input.")
               ↳ Qwen3-VL embedding (full 2048-d, no Matryoshka truncation), L2-normalized
-backend  →  chunks.search(query_type="hybrid")
+backend  →  chunks.search(query_type="hybrid", vector_column_name="text_embedding")
                   .vector(text_vec).text(MatchQuery(q, "text"))
                   .rerank(RRFReranker() | LinearCombinationReranker(weight))
                   .nprobes(20).refine_factor(3).limit(n)
               ↳ Lance-native FTS + text-vector hybrid, fused by RRF (or the Balance slider)
+              ↳ vector_column_name is required — chunks has TWO vector columns
+                (text_embedding + a chunk-level frame_embedding)
 backend  →  json hits  →  frontend
 ```
 
@@ -251,25 +303,30 @@ backend  →  documents table → media_blob (Blob V2 External URI → MP4 on di
 ## Inspect the dataset directly
 
 ```bash
+# Use the populated dataset — ./transcripts.lance is empty on this machine.
+DB=transcripts_v2.lance
+
 # chunks table (text + metadata)
 uv run python -c "
 import lancedb
-t = lancedb.connect('./transcripts.lance').open_table('chunks')
+t = lancedb.connect('$DB').open_table('chunks')
 print('chunks rows         :', t.count_rows())
 print('text_embedding NULL :', t.count_rows('text_embedding IS NULL'))
 "
 
-# chunk_frames table (per-chunk JPEG + frame embedding)
+# chunk_frames table (per-chunk JPEG + frame/caption embeddings)
 uv run python -c "
 import lance, pathlib
-p = pathlib.Path('./transcripts.lance/chunk_frames.lance')
+p = pathlib.Path('$DB/chunk_frames.lance')
 if not p.exists():
     print('chunk_frames not yet created — run extract-chunk-frames first.')
 else:
     ds = lance.dataset(str(p))
-    print('chunk_frames rows  :', ds.count_rows())
-    print('schema cols        :', ds.schema.names)
-    print('has frame_embedding:', 'frame_embedding' in ds.schema.names)
+    print('chunk_frames rows   :', ds.count_rows())
+    print('schema cols         :', ds.schema.names)
+    print('has frame_embedding :', 'frame_embedding' in ds.schema.names)
+    print('has caption         :', 'caption' in ds.schema.names)            # scene_fts
+    print('has caption_embedding:', 'caption_embedding' in ds.schema.names)  # scene
 "
 ```
 
@@ -284,13 +341,17 @@ query against.)
 | Endpoint | What it does |
 |---|---|
 | `GET /api/health` | Reports DB path / table list / row counts; pings the vLLM embed + rerank servers |
-| `GET /api/search?q=…&mode=fts\|semantic\|hybrid&n=20` | Text search (query string) |
+| `GET /api/search?q=…&mode=fts\|semantic\|hybrid\|scene\|scene_fts&n=20` | Text search (query string) |
 | `POST /api/search` (multipart, `image=…`, `mode=visual\|all`) | Image / cross-modal search |
 | `GET /api/columns` | Filterable scalar columns of `chunks` (name + friendly type) |
 | `GET /api/documents?page=1&per_page=24` | Paginated browse |
 | `GET /api/thumbnail/{doc_id}` | Document thumbnail (Blob V2 Inline) |
 | `GET /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}?frame_idx=N` | Chunk frame (Blob V2 Inline; `frame_idx=0` is the representative frame) |
 | `GET /api/media/{doc_id}` | Stream the MP4 (Blob V2 External, HTTP Range supported) |
+| `GET /api/atlas/status?space=text\|visual` | Which projection spaces are built + the space's projected row count |
+| `GET /api/atlas/points?space=text\|visual` | Compact coord/cluster/language/namn arrays + doc-id keys for the scatter map |
+| `GET /api/atlas/chunk/{doc_id}/{speech_id}/{chunk_id}` | Full hit for one chunk (lazy-fetched on hover/select) |
+| `POST /api/atlas/chunks` (`{"keys": [[doc_id, speech_id, chunk_id], …]}`) | Full hits for a lasso/box selection (capped 1000 keys) |
 
 `SearchSpec` fields: `q` (FTS/keyword text), `q_vec` (separate text for the
 vector leg; falls back to `q`), `n` (results, default 20, clamped 1..200),
@@ -360,8 +421,8 @@ commands (the HF kernels API changed); the bundled FlashAttention 2 works.
   is speaking.
 - **The reranker is text-only** — it scores transcript text against the query
   and ignores the image and the vectors.
-- **3-way `all` fusion is equal-weight RRF** — there is no image-vs-text weight
-  yet (the Balance slider only applies to 2-way `hybrid`).
+- **`all` fusion (up to 4 legs) is equal-weight RRF** — there is no per-leg
+  weight yet (the Balance slider only applies to 2-way `hybrid`).
 
 ---
 

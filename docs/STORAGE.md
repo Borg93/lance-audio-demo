@@ -10,10 +10,10 @@
 
 Everything raudio stores — transcript text, metadata, word alignments, two
 families of 2048-d embeddings, JPEG thumbnails, per-chunk video frames, and the
-URIs of the source MP4s — lives in **one Lance dataset directory**,
-`transcripts.lance/`. There are no sidecar JSON files and no disk walks at query
-time. This is only possible because raudio leans on four specific **Lance file
-format 2.2** capabilities:
+URIs of the source MP4s — lives in **one Lance dataset directory** (the live one
+on this machine is `transcripts_v2.lance/`; see [§1](#1-the-three-tables)). There
+are no sidecar JSON files and no disk walks at query time. This is only possible
+because raudio leans on four specific **Lance file format 2.2** capabilities:
 
 | Feature | What it buys raudio | Where |
 |---|---|---|
@@ -57,6 +57,9 @@ erDiagram
         string text "FTS-indexed (Tantivy BM25)"
         json alignments_json "JSONB word alignments"
         vector text_embedding "2048-d, IVF_PQ cosine"
+        vector frame_embedding "2048-d chunk-level image vec (image-atlas)"
+        float atlas_x "text-space EVoC layout (+ atlas_y, atlas_cluster)"
+        float atlas_img_x "visual-space EVoC layout (+ atlas_img_y, atlas_img_cluster)"
         string namn "denormalised metadata: referenskod, namn, bildid, extraid"
     }
 
@@ -74,10 +77,16 @@ erDiagram
 ```
 
 All three are physical Lance datasets under one directory:
-`transcripts.lance/{chunks,documents,chunk_frames}.lance`. They are joined **only
+`<db>.lance/{chunks,documents,chunk_frames}.lance`. They are joined **only
 by key columns**, never by a stored foreign-key relation — the backend resolves
 keys to stable row ids with SQL filters (`_rowid_for_filter`, `rowid_for_doc_id`
 in [`backend/media/blobs.py`](../backend/media/blobs.py)).
+
+> **Which DB is live** — the Makefile default is `DB ?= ./transcripts.lance`,
+> but on this machine that directory is an **empty manifest with no tables**. The
+> populated, served dataset is **`transcripts_v2.lance/`** (chunks = 145,175 rows;
+> documents = 1,154; chunk_frames = 145,175). Point the backend/CLI at it with
+> `DB=./transcripts_v2.lance`.
 
 ### The keys
 
@@ -107,6 +116,19 @@ media the DB holds. Notable columns:
   attaches it after ingest with `dataset.add_columns(...)` (Lance data
   evolution, via `upsert_scan_column` in `raudio.features.engine`), so ingest
   never writes a placeholder column.
+- `frame_embedding` (`FixedSizeList<float32, 2048>`, nullable) — a **second
+  vector column**, the *chunk-level* image vector for the image-atlas. It is the
+  representative-frame vector joined from `chunk_frames` (`raudio feature
+  atlas_visual` for the visual atlas, via `chunk_frame_embedding_column`),
+  so `chunks` carries **two** vector columns. (The IVF index lives on the
+  `chunk_frames` copy; the `chunks` copy is the source for the visual atlas
+  projection, not an indexed search column.)
+- `atlas_x` / `atlas_y` / `atlas_cluster` (text-space) and `atlas_img_x` /
+  `atlas_img_y` / `atlas_img_cluster` (visual-space) — six EVōC projection
+  columns for the Atlas view. The text triplet is written by `raudio feature
+  atlas` from `text_embedding`; the visual triplet by `raudio feature
+  atlas_visual` (= `raudio feature atlas --space visual`) from the chunk-level
+  `frame_embedding`. See [`src/raudio/features/projection.py`](../src/raudio/features/projection.py).
 
 Riksarkivet archival metadata (`referenskod`, `namn`, `bildid`, `extraid`) is
 **denormalised** onto every chunk row so retrieval needs no join — the search
@@ -308,10 +330,12 @@ flowchart LR
     subgraph chunks_table["chunks.lance"]
         T["text (string)"]
         TE["text_embedding (2048-d)"]
+        FE["frame_embedding (2048-d, chunk-level)<br/>image-atlas source, not indexed here"]
         DI["doc_id, audio_path"]
     end
     T -->|"create_fts_index"| FTS["Tantivy FTS<br/>BM25, Swedish stemmer<br/>with_position=True"]
     TE -->|"create_index IVF_PQ"| ANN["IVF_PQ cosine<br/>num_partitions=256<br/>num_sub_vectors=64"]
+    FE -.->|"raudio feature atlas_visual"| ATL["atlas_img_* (EVōC layout)"]
     DI -->|"create_scalar_index BTREE"| BT["BTREE scalar<br/>(key lookups)"]
     FTS --> Q1["mode=fts (BM25)"]
     ANN --> Q2["mode=semantic"]
@@ -319,9 +343,14 @@ flowchart LR
     ANN --> Q3
 ```
 
-(The `frame_embedding` IVF_PQ index on `chunk_frames` backs `mode=visual` and the
-frame leg of `mode=all`; see [EMBEDDINGS.md](EMBEDDINGS.md) for the full
-search-mode map.)
+`SearchMode` (`backend/search/spec.py`) has **seven** modes:
+`fts`, `semantic`, `visual`, `scene`, `scene_fts`, `hybrid`, and `all`. The
+`frame_embedding` IVF_PQ index on `chunk_frames` backs `mode=visual` and the
+frame leg of `mode=all`. The caption-backed modes — `scene` (cosine over
+`chunk_frames.caption_embedding`) and `scene_fts` (BM25 over
+`chunk_frames.caption`) — exist in code but return **empty** until captions are
+built (`make captions`), since the live DB has no `caption`/`caption_embedding`
+column yet. See [EMBEDDINGS.md](EMBEDDINGS.md) for the full search-mode map.
 
 ### Tantivy full-text (BM25)
 
@@ -421,6 +450,9 @@ candidates with full-precision vectors. The history of this gotcha (and the
 |---|---|---|---|
 | `chunks.text` | Tantivy FTS | BM25 inverted index | `create_fts_index` (ingest / `raudio reindex-fts`) |
 | `chunks.text_embedding` | Vector index | IVF_PQ cosine, 2048-d | `raudio feature text_embedding` (`add_columns`) → `ensure_vector_index` |
+| `chunks.frame_embedding` | Column (data evolution) | 2048-d chunk-level image vec (image-atlas; not indexed on `chunks`) | `raudio feature atlas_visual` (`chunk_frame_embedding_column`, `add_columns`) |
+| `chunks.atlas_x` / `atlas_y` / `atlas_cluster` | Column (data evolution) | float / int32 (text-space EVōC) | `raudio feature atlas` (`add_columns`) |
+| `chunks.atlas_img_x` / `atlas_img_y` / `atlas_img_cluster` | Column (data evolution) | float / int32 (visual-space EVōC) | `raudio feature atlas_visual` (`add_columns`) |
 | `chunks.alignments_json` | JSONB | `pa.json_()` | `flatten_chunks` (`json.dumps`) |
 | `chunks.doc_id`, `audio_path` | Scalar index | BTREE | `create_scalar_index` |
 | `documents.media_blob` | Blob V2 | **External** (URI) | `_write_documents_table` (`blob_array`) |

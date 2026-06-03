@@ -3,9 +3,10 @@
   import type { Snippet } from 'svelte';
 
   /**
-   * Two-pane horizontal split with a draggable divider in the middle.
-   * The split fraction (0..1) is persisted to localStorage so the user's
-   * choice survives reloads.
+   * Two-pane split with a draggable divider. `orientation='horizontal'` lays the
+   * panes side-by-side (left|right); `'vertical'` stacks them (left=top,
+   * right=bottom). The split fraction (0..1, of the first pane) is persisted to
+   * localStorage so the user's choice survives reloads.
    */
 
   type Props = {
@@ -13,11 +14,14 @@
     right: Snippet;
     /** Storage key — change to keep separate splits across pages. */
     storageKey?: string;
-    /** Initial fraction of the LEFT pane width, 0..1. */
+    /** Initial fraction of the FIRST pane (left/top), 0..1. */
     initial?: number;
-    /** Hard limits. */
+    /** Hard min size (px, along the split axis) of the first pane. */
     minLeft?: number;
+    /** Hard min size (px, along the split axis) of the second pane. */
     minRight?: number;
+    /** Split axis: side-by-side or stacked. */
+    orientation?: 'horizontal' | 'vertical';
   };
   let {
     left,
@@ -26,7 +30,10 @@
     initial = 0.6,
     minLeft = 360,
     minRight = 320,
+    orientation = 'horizontal',
   }: Props = $props();
+
+  const vertical = $derived(orientation === 'vertical');
 
   let container = $state<HTMLDivElement | null>(null);
   // Read `initial` once at component creation; `fraction` is the live state.
@@ -55,11 +62,11 @@
   function onPointerMove(e: PointerEvent) {
     if (!dragging || !container) return;
     const rect = container.getBoundingClientRect();
-    const total = rect.width;
-    const x = e.clientX - rect.left;
+    const total = vertical ? rect.height : rect.width;
+    const pos = vertical ? e.clientY - rect.top : e.clientX - rect.left;
     const minF = minLeft / total;
     const maxF = 1 - minRight / total;
-    fraction = Math.max(minF, Math.min(maxF, x / total));
+    fraction = Math.max(minF, Math.min(maxF, pos / total));
   }
 
   function onPointerUp(e: PointerEvent) {
@@ -83,8 +90,10 @@
 <div
   bind:this={container}
   class="grid h-full min-h-0"
-  style:grid-template-columns="{(fraction * 100).toFixed(2)}% 6px 1fr"
-  class:cursor-col-resize={dragging}
+  style:grid-template-columns={vertical ? undefined : `${(fraction * 100).toFixed(2)}% 6px 1fr`}
+  style:grid-template-rows={vertical ? `${(fraction * 100).toFixed(2)}% 6px 1fr` : undefined}
+  class:cursor-col-resize={dragging && !vertical}
+  class:cursor-row-resize={dragging && vertical}
   class:select-none={dragging}
 >
   <div class="min-h-0 overflow-hidden">{@render left()}</div>
@@ -97,16 +106,27 @@
     onpointerup={onPointerUp}
     ondblclick={onDoubleClick}
     onkeydown={(e) => {
-      if (e.key === 'ArrowLeft') fraction = Math.max(0.2, fraction - 0.02);
-      if (e.key === 'ArrowRight') fraction = Math.min(0.8, fraction + 0.02);
+      const dec = vertical ? 'ArrowUp' : 'ArrowLeft';
+      const inc = vertical ? 'ArrowDown' : 'ArrowRight';
+      if (e.key === dec) fraction = Math.max(0.2, fraction - 0.02);
+      if (e.key === inc) fraction = Math.min(0.8, fraction + 0.02);
     }}
     title="Drag to resize · double-click to reset"
-    class="group relative flex cursor-col-resize items-center justify-center border-x border-border bg-secondary/40
+    class="group relative flex items-center justify-center border-border bg-secondary/40
            transition-colors hover:bg-primary/30 active:bg-primary/40
            focus-visible:bg-primary/40 focus-visible:outline-none"
+    class:cursor-col-resize={!vertical}
+    class:cursor-row-resize={vertical}
+    class:border-x={!vertical}
+    class:border-y={vertical}
   >
     <!-- Persistent grip dots so it's obvious the bar is draggable -->
-    <span aria-hidden="true" class="flex flex-col gap-0.5 text-muted-foreground/70 group-hover:text-foreground">
+    <span
+      aria-hidden="true"
+      class="flex gap-0.5 text-muted-foreground/70 group-hover:text-foreground"
+      class:flex-col={!vertical}
+      class:flex-row={vertical}
+    >
       <span class="size-0.5 rounded-full bg-current"></span>
       <span class="size-0.5 rounded-full bg-current"></span>
       <span class="size-0.5 rounded-full bg-current"></span>

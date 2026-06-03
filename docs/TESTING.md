@@ -30,9 +30,10 @@ by testing the *pure* helper they delegate to (e.g. `_jpeg_dimensions`,
 
 Both halves of the system are now covered:
 
-- **Read / query** — search-mode routing, RRF fusion, the cross-encoder rerank
-  head, SQL-filter composition, HTTP Range streaming, and the lazy vLLM client
-  / DI seam.
+- **Read / query** — search-mode routing across all seven modes (`fts`,
+  `semantic`, `visual`, `scene`, `scene_fts`, `hybrid`, `all`), RRF fusion, the
+  cross-encoder rerank head, SQL-filter composition, HTTP Range streaming, and
+  the lazy vLLM client / DI seam.
 - **Write / ingest** — the transcriber-JSON → Lance transform (`flatten_chunks`,
   `_pick_alignments`), a full ingest round-trip, idempotent re-ingest, and the
   `add_columns` feature pipeline (text/frame embeddings, summary, caption).
@@ -97,7 +98,7 @@ dogfood the real writers instead of hand-rolling Arrow tables.
 | `test_detect_language.py` | `_plan_sample_starts`, pure math | Windows spread across the whole file, never run past EOF, short-file collapse to a single start, non-positive duration safe. |
 | `test_backend_clients.py` | Lazy vLLM accessors + DI seam | `ensure_embedder` / `ensure_reranker` cache-then-construct; construction failure maps to **503**; `get_embedder` / `get_reranker` / `get_state` bind to `app.state.resources`. Uses the documented monkeypatch seam (the deferred `raudio.vllm.*` imports inside the accessors). |
 | `test_backend_search.py` | Search modes, no GPU | Injects `FakeEmbedClient` so `semantic` / `visual` / `hybrid` / `all` actually run the real `LanceTable.search()` chain (the sync `.search()` vs async-only `.query()` path). Semantic ranks the planted nearest; GET and POST both covered; `all` + rerank runs. |
-| `test_backend_service.py` | `run_search` error & degradation branches | Against a real chunks table with **no** embedding columns: `semantic`/`hybrid`-without-embeddings → 400, `hybrid`-without-text → 400, `visual`-without-frames → empty, `all`-without-embeddings falls back to FTS, `_vector_search`/`_frame_search` missing-column → empty, `_postprocess_hits` parses + pops `alignments_json`. The reranker getter raises if touched — none of these paths should construct it. |
+| `test_backend_service.py` | `run_search` error & degradation branches | Against a real chunks table with **no** embedding columns: `semantic`/`hybrid`-without-embeddings → 400, `hybrid`-without-text → 400, `visual`-without-frames → empty, `all`-without-embeddings falls back to FTS, `_vector_search`/`_frame_search` missing-column → empty, `_postprocess_hits` parses + pops `alignments_json`. The reranker getter raises if touched — none of these paths should construct it. A `TestSceneSearch` class additionally builds a captioned tmp dataset (`caption` + `caption_embedding` via offline fakes) to cover the scene legs: `scene` ranks frames over `caption_embedding` and joins back to chunks, `scene_fts` runs BM25 over the `caption` text, captions ride along on every mode's hits, and both scene modes degrade to `[]` (not a 500) when frames/captions are absent. |
 | `test_backend_media.py` | Media endpoints, real Blob V2 | Builds a tmp documents table with an External `media_blob` URI + Inline `thumbnail`, mirroring ingest. Covers thumbnail inline JPEG, full + ranged (206) + suffix + unsatisfiable (416) media GETs, invalid-doc-id 400, and `chunk-frame` (404 until frames exist, `frame_idx` selection). |
 | `test_backend_smoke.py` (dataset-gated) | Real corpus end-to-end | Skips cleanly without `transcripts.lance/chunks.lance`. Asserts real contracts: health DB facts, FTS hits, empty-query→empty, unknown mode→**400/422**, semantic-without-vLLM→**503 not 500**, documents pagination, thumbnail + media Range round-trip, invalid doc-id→400. |
 

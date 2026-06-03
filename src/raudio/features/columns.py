@@ -10,11 +10,13 @@ CLI is a thin loop over this dict, so adding a column is one entry here.
 
 from __future__ import annotations
 
+import logging
+
 # Path + Callable are imported at runtime (not under TYPE_CHECKING) because the
 # Pydantic ``Feature`` model resolves its ``run`` field annotation at class-build time.
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyarrow as pa
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
     from ..vllm.caption import CaptionClient
     from ..vllm.embedding import EmbeddingClient
     from ..vllm.summarize import SummarizeClient
+
+logger = logging.getLogger(__name__)
 
 TEXT_EMBED_COLUMN = "text_embedding"
 FRAME_EMBED_COLUMN = "frame_embedding"
@@ -65,7 +69,9 @@ def embed_text_column(
     """Attach ``text_embedding`` (2048-d) to the chunks table from ``text``."""
 
     def compute(batch: pa.RecordBatch) -> pa.Array:
-        return _vectors_to_arrow(client.embed_text([t or "" for t in batch.column("text").to_pylist()]))
+        return _vectors_to_arrow(
+            client.embed_text([t or "" for t in batch.column("text").to_pylist()])
+        )
 
     return upsert_scan_column(
         chunks_path,
@@ -120,7 +126,9 @@ def summary_column(
     """Attach a one-line ``summary`` string to the chunks table from ``text``."""
 
     def compute(batch: pa.RecordBatch) -> pa.Array:
-        return pa.array(client.summarize([t or "" for t in batch.column("text").to_pylist()]), pa.string())
+        return pa.array(
+            client.summarize([t or "" for t in batch.column("text").to_pylist()]), pa.string()
+        )
 
     return upsert_scan_column(
         chunks_path,
@@ -208,6 +216,90 @@ def embed_caption_column(
     )
 
 
+def chunk_frame_embedding_column(
+    chunks_path: str | Path,
+    frames_path: str | Path,
+    *,
+    frame_idx: int = 0,
+    batch_rows: int = 4096,
+    overwrite: bool = False,
+    progress: Callable[[int], None] | None = None,
+) -> int:
+    """Attach a CHUNK-level ``frame_embedding`` to ``chunks`` from ``chunk_frames``.
+
+    The visual atlas projects a chunk-level image vector, but ``frame_embedding``
+    lives PER-FRAME on ``chunk_frames`` (keyed by ``…/frame_idx``). This is a
+    pure Lance scan+join — NO re-embedding: it reads the representative frame's
+    (``frame_idx=0``, the same frame the UI/captions/``/chunk-frame`` already
+    treat as canonical) ``frame_embedding`` and attaches it to ``chunks`` keyed
+    on ``(doc_id, speech_id, chunk_id)`` via ``add_columns``.
+
+    Returns the number of chunk rows that received a vector (a chunk with no
+    matching representative frame stays ``NULL``). Raises if ``chunk_frames``
+    lacks ``frame_embedding`` (run ``raudio feature frame_embedding`` first).
+    """
+    import lance
+
+    frames_ds = lance.dataset(str(frames_path))
+    if FRAME_EMBED_COLUMN not in frames_ds.schema.names:
+        raise ValueError(
+            f"'{FRAME_EMBED_COLUMN}' column missing on {frames_path} — run "
+            f"`raudio feature frame_embedding` before the visual atlas."
+        )
+
+    chunks_ds = lance.dataset(str(chunks_path))
+    if FRAME_EMBED_COLUMN in chunks_ds.schema.names:
+        if not overwrite:
+            logger.info(
+                "%s already on chunks — nothing to do (pass overwrite=True)", FRAME_EMBED_COLUMN
+            )
+            return 0
+        chunks_ds.drop_columns([FRAME_EMBED_COLUMN])
+        chunks_ds = lance.dataset(str(chunks_path))
+
+    # Build a {chunk key → representative-frame vector} map from one filtered scan.
+    rep = frames_ds.to_table(
+        columns=[*CHUNK_KEYS, FRAME_EMBED_COLUMN], filter=f"frame_idx = {int(frame_idx)}"
+    )
+    vec_by_key: dict[tuple[Any, int, int], list[float]] = {}
+    docs = rep.column("doc_id").to_pylist()
+    speeches = rep.column("speech_id").to_pylist()
+    chunk_ids = rep.column("chunk_id").to_pylist()
+    vectors = rep.column(FRAME_EMBED_COLUMN).to_pylist()
+    for d, s, c, v in zip(docs, speeches, chunk_ids, vectors, strict=True):
+        if v is not None:
+            vec_by_key[(d, int(s), int(c))] = v
+    logger.info(
+        "loaded %d representative-frame vector(s) (frame_idx=%d) for the chunk-level join",
+        len(vec_by_key),
+        frame_idx,
+    )
+
+    schema = pa.schema([pa.field(FRAME_EMBED_COLUMN, VECTOR_TYPE, nullable=True)])
+    matched = 0
+
+    @lance.batch_udf(output_schema=schema)
+    def attach(batch: pa.RecordBatch) -> pa.RecordBatch:
+        nonlocal matched
+        bdocs = batch.column("doc_id").to_pylist()
+        bspeech = batch.column("speech_id").to_pylist()
+        bchunk = batch.column("chunk_id").to_pylist()
+        values: list[list[float] | None] = []
+        for d, s, c in zip(bdocs, bspeech, bchunk, strict=True):
+            v = vec_by_key.get((d, int(s), int(c)))
+            if v is not None:
+                matched += 1
+            values.append(v)
+        out = pa.array(values, type=VECTOR_TYPE)
+        if progress is not None:
+            progress(batch.num_rows)
+        return pa.RecordBatch.from_arrays([out], names=[FRAME_EMBED_COLUMN])
+
+    logger.info("attaching chunk-level %s via add_columns", FRAME_EMBED_COLUMN)
+    chunks_ds.add_columns(attach, read_columns=CHUNK_KEYS, batch_size=batch_rows)
+    return matched
+
+
 # ─────────────────────────────── Registry ───────────────────────────────────
 
 
@@ -225,6 +317,10 @@ class FeatureRunOptions(BaseModel):
     num_partitions: int = 256
     num_sub_vectors: int = 64
     checkpoint: Path | None = None
+    # Atlas projection space: 'text' (default, from text_embedding) or 'visual'
+    # (from a chunk-level frame_embedding). Routes the 'atlas' feature; ignored
+    # by every other feature.
+    space: str = "text"
 
 
 class Feature(BaseModel):
@@ -366,6 +462,9 @@ def _run_caption_embedding(
 def _run_atlas(
     db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
 ) -> int:
+    """Text-space atlas, or route to the visual path when ``--space visual``."""
+    if opts.space == "visual":
+        return _run_atlas_visual(db_path, opts, progress)
     from .projection import project_atlas_columns
 
     return project_atlas_columns(
@@ -374,6 +473,71 @@ def _run_atlas(
         batch_rows=opts.batch_rows,
         progress=progress,
     )
+
+
+def _run_atlas_visual(
+    db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
+) -> int:
+    """Visual-space atlas: chunk-level ``frame_embedding`` → ``atlas_img_*``.
+
+    Two pure-Lance steps, no GPU/re-embedding: (a) ensure a chunk-level
+    ``frame_embedding`` exists on ``chunks`` (joined from ``chunk_frames``'
+    representative ``frame_idx=0`` vector), then (b) project it into the
+    namespaced ``atlas_img_x/atlas_img_y/atlas_img_cluster`` triplet.
+    """
+    from .projection import project_atlas_columns
+
+    chunks_path = db_path / "chunks.lance"
+    frames_path = db_path / "chunk_frames.lance"
+    if not frames_path.exists():
+        raise ValueError(
+            "chunk_frames table missing — run `raudio extract-chunk-frames` "
+            "and `raudio feature frame_embedding` before the visual atlas."
+        )
+    chunk_frame_embedding_column(
+        chunks_path,
+        frames_path,
+        batch_rows=opts.batch_rows,
+        overwrite=opts.overwrite,
+    )
+    return project_atlas_columns(
+        chunks_path,
+        source_column=FRAME_EMBED_COLUMN,
+        column_prefix="atlas_img_",
+        overwrite=opts.overwrite,
+        batch_rows=opts.batch_rows,
+        progress=progress,
+    )
+
+
+def _run_topics(
+    db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
+) -> int:
+    """Toponymy topic layers — runs in an ISOLATED uv env (scripts/build_topics.py).
+
+    Toponymy pins ``transformers<5``; rather than dragging that into the raudio
+    project we shell out to a PEP-723 script whose deps resolve in their own
+    sealed env (same isolation rationale as the vLLM servers). The worker reads
+    ``chunks.text``/``text_embedding``/``atlas_x``/``atlas_y`` and writes the
+    ``topic_l*`` columns + a ``<db>.topics.json`` artifact back. ``opts.url``, if
+    set, overrides the LLM (Gemma) endpoint; the embedder defaults to :8001.
+    """
+    import subprocess
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "build_topics.py"
+    cmd = ["uv", "run", "--no-project", str(script), "--db", str(db_path)]
+    if opts.url:
+        cmd += ["--llm-url", opts.url]
+    # stderr inherits (live Toponymy/keyphrase progress bars); stdout carries the
+    # final row count.
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"topics worker failed (exit {proc.returncode})")
+    lines = (proc.stdout or "").strip().splitlines()
+    try:
+        return int(lines[-1]) if lines else 0
+    except ValueError:
+        return 0
 
 
 FEATURES: dict[str, Feature] = {
@@ -410,7 +574,22 @@ FEATURES: dict[str, Feature] = {
     "atlas": Feature(
         name="atlas",
         table="chunks",
-        description="EVōC 2-D layout + clusters (atlas_x/atlas_y/atlas_cluster) for the Atlas view.",
+        description="EVōC 2-D layout + clusters (atlas_x/atlas_y/atlas_cluster) for the Atlas view. "
+        "Use --space visual for the frame_embedding map (atlas_img_*).",
         run=_run_atlas,
+    ),
+    "atlas_visual": Feature(
+        name="atlas_visual",
+        table="chunks",
+        description="Visual EVōC map from chunk-level frame_embedding "
+        "(atlas_img_x/atlas_img_y/atlas_img_cluster). Same as `atlas --space visual`.",
+        run=_run_atlas_visual,
+    ),
+    "topics": Feature(
+        name="topics",
+        table="chunks",
+        description="Toponymy Swedish topic layers (topic_l0…) named by Gemma 4 over the EVōC atlas "
+        "map — runs in an isolated env so transformers<5 never enters this project.",
+        run=_run_topics,
     ),
 }

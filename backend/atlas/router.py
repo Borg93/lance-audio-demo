@@ -4,25 +4,24 @@
 ``atlas_cluster``) to the ``chunks`` table. These read-only routes feed the
 frontend's custom Atlas tab:
 
-* ``GET /status``  — is the projection built, and how many rows carry it.
-* ``GET /points``  — compact arrays (x/y/cluster/language + a doc-id dictionary
-  and per-point keys) for the in-browser scatter renderer. No 2048-d vectors,
-  no per-point text — small and fast to load.
+* ``GET /status?space=`` — which projection spaces (text|visual) are built, and
+  how many rows carry the requested one.
+* ``GET /points?space=`` — compact arrays (x/y/cluster/language/namn + a doc-id
+  dictionary and per-point keys) for the in-browser scatter renderer. No 2048-d
+  vectors, no per-point text — small and fast to load. ``namn`` is factorized
+  (low-cardinality archival metadata) for the hover popup; high-cardinality
+  text/caption stay out and are lazy-fetched per chunk via ``/chunk``.
 * ``GET /chunk/..`` — the full hit for one chunk (text + alignments + paths),
   fetched lazily when a point is selected, for the detail pane + playback.
-* ``GET /parquet`` — the same projection as a single parquet (kept for export /
-  notebook use; the live UI uses ``/points`` instead).
 
 All are pure ``StateDep`` reads via the native-LanceDB scan idiom
 (``chunks.to_lance().to_table(...)``, the same one ``search/service.py`` uses).
 """
 
-import io
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
-import pyarrow.parquet as pq
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -30,27 +29,46 @@ from backend.deps import StateDep
 
 router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 
-#: The 2-D projection X column. Its presence on ``chunks`` is the signal that
-#: ``raudio feature atlas`` has been run (mirrors how ``search/service.py``
-#: gates semantic search on ``text_embedding`` being present).
-_ATLAS_X = "atlas_x"
+#: The two projection spaces and their column triplets. ``text`` is the default
+#: (``raudio feature atlas``, from ``text_embedding``); ``visual`` is the
+#: frame-embedding map (``raudio feature atlas --space visual``). Each space's
+#: X column doubling as the "is this space built?" signal — mirrors how
+#: ``search/service.py`` gates semantic search on ``text_embedding`` presence.
+_SPACES: dict[str, dict[str, str]] = {
+    "text": {"x": "atlas_x", "y": "atlas_y", "cluster": "atlas_cluster"},
+    "visual": {"x": "atlas_img_x", "y": "atlas_img_y", "cluster": "atlas_img_cluster"},
+}
 
-#: Columns exported by ``/parquet`` (kept for export). Embedding columns absent.
-_EXPORT_COLUMNS = [
-    "doc_id", "speech_id", "chunk_id", "atlas_x", "atlas_y", "atlas_cluster",
-    "text", "language", "namn", "referenskod", "start", "end", "duration",
-]
+
+def _space_cols(space: str) -> dict[str, str]:
+    cols = _SPACES.get(space)
+    if cols is None:
+        raise HTTPException(status_code=400, detail=f"unknown space '{space}' (text|visual)")
+    return cols
+
 
 #: Full-hit columns for the per-chunk detail pane (matches the search hit shape).
 _HIT_COLUMNS = [
-    "doc_id", "audio_path", "speech_id", "chunk_id", "start", "end", "duration",
-    "text", "language", "namn", "referenskod", "bildid", "extraid", "caption",
+    "doc_id",
+    "audio_path",
+    "speech_id",
+    "chunk_id",
+    "start",
+    "end",
+    "duration",
+    "text",
+    "language",
+    "namn",
+    "referenskod",
+    "bildid",
+    "extraid",
+    "caption",
     "alignments_json",
 ]
 
 
-def _is_projected(state: StateDep) -> bool:
-    return _ATLAS_X in state.chunks.schema.names
+def _is_projected(state: StateDep, space: str = "text") -> bool:
+    return _space_cols(space)["x"] in state.chunks.schema.names
 
 
 def _factorize(values: list[Any]) -> tuple[list[int], list[str]]:
@@ -74,31 +92,54 @@ def _factorize(values: list[Any]) -> tuple[list[int], list[str]]:
 
 
 @router.get("/status")
-def atlas_status(state: StateDep) -> dict[str, Any]:
-    """Whether the 2-D projection exists, and how many rows carry it."""
-    if not _is_projected(state):
-        return {"projected": False, "rows": 0}
-    rows = state.chunks.count_rows(filter=f"{_ATLAS_X} IS NOT NULL")
-    return {"projected": True, "rows": rows}
+def atlas_status(
+    state: StateDep,
+    space: Literal["text", "visual"] = Query(
+        "text", description="Projection space to report rows for."
+    ),
+) -> dict[str, Any]:
+    """Which projection spaces are built, plus the requested space's row count.
+
+    ``spaces`` always reports both text+visual presence (so the UI can gate a
+    Text/Visual toggle); ``projected``/``rows`` reflect the requested ``space``
+    (back-compatible with the old single-space shape).
+    """
+    names = set(state.chunks.schema.names)
+    spaces = {name: cols["x"] in names for name, cols in _SPACES.items()}
+    cols = _space_cols(space)
+    projected = cols["x"] in names
+    rows = state.chunks.count_rows(filter=f"{cols['x']} IS NOT NULL") if projected else 0
+    return {"projected": projected, "rows": rows, "space": space, "spaces": spaces}
 
 
 @router.get("/points")
-def atlas_points(state: StateDep) -> JSONResponse:
+def atlas_points(
+    state: StateDep,
+    space: Literal["text", "visual"] = Query("text", description="Projection space to read."),
+) -> JSONResponse:
     """Compact arrays for the scatter renderer (coords + colour codes + keys)."""
-    if not _is_projected(state):
+    cols = _space_cols(space)
+    x_col, y_col, cluster_col = cols["x"], cols["y"], cols["cluster"]
+    if not _is_projected(state, space):
+        hint = "raudio feature atlas" if space == "text" else "raudio feature atlas --space visual"
         raise HTTPException(
             status_code=400,
-            detail="2D projection not built yet — run `raudio feature atlas`",
+            detail=f"{space} 2D projection not built yet — run `{hint}`",
         )
 
     schema = set(state.chunks.schema.names)
-    columns = ["doc_id", "speech_id", "chunk_id", "atlas_x", "atlas_y"]
-    for optional in ("atlas_cluster", "language"):
+    columns = ["doc_id", "speech_id", "chunk_id", x_col, y_col]
+    for optional in (cluster_col, "language", "namn"):
         if optional in schema:
             columns.append(optional)
 
-    tbl = state.chunks.to_lance().to_table(
-        columns=columns, filter=f"{_ATLAS_X} IS NOT NULL"
+    # `with_row_id` ships each point's stable Lance row address (`_rowid`) so the
+    # selection table can be fetched with an O(selection) `take` (see /chunks)
+    # instead of a per-key filtered full-table scan.
+    tbl = (
+        state.chunks.to_lance()
+        .scanner(columns=columns, filter=f"{x_col} IS NOT NULL", with_row_id=True)
+        .to_table()
     )
 
     def floats(name: str) -> list[float]:
@@ -110,19 +151,28 @@ def atlas_points(state: StateDep) -> JSONResponse:
     docs_codes, docs_labels = _factorize(tbl.column("doc_id").to_pylist())
     out: dict[str, Any] = {
         "count": tbl.num_rows,
-        "x": floats("atlas_x"),
-        "y": floats("atlas_y"),
-        "docs": docs_labels,   # distinct doc ids
-        "doc": docs_codes,     # per-point index into `docs`
+        "space": space,
+        "x": floats(x_col),
+        "y": floats(y_col),
+        "docs": docs_labels,  # distinct doc ids
+        "doc": docs_codes,  # per-point index into `docs`
         "speech_id": ints("speech_id"),
         "chunk_id": ints("chunk_id"),
+        "rowid": ints("_rowid"),  # stable address for take-based selection fetch
     }
-    if "atlas_cluster" in columns:
-        out["cluster"] = ints("atlas_cluster")
+    if cluster_col in columns:
+        out["cluster"] = ints(cluster_col)
     if "language" in columns:
         lang_codes, lang_labels = _factorize(tbl.column("language").to_pylist())
         out["language"] = lang_codes
         out["languages"] = lang_labels
+    if "namn" in columns:
+        # Factorized archival name: low-cardinality metadata for the hover popup.
+        # A small label list + a per-point int — safe to ship for 145k rows
+        # (unlike high-cardinality text/caption, which we lazy-fetch per chunk).
+        namn_codes, namn_labels = _factorize(tbl.column("namn").to_pylist())
+        out["namn"] = namn_codes
+        out["namns"] = namn_labels
 
     return JSONResponse(out, headers={"Cache-Control": "public, max-age=300"})
 
@@ -145,58 +195,37 @@ def atlas_chunk(state: StateDep, doc_id: str, speech_id: int, chunk_id: int) -> 
     return hit
 
 
-class ChunkKeys(BaseModel):
-    """A batch of (doc_id, speech_id, chunk_id) chunk keys."""
+class ChunkRowIds(BaseModel):
+    """A batch of stable Lance row addresses (``_rowid``) for selected points.
 
-    keys: list[tuple[str, int, int]]
+    The frontend reads these from /points (one per scatter point) and sends back
+    exactly the selected subset — far cheaper than re-deriving rows from keys.
+    """
+
+    rowids: list[int]
 
 
 @router.post("/chunks")
-def atlas_chunks(state: StateDep, body: ChunkKeys) -> list[dict[str, Any]]:
-    """Full hits for a set of chunk keys — the lasso/box selection's results table.
+def atlas_chunks(state: StateDep, body: ChunkRowIds) -> list[dict[str, Any]]:
+    """Full hits for a lasso/box/legend selection, addressed by ``_rowid``.
 
-    Capped at 1000 keys; reuses the same Lance scan + alignment parsing as the
-    single-chunk lookup, with an OR filter over the keys (the idiom
-    ``search/service.py:_frame_search`` uses for its key join).
+    A flat ``_rowid IN (...)`` predicate lets Lance fetch exactly the selected
+    rows by address (~one random-access take, not a filtered full scan), so a
+    1000-point selection resolves in a few ms instead of seconds. Addresses are
+    stable for the served table version; stale ids simply don't match. Capped at
+    1000 (the table render budget); the full selection still drives map dimming.
     """
     from raudio.retrieval.search import parse_alignments_json
 
-    keys = body.keys[:1000]
-    if not keys:
+    rowids = body.rowids[:1000]
+    if not rowids:
         return []
     schema = set(state.chunks.schema.names)
     columns = [c for c in _HIT_COLUMNS if c in schema]
-    clauses = []
-    for doc_id, speech_id, chunk_id in keys:
-        safe_doc = doc_id.replace("'", "''")
-        clauses.append(
-            f"(doc_id = '{safe_doc}' AND speech_id = {int(speech_id)} AND chunk_id = {int(chunk_id)})"
-        )
-    where = " OR ".join(clauses)
-    rows = state.chunks.to_lance().to_table(columns=columns, filter=where).to_pylist()
+    csv = ",".join(str(int(r)) for r in rowids)
+    rows = (
+        state.chunks.to_lance().to_table(columns=columns, filter=f"_rowid in ({csv})").to_pylist()
+    )
     for hit in rows:
         hit["alignments"] = parse_alignments_json(hit.pop("alignments_json", None))
     return rows
-
-
-@router.get("/parquet")
-def atlas_parquet(state: StateDep) -> Response:
-    """The projected chunks as a single parquet (export / notebook use)."""
-    if not _is_projected(state):
-        raise HTTPException(
-            status_code=400,
-            detail="2D projection not built yet — run `raudio feature atlas`",
-        )
-    available = set(state.chunks.schema.names)
-    columns = [c for c in _EXPORT_COLUMNS if c in available]
-    table = state.chunks.to_lance().to_table(columns=columns, filter=f"{_ATLAS_X} IS NOT NULL")
-    buffer = io.BytesIO()
-    pq.write_table(table, buffer, compression="zstd")
-    return Response(
-        content=buffer.getvalue(),
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": "inline; filename=atlas.parquet",
-            "Cache-Control": "public, max-age=300",
-        },
-    )

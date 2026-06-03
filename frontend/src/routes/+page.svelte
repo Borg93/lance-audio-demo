@@ -17,11 +17,15 @@
   import DocTile from '$lib/components/doc-tile.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import ResizableSplit from '$lib/components/resizable-split.svelte';
+  import AtlasMap from '$lib/atlas/AtlasMap.svelte';
+  import { crossFilter } from '$lib/atlas/cross-filter.svelte';
+  import { getAtlasChunks } from '$lib/api';
   import { Button } from '$lib/components/ui';
   import {
     LayoutGrid,
     List as ListIcon,
     Table as TableIcon,
+    Map as MapIcon,
     Loader2,
     ChevronLeft,
     ChevronRight,
@@ -54,7 +58,48 @@
   let loadingDocs = $state(false);
 
   // ── Layout ──
-  let view = $state<'list' | 'grid' | 'table'>('list');
+  let view = $state<'list' | 'grid' | 'table' | 'map'>('list');
+
+  // ── Atlas map cross-filter glue ──
+  // The map's lasso/box/cluster selection surfaces its hits here; the bottom
+  // results table + player read this set while the Map view is active.
+  let mapHits = $state<Hit[]>([]);
+  let mapSelectionTotal = $state(0);
+  const MAP_TABLE_COLS = ['thumbnail', 'namn', 'language', 'start', 'end', 'text'];
+
+  // DIRECTION A — search/filter → dim+highlight the map. When the map is shown,
+  // project the current search hits onto point indices so matches light up and
+  // the rest dims (a single GPU recolour). Cleared to whole-corpus when empty.
+  // Depends on `keyToIndex` too, so a search that ran BEFORE the map loaded its
+  // points re-projects once AtlasMap rebuilds the key→index map for the space.
+  $effect(() => {
+    if (view !== 'map') return;
+    const ready = crossFilter.keyToIndex.size > 0; // touch for reactivity
+    if (hits.length > 0 && ready) crossFilter.setFilteredFromHits(hits);
+    else crossFilter.clearFilter();
+  });
+
+  function onMapSelectionHits(h: Hit[], total: number) {
+    mapHits = h;
+    mapSelectionTotal = total;
+  }
+
+  // DIRECTION B (seed) — promote a map selection to the search's result set by
+  // stable _rowid (the points' addresses), not a synthesized giant WHERE.
+  async function seedSearchFromSelection(rowids: number[]) {
+    loadingHits = true;
+    error = null;
+    try {
+      hits = await getAtlasChunks(rowids);
+      active = null;
+      allLoaded = true;
+      view = 'list';
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'failed to load selection';
+    } finally {
+      loadingHits = false;
+    }
+  }
   // Which result columns the table view shows (persisted). Defaults to a
   // readable subset; the chooser bar toggles any of TABLE_COLUMNS.
   let tableCols = $state<string[]>(['thumbnail', 'namn', 'start', 'end', 'duration', 'text', 'caption']);
@@ -166,12 +211,6 @@
   });
 
   /**
-   * When user clicks a doc tile, just open it in the player with a synthetic
-   * full-document "hit" pointing at start=0. Earlier I auto-set the `namn`
-   * filter — it then silently stuck across the next search and produced 0
-   * hits. Now nothing is implicitly filtered.
-   */
-  /**
    * Global keyboard affordances:
    *   "/"    focus the search box (unless already typing in a field)
    *   Esc    return from a playing hit back to the results list
@@ -190,6 +229,12 @@
     }
   }
 
+  /**
+   * When user clicks a doc tile, just open it in the player with a synthetic
+   * full-document "hit" pointing at start=0. Earlier I auto-set the `namn`
+   * filter — it then silently stuck across the next search and produced 0
+   * hits. Now nothing is implicitly filtered.
+   */
   function openDoc(doc: Document) {
     active = {
       _score: 0,
@@ -293,9 +338,53 @@
           >
             <TableIcon class="size-4" />
           </Button>
+          <Button
+            variant={view === 'map' ? 'secondary' : 'ghost'}
+            size="icon"
+            title="Map view — the EVōC embedding atlas (cross-filters with search)"
+            onclick={() => (view = 'map')}
+          >
+            <MapIcon class="size-4" />
+          </Button>
         </div>
       </div>
 
+      {#if view === 'map'}
+        <!-- ── Map view: the embedding atlas + its selection results table ── -->
+        <div class="grid min-h-0 flex-1 grid-rows-[1fr_auto]">
+          <AtlasMap
+            bind:active
+            onSeedSearch={seedSearchFromSelection}
+            onSelectionHits={onMapSelectionHits}
+          />
+          <div class="flex h-56 min-h-0 flex-col border-t border-border bg-card/30">
+            <div class="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs">
+              <span class="font-medium text-foreground">Map selection</span>
+              {#if mapSelectionTotal > 0}
+                <span class="text-muted-foreground">
+                  {mapSelectionTotal.toLocaleString()} chunks
+                  {#if mapSelectionTotal > mapHits.length}
+                    <span class="text-muted-foreground/70">· showing {mapHits.length}</span>
+                  {/if}
+                </span>
+              {:else}
+                <span class="text-muted-foreground">lasso a region, or click a legend, to list its chunks</span>
+              {/if}
+            </div>
+            <div class="min-h-0 flex-1 overflow-auto">
+              {#if mapHits.length}
+                <HitTable
+                  hits={mapHits}
+                  {active}
+                  visible={MAP_TABLE_COLS}
+                  query=""
+                  onselect={(h) => (active = h)}
+                />
+              {/if}
+            </div>
+          </div>
+        </div>
+      {:else}
       <div class="relative min-h-0 flex-1 overflow-y-auto">
         {#if isBrowsing}
           <!-- ── Browse mode: documents ── -->
@@ -485,6 +574,7 @@
           </div>
         {/if}
       </div>
+      {/if}
     </div>
 
     {/snippet}

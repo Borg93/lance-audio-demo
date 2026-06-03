@@ -1,11 +1,15 @@
 <script lang="ts">
   /**
-   * Atlas tab — an Embedding Atlas map over the Lance `chunks` table.
+   * Atlas tab — the EVōC embedding map over the Lance `chunks` table.
    *
-   * Client-only (SPA, no SSR): we check `/api/atlas/status` first, and only
-   * dynamically import the heavy viewer (`mount-atlas.svelte` → DuckDB-WASM +
-   * Mosaic) when the projection actually exists. If it doesn't, we point the
-   * user at the offline build step instead of failing.
+   * Lance-native: the scatter is our custom WebGPU point renderer (<GpuScatter>),
+   * fed directly from our Lance backend over `/api/atlas/*` — NO DuckDB, NO
+   * Mosaic, NO parquet. Client-only (SPA, no SSR): we check
+   * `/api/atlas/status` first (which also reports which spaces are built), and
+   * only dynamically import the viewer (`mount-atlas.svelte` → <AtlasMap>) once
+   * a projection exists. If neither space is built, we point the user at the
+   * offline build step instead of failing. The same map lives in the search
+   * page's Map view, sharing the cross-filter store.
    */
   import { browser } from '$app/environment';
   import type { Component } from 'svelte';
@@ -23,9 +27,12 @@
 
     (async () => {
       try {
-        const status = await getAtlasStatus();
+        // Report both spaces; the view is available if either text or visual
+        // is projected (the in-map toggle gates the absent one).
+        const status = await getAtlasStatus('text');
         if (cancelled) return;
-        if (!status.projected) {
+        const anyBuilt = status.projected || (status.spaces?.visual ?? false);
+        if (!anyBuilt) {
           phase = 'unavailable';
           return;
         }

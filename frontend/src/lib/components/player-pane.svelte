@@ -12,6 +12,26 @@
   let mediaEl = $state<HTMLVideoElement | null>(null);
   let mediaError = $state<string | null>(null);
 
+  // Archival metadata shown under the player — only fields that are present.
+  const metaRows = $derived.by((): [string, string][] => {
+    const h = hit;
+    if (!h) return [];
+    const rows: [string, string][] = [];
+    const add = (label: string, v: string | number | null | undefined) => {
+      if (v !== null && v !== undefined && v !== '') rows.push([label, String(v)]);
+    };
+    add('File', h.audio_path);
+    add('Time', `${fmtTime(h.start)} → ${fmtTime(h.end)}`);
+    if (h.duration != null) add('Length', fmtTime(h.duration));
+    add('Name', h.namn);
+    add('Reference', h.referenskod);
+    add('Image ID', h.bildid);
+    add('Extra ID', h.extraid);
+    add('Language', h.language);
+    add('Segment', `speech ${h.speech_id} · chunk ${h.chunk_id}`);
+    return rows;
+  });
+
   /**
    * Whenever `hit` changes, seek the player to `hit.start` and play.
    *
@@ -76,10 +96,6 @@
   {#if !hit}
     <div class="m-auto text-sm text-muted-foreground">Click a hit to play.</div>
   {:else}
-    <div class="shrink-0 text-sm font-medium">
-      {hit.audio_path} · {fmtTime(hit.start)} → {fmtTime(hit.end)}
-    </div>
-
     {#if hit.caption}
       <div class="shrink-0 text-xs italic text-muted-foreground" title="AI scene caption">
         🎬 {hit.caption}
@@ -106,5 +122,16 @@
     {/if}
 
     <TranscriptHighlighter alignments={hit.alignments} media={mediaEl} {query} />
+
+    {#if metaRows.length}
+      <dl
+        class="grid max-h-40 shrink-0 grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 overflow-y-auto rounded-md border border-border bg-card/40 px-3 py-2 text-xs"
+      >
+        {#each metaRows as [label, value] (label)}
+          <dt class="text-muted-foreground">{label}</dt>
+          <dd class="truncate font-medium text-foreground" title={value}>{value}</dd>
+        {/each}
+      </dl>
+    {/if}
   {/if}
 </div>

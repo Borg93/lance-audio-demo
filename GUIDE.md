@@ -13,8 +13,8 @@
 transcripts**. It ingests [`easytranscriber`](https://github.com/kb-labb/easytranscriber)
 output (word-aligned transcript JSON + the source MP4) into a single, self-contained
 [Lance](https://lancedb.com) dataset, then serves keyword / semantic / visual /
-hybrid search and synchronized video playback through a typed HTTP API and a
-SvelteKit UI. Everything — text, metadata, embeddings, thumbnails, per-chunk
+scene / hybrid / fused search (seven modes), a 2-D Atlas map of the corpus, and
+synchronized video playback through a typed HTTP API and a SvelteKit UI. Everything — text, metadata, embeddings, thumbnails, per-chunk
 video frames, and the media URIs — lives in **one Lance database**; there are no
 sidecar JSON files or disk walks at query time.
 
@@ -37,7 +37,7 @@ flowchart LR
 
     subgraph DB["transcripts.lance/ (single Lance dataset)"]
         direction TB
-        T1["chunks.lance<br/>text + FTS + text_embedding"]
+        T1["chunks.lance<br/>text + FTS + text_embedding + frame_embedding + atlas_*"]
         T2["documents.lance<br/>media_blob + thumbnail"]
         T3["chunk_frames.lance<br/>frame_blob + frame_embedding"]
     end
@@ -71,7 +71,7 @@ flowchart LR
   vLLM process** reached over HTTP, so FTS-only use works with no GPU at all.
 - **`src/raudio/vllm/embedding.py` is the one module both sides share** — see §7.
 - **`demo/` is unrelated** — a standalone in-browser (transformers.js/WebGPU)
-  transcription playground. It shares zero code with raudio. See §9.
+  transcription playground. It shares zero code with raudio. See §10.
 
 ---
 
@@ -105,7 +105,7 @@ working data). Schemas: [`src/raudio/model/schema.py`](src/raudio/model/schema.p
 
 | Table | Grain | Carries | Key columns |
 |---|---|---|---|
-| **`chunks`** | one row per ~30 s transcript chunk | FTS text, metadata, alignments JSON, `text_embedding` (2048-d) | `(doc_id, speech_id, chunk_id)` |
+| **`chunks`** | one row per ~30 s transcript chunk | FTS text, metadata, alignments JSON, **two** vector columns — `text_embedding` (2048-d) and `frame_embedding` (2048-d, the chunk-level image vector) — plus the six EVōC atlas columns `atlas_x/y/cluster` (text space) and `atlas_img_x/y/cluster` (visual space) | `(doc_id, speech_id, chunk_id)` |
 | **`documents`** | one row per source media file | `media_blob` (Blob V2 *External* URI), `thumbnail` (Blob V2 *Inline* bytes), metadata | `doc_id` |
 | **`chunk_frames`** | one row per extracted frame (a chunk can hold N frames, `frame_idx` 0..K-1; `frame_idx=0` is the single representative frame) | `frame_blob` (Blob V2 Inline JPEG), `frame_embedding` (2048-d, added later) | `(doc_id, speech_id, chunk_id, frame_idx)` |
 
@@ -131,6 +131,8 @@ erDiagram
         string text "Tantivy FTS (BM25, Swedish)"
         json alignments_json "JSONB word timings"
         vector text_embedding "2048-d cosine IVF_PQ"
+        vector frame_embedding "2048-d chunk-level image vector (visual atlas)"
+        float atlas_x "EVoC text-space x/y/cluster (+ atlas_img_* visual)"
     }
     chunk_frames {
         string doc_id FK
@@ -152,8 +154,14 @@ so frames go into their own append-only table: `extract-chunk-frames` writes new
 fragments, `feature frame_embedding` attaches `frame_embedding` via
 `dataset.add_columns(...)`. No `merge_insert`. Visual / cross-modal search runs
 the frame-vector query against `chunk_frames` and joins back to `chunks` for the
-hit payload (`backend/search/service.py::_frame_search`); `chunks` carries **no**
-`frame_*` columns.
+hit payload (`backend/search/service.py::_frame_search`).
+
+`chunks` *does* carry a **chunk-level** `frame_embedding` (a second 2048-d vector
+column) — but that is a distinct, atlas-only column: `feature atlas --space visual`
+joins the representative frame (`frame_idx=0`) up onto `chunks` so the visual
+EVōC projection (`atlas_img_*`) can be computed. It is **not** the per-frame
+vector that backs visual search; that one lives on `chunk_frames` and is what
+`_frame_search` queries.
 
 **Blob V2 cheat-sheet** (load-bearing constraints):
 
@@ -188,18 +196,23 @@ flowchart TD
     E["raudio ingest<br/>JSON → chunks + documents · FTS + scalar indexes"] --> F
     F["raudio feature text_embedding<br/>Qwen3-VL text → text_embedding · IVF_PQ"] --> G
     G["raudio extract-chunk-frames<br/>ffmpeg → chunk_frames.lance (append-only)"] --> H
-    H["raudio feature frame_embedding<br/>Qwen3-VL image → frame_embedding (add_columns)"] --> DB["(transcripts.lance)<br/>self-contained dataset"]
+    H["raudio feature frame_embedding<br/>Qwen3-VL image → frame_embedding (add_columns)"] --> I
+    I["raudio feature caption + caption_embedding<br/>Gemma 4 Swedish caption (:8003) → IVF_PQ"] --> DB["(transcripts.lance)<br/>self-contained dataset"]
 
     classDef done fill:#1a1a1e,stroke:#34d399,color:#e9e9ea;
-    classDef blocked fill:#1a1a1e,stroke:#f87171,color:#e9e9ea;
-    class C,D,E,F done;
-    class G,H blocked;
+    classDef open fill:#1a1a1e,stroke:#fbbf24,color:#e9e9ea;
+    class C,D,E,F,G,H done;
+    class I open;
 ```
 
-> 🟢 = validated · 🔴 = the frame stages (`extract-chunk-frames` /
-> `feature frame_embedding`) are
-> blocked on the vLLM image-embed crash — see [`docs/INVESTIGATION.md`](docs/INVESTIGATION.md).
-> Detailed pipeline + models: [`docs/PIPELINE.md`](docs/PIPELINE.md).
+> 🟢 = validated end-to-end on the live DB (`transcripts_v2.lance`: 145,175 chunks
+> / 1,154 documents / 145,175 chunk_frames). The frame stages
+> (`extract-chunk-frames` / `feature frame_embedding`) are **done** — all 145,175
+> frames are embedded and IVF-indexed (`frame_embedding_idx`). 🟡 = the one
+> genuinely-open piece: **captions** (`make captions` = `feature caption` +
+> `caption_embedding`, needs the Gemma server on `:8003`). Until they are built,
+> the `scene` / `scene_fts` modes return empty. Detailed pipeline + models:
+> [`docs/PIPELINE.md`](docs/PIPELINE.md).
 
 `ingest` is the heart: `load_transcript` (Pydantic `model_validate_json`) → `flatten_chunks`
 (walks speeches→chunks, joins the `video_batcher` CSV metadata by
@@ -212,19 +225,43 @@ is given) → builds the Tantivy FTS index (Swedish stemmer) + BTREE scalar inde
 ```mermaid
 flowchart TD
     Q["browser → SvelteKit (Bun :3000)"] -->|"proxy /api/*"| BE["FastAPI :8000<br/>normalize → SearchSpec"]
-    BE --> M{"mode?"}
+    BE --> M{"mode? (7)"}
     M -->|fts| F1["chunks.search() Tantivy BM25 · no GPU"]
     M -->|semantic| F2["vLLM embed text → nearest_to(text_embedding, cosine)"]
-    M -->|visual| F3["vLLM embed image/text → nearest_to(frame_embedding)"]
+    M -->|visual| F3["vLLM embed image/text → frame_embedding on chunk_frames → join chunks"]
+    M -->|scene| F6["vLLM embed text → caption_embedding on chunk_frames → join chunks"]
+    M -->|scene_fts| F7["chunk_frames.search() BM25 over caption → join chunks"]
     M -->|hybrid| F4["Lance native FTS + text-vector → RRF / LinearCombination / Qwen rerank"]
-    M -->|all| F5["FTS + text-vector + frame-vector → _rrf_fuse → optional rerank"]
+    M -->|all| F5["FTS + text-vector + frame-vector + caption-vector → _rrf_fuse (4 legs) → optional rerank"]
     F1 --> P["parse alignments_json → alignments<br/>(one hit shape for all modes)"]
     F2 --> P
     F3 --> P
+    F6 --> P
+    F7 --> P
     F4 --> P
     F5 --> P
     P -->|JSON| UI["HitList / HitCard → click → PlayerPane"]
 ```
+
+**The seven search modes** (`backend/search/spec.py::SearchMode`):
+
+| Mode | Backs onto | What runs |
+|---|---|---|
+| `fts` | `chunks.text` | Tantivy BM25 (Swedish) — no GPU |
+| `semantic` | `chunks.text_embedding` | text → cosine kNN |
+| `visual` | `chunk_frames.frame_embedding` | image **or** text → cosine kNN over frames, joined back to `chunks` |
+| `scene` | `chunk_frames.caption_embedding` | text → cosine kNN over the Swedish-caption text vectors (empty until captions are built) |
+| `scene_fts` | `chunk_frames.caption` | BM25 over the caption text (empty until captions are built) |
+| `hybrid` | `chunks` (text + `text_embedding`) | Lance native `query_type="hybrid"` — **must** pass `vector_column_name="text_embedding"` because `chunks` now has two vector columns; fused by `RRFReranker` (default) or `LinearCombinationReranker(weight)` for the Balance slider |
+| `all` | up to **four** legs | `_rrf_fuse` over FTS(text) + text-vector(`text_embedding`) + frame-vector(`frame_embedding`; the image vector if an image is attached, else the text vector) + caption/scene-vector(`caption_embedding`) |
+
+`all` fuses the legs with `_rrf_fuse` (RRF, `k=60`, 0-indexed rank, score
+`Σ 1/(60+rank)`): the legs are issued independently and **unioned** by chunk
+key, not chained. `prefilter` (`spec.prefilter`, default True) is applied only to
+the `chunks`-table legs (`fts` / vector / `hybrid`); the frame legs
+(`visual` / `scene`) filter **after** ranking, in `_frames_to_chunk_hits`. The
+cross-encoder rerank (`src/raudio/vllm/reranker.py`) reads **only** the transcript
+`text` column over the top `rerank_n` hits and is a no-op for image-only queries.
 
 Detailed embedding/serving flow: [`docs/EMBEDDINGS.md`](docs/EMBEDDINGS.md).
 
@@ -271,8 +308,11 @@ src/raudio/                Python pipeline — the WRITE side + search/embedding
 │   └── image.py            pure helpers: l2_normalize, image_to_data_url
 ├── features/             DATA-EVOLUTION engine (type-agnostic column upserts)
 │   ├── engine.py           upsert_scan_column / upsert_blob_column / ensure_vector_index
-│   └── columns.py          embed_text_column / embed_frame_column / summary_column /
-│                           caption_column + the FEATURES registry
+│   ├── columns.py          embed_text_column / embed_frame_column / summary_column /
+│   │                       caption_column / embed_caption_column / chunk_frame_embedding_column
+│   │                       + the FEATURES registry (text_embedding, frame_embedding, summary,
+│   │                       caption, caption_embedding, atlas, atlas_visual)
+│   └── projection.py       EVōC fit → atlas_x/y/cluster (text) + atlas_img_* (visual)
 └── retrieval/             READ PATH
     ├── search.py           FTS query + pure parsing/formatting helpers (timecode, …)
     └── qwen3_vl_reranker.jinja  vLLM chat template for the reranker server
@@ -284,6 +324,7 @@ backend/                   FastAPI package (the read-side serving app)
 ├── clients.py             vLLM client wiring for the backend
 ├── search/                /api/search router + search core
 ├── media/                 /api/media /thumbnail /chunk-frame router
+├── atlas/                  /api/atlas/{status,points,chunk,chunks} router (the map view)
 └── system/                health / system router
 
 frontend/                  primary SvelteKit 2 / Svelte 5 SPA (the viewer UI)
@@ -293,9 +334,9 @@ frontend/                  primary SvelteKit 2 / Svelte 5 SPA (the viewer UI)
 ├── src/lib/feature-flags.svelte.ts  $state singleton (suppress chunk-frame 404 storms)
 └── server.ts              Bun static server + /api/* reverse proxy (Range-aware)
 
-demo/                      SEPARATE in-browser transformers.js/WebGPU demo (see §9)
+demo/                      SEPARATE in-browser transformers.js/WebGPU demo (see §10)
 Makefile                   end-to-end developer commands (source of truth for how it runs)
-pyproject.toml             uv package, [multimodal] extra, ruff/ty/pytest config
+pyproject.toml             uv package, [multimodal] + [atlas] (evoc/numpy/scikit-learn) extras, ruff/ty/pytest config
 tests/                     pytest: unit (pure logic) + dataset-gated backend smoke
 ```
 
@@ -373,9 +414,14 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
   before the index is built.
 - **vLLM version/GPU pins live in the Makefile** with comments: the `cu128` torch
   pin (driver 570.x → CUDA 12.8 ceiling), vLLM run via `uvx` to avoid torch-pin
-  conflicts, embed/rerank pinned to distinct GPUs to dodge a memory-profiling
-  race, and `min==max` pixels to avoid the deepstack overflow bug. **Keep these
-  comments** — they encode hours of debugging.
+  conflicts, and `min==max` pixels to avoid the deepstack overflow bug. By default
+  **both** servers share one GPU (`VLLM_GPU ?= 0`, `EMBED_GPU ?= $(VLLM_GPU)`,
+  `RERANK_GPU ?= $(VLLM_GPU)`) at `EMBED_MEM_FRAC ?= 0.45` / `RERANK_MEM_FRAC ?= 0.45`
+  — the two 2B models co-locate (~88 GB on a 96 GB card). **Start them
+  sequentially** (`embed-server` :8001, then `rerank-server` :8002): launching
+  concurrently races vLLM's memory profiler. Override `EMBED_GPU` / `RERANK_GPU`
+  to split them across cards. **Keep these comments** — they encode hours of
+  debugging.
 - **Frontend: `api.ts` is the only place untrusted JSON enters**, and every
   response is Zod-parsed (`asJson`). Backend schema drift surfaces as a clean
   `ApiError`, not a silent mis-render. Never add a fetch that returns un-parsed JSON.
@@ -384,7 +430,45 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
 
 ---
 
-## 9. The `demo/` app — a separate subsystem
+## 9. The Atlas subsystem — a 2-D map of the corpus
+
+The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
+2-D scatter for an in-browser "map of the corpus" view. It has three parts:
+
+- **The features** (`src/raudio/features/columns.py`, `FEATURES` registry):
+  - `atlas` — the **text** space. Fits an [EVōC](https://github.com/TutteInstitute/evoc)
+    layout over `text_embedding` and writes `atlas_x` / `atlas_y` / `atlas_cluster`
+    onto `chunks` via `add_columns`.
+  - `atlas_visual` (alias: `atlas --space visual`) — the **visual** space. First
+    joins each chunk's representative-frame vector up from `chunk_frames` onto
+    `chunks` (`chunk_frame_embedding_column` → the chunk-level `frame_embedding`),
+    then fits EVōC over it and writes `atlas_img_x` / `atlas_img_y` /
+    `atlas_img_cluster`.
+  - Both delegate the EVōC fit to `src/raudio/features/projection.py`
+    (`project_atlas_columns`). EVōC is CPU-only (numba / scikit-learn, no torch) and
+    ships in the `[atlas]` optional extra.
+- **The columns on `chunks`:** the two triplets above — `atlas_x/y/cluster`
+  (text) and `atlas_img_x/y/cluster` (visual). The presence of the `*_x` column is
+  the "is this space built?" signal.
+- **The backend router** (`backend/atlas/router.py`, mounted by `create_app`),
+  prefix `/api/atlas`:
+  - `GET /status?space=text|visual` — which spaces are built + the requested
+    space's non-null row count (reports both spaces so the UI can gate a
+    Text/Visual toggle).
+  - `GET /points?space=` — compact arrays for the scatter renderer (x/y/cluster +
+    factorized `language` / `namn` + a doc-id dictionary and per-point keys). No
+    2048-d vectors and no per-point text — small and fast for 145k points.
+  - `GET /chunk/{doc_id}/{speech_id}/{chunk_id}` — the full hit for one chunk
+    (text + alignments + paths), lazy-fetched when a point is selected.
+  - `POST /chunks` — full hits for a batch of chunk keys (capped at 1000) for the
+    lasso/box-selection results table.
+
+  All four are pure read-only `StateDep` scans via the native-LanceDB idiom
+  (`chunks.to_lance().to_table(...)`) — the same one `search/service.py` uses.
+
+---
+
+## 10. The `demo/` app — a separate subsystem
 
 `demo/` is a **standalone, in-browser** audio-transcription playground built on
 **transformers.js + ONNX Runtime Web** running Whisper/KB-Whisper on **WebGPU**
@@ -405,7 +489,7 @@ standards/urgency. Architecture notes if you do touch it:
 
 ---
 
-## 10. Developer workflow
+## 11. Developer workflow
 
 ### Toolchain (mandated by the `writing-python` / `writing-typescript` skills)
 
@@ -458,7 +542,7 @@ the authoritative, commented description of how every process fits together.
 
 ---
 
-## 11. Quick "where do I look for…?" index
+## 12. Quick "where do I look for…?" index
 
 | I want to… | Look at |
 |---|---|
@@ -466,8 +550,9 @@ the authoritative, commented description of how every process fits together.
 | Change how transcripts become rows | `src/raudio/ingest/ingest.py` (`flatten_chunks`, `_document_row`) |
 | Add/modify a CLI command | `src/raudio/cli/` |
 | Add/modify a feature column (embed/summary/caption) | `src/raudio/features/columns.py` (+ `features/engine.py`) |
-| Change search behavior / add a mode | `backend/search/service.py` (`run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`) |
-| Add an API endpoint | the relevant router under `backend/` (`search/`, `media/`, `system/`) |
+| Change search behavior / add a mode | `backend/search/service.py` (`run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`) + `backend/search/spec.py` (`SearchMode`) |
+| Touch the Atlas projection / map endpoints | `src/raudio/features/projection.py` (EVōC fit) + `backend/atlas/router.py` (`/api/atlas/*`) |
+| Add an API endpoint | the relevant router under `backend/` (`search/`, `media/`, `atlas/`, `system/`) |
 | Change the embedding/rerank wire format | `src/raudio/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
 | Touch the search UI | `frontend/src/routes/+page.svelte` + `frontend/src/lib/components/` |
 | Change the API client / response shapes | `frontend/src/lib/api.ts` (Zod schemas) |

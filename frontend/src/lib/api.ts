@@ -230,32 +230,58 @@ export const mediaUrl = (doc_id: string) => `/api/media/${encodeURIComponent(doc
 // (built offline by `raudio feature atlas`). `status` gates the view, `points`
 // streams compact coord/colour/key arrays for the scatter renderer, and
 // `chunk` lazily fetches one chunk's full detail when a point is selected.
-const AtlasStatusSchema = z.object({ projected: z.boolean(), rows: z.number().int() });
+
+/** The two projection spaces the atlas can be built on. `text` = transcript
+ *  semantics (`text_embedding` → atlas_*); `visual` = the per-chunk frame image
+ *  vector (`frame_embedding` → atlas_img_*). */
+export type AtlasSpace = 'text' | 'visual';
+
+const AtlasStatusSchema = z.object({
+    projected: z.boolean(),
+    rows: z.number().int(),
+    space: z.string().optional(),
+    // Which spaces are built — gates the Text/Visual toggle.
+    spaces: z.object({ text: z.boolean(), visual: z.boolean() }).optional(),
+});
 export type AtlasStatus = z.infer<typeof AtlasStatusSchema>;
 
-export async function getAtlasStatus(fetcher: typeof fetch = fetch): Promise<AtlasStatus> {
-    return asJson(await fetcher('/api/atlas/status'), AtlasStatusSchema);
+export async function getAtlasStatus(
+    space: AtlasSpace = 'text',
+    fetcher: typeof fetch = fetch,
+): Promise<AtlasStatus> {
+    return asJson(await fetcher(`/api/atlas/status?space=${space}`), AtlasStatusSchema);
 }
 
 /** Compact arrays for the scatter map. `doc[i]` indexes into `docs` (the distinct
- *  doc ids); `(docs[doc[i]], speech_id[i], chunk_id[i])` is point i's chunk key. */
+ *  doc ids); `(docs[doc[i]], speech_id[i], chunk_id[i])` is point i's chunk key.
+ *  `cluster`/`language`/`namn` are per-space colour/label codes; `namn[i]`
+ *  indexes into `namns` (the distinct archival names) for the hover popup. */
 export interface AtlasPoints {
     count: number;
+    space?: AtlasSpace;
     x: number[];
     y: number[];
     docs: string[];
     doc: number[];
     speech_id: number[];
     chunk_id: number[];
+    /** Stable Lance row address per point — sent back to /chunks for an
+     *  O(selection) take when listing a lasso/legend selection. */
+    rowid?: number[];
     cluster?: number[];
     language?: number[];
     languages?: string[];
+    namn?: number[];
+    namns?: string[];
 }
 
-/** Fetch the point arrays. Skips per-element zod (the payload is ~10⁶ numbers);
- *  a structural guard is enough at this boundary and keeps the map load snappy. */
-export async function getAtlasPoints(fetcher: typeof fetch = fetch): Promise<AtlasPoints> {
-    const r = await fetcher('/api/atlas/points');
+/** Fetch the point arrays for a space. Skips per-element zod (the payload is
+ *  ~10⁶ numbers); a structural guard is enough here and keeps the map snappy. */
+export async function getAtlasPoints(
+    space: AtlasSpace = 'text',
+    fetcher: typeof fetch = fetch,
+): Promise<AtlasPoints> {
+    const r = await fetcher(`/api/atlas/points?space=${space}`);
     if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new ApiError(r.status, body?.detail ?? r.statusText);
@@ -278,17 +304,17 @@ export async function getAtlasChunk(
     return asJson(r, HitSchema);
 }
 
-/** Full hits for a batch of chunk keys — the lasso/box selection's results table. */
+/** Full hits for a selection, addressed by stable Lance `_rowid` (from
+ *  `AtlasPoints.rowid`). The backend resolves these with a single `_rowid IN`
+ *  take — no per-key full-table scan. Drives the lasso/box selection table. */
 export async function getAtlasChunks(
-    keys: [string, number, number][],
+    rowids: number[],
     fetcher: typeof fetch = fetch,
 ): Promise<Hit[]> {
     const r = await fetcher('/api/atlas/chunks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keys }),
+        body: JSON.stringify({ rowids }),
     });
     return asJson(r, z.array(HitSchema));
 }
-
-export const atlasParquetUrl = () => '/api/atlas/parquet';

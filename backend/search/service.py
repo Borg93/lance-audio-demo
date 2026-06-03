@@ -1,7 +1,7 @@
 """Framework-free search business logic — the mode-aware retrieval core.
 
-``run_search`` routes a :class:`~backend.search.spec.SearchSpec` across the six
-modes (fts / semantic / visual / scene / hybrid / all) and returns a uniform hit
+``run_search`` routes a :class:`~backend.search.spec.SearchSpec` across the seven
+modes (fts / semantic / visual / scene / scene_fts / hybrid / all) and returns a uniform hit
 shape. It takes the two vLLM client getters as plain callables, so this module
 never imports the FastAPI app or app state — only :class:`HTTPException` for
 error mapping. The HTTP routers wire it to the request via dependency injection.
@@ -323,8 +323,11 @@ def run_search(
                 fts_query = PhraseQuery(spec.q, "text")
             else:
                 fts_query = MatchQuery(spec.q, "text", fuzziness=spec.fuzziness)
+            # Name the vector column explicitly: `chunks` also carries a
+            # `frame_embedding` column (for the image-atlas), so Lance's hybrid
+            # query can't auto-pick which vector column to search.
             qb = (
-                chunks.search(query_type="hybrid")
+                chunks.search(query_type="hybrid", vector_column_name="text_embedding")
                 .vector(text_vec.tolist())
                 .text(fts_query)
                 .rerank(fusion)

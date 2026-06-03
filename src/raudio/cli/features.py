@@ -25,6 +25,14 @@ def cmd_feature(
         str | None,
         typer.Option("--instruction", help="Override the caption prompt (caption only; default: Swedish)."),
     ] = None,
+    space: Annotated[
+        str,
+        typer.Option(
+            "--space",
+            help="atlas only: 'text' (text_embedding → atlas_*) or 'visual' "
+            "(chunk frame_embedding → atlas_img_*).",
+        ),
+    ] = "text",
     batch_size: Annotated[int, typer.Option("--batch-size", help="Rows per embed batch.")] = 256,
     only_null: Annotated[
         bool,
@@ -50,12 +58,23 @@ def cmd_feature(
       * summary           — chunks.text          → one-line LLM summary
       * caption           — chunk_frames.frame_blob → Gemma 4 Swedish caption
       * caption_embedding — chunk_frames.caption → 2048-d vector (scene search)
+      * atlas             — chunks.text_embedding → EVōC 2-D map (atlas_x/y/cluster)
+                            `--space visual` → chunk frame_embedding → atlas_img_x/y/cluster
+      * topics            — chunks.text + text_embedding + atlas map → Swedish topic
+                            layers (topic_l0…) named by Gemma 4 (Toponymy, isolated env)
 
     Attaches one new column file, no fragment rewrites. `--only-null` (default)
     tops up rows a later ingest added; `--all` drops and rebuilds.
 
+    `topics` runs Toponymy in its OWN uv env (it pins transformers<5; that never
+    enters this project) — needs the atlas map (`feature atlas`) + Gemma :8003 +
+    embed :8001. `--url` overrides the Gemma endpoint.
+
     `caption_embedding` reuses the existing frames — it reads the `caption`
     column (run `caption` first), never re-extracting frames.
+
+    `atlas --space visual` joins each chunk's representative (`frame_idx=0`)
+    frame_embedding from `chunk_frames` (no re-embedding), then projects it.
     """
     import lancedb
     from tqdm import tqdm
@@ -81,6 +100,7 @@ def cmd_feature(
         num_partitions=num_partitions,
         num_sub_vectors=num_sub_vectors,
         checkpoint=checkpoint,
+        space=space,
     )
     typer.echo(f"Building feature '{name}' on {feature.table} …", err=True)
     with tqdm(unit="row", smoothing=0.05) as pbar:

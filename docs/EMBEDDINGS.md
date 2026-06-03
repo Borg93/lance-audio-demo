@@ -35,7 +35,7 @@ servers. The embedder produces vectors; the reranker produces relevance scores.
 | Compared via | **cosine** distance (IVF_PQ index) | sort by score, descending |
 | HTTP endpoint | `POST /v1/embeddings` (chat-shaped) | `POST /v1/rerank` |
 | Default URL | `http://127.0.0.1:8001` (`DEFAULT_EMBED_URL`) | `http://127.0.0.1:8002` (`DEFAULT_RERANK_URL`) |
-| GPU (Makefile) | `EMBED_GPU ?= 2` | `RERANK_GPU ?= 1` |
+| GPU (Makefile) | `EMBED_GPU ?= $(VLLM_GPU)` (= 0) | `RERANK_GPU ?= $(VLLM_GPU)` (= 0) |
 
 The Python defaults live in the client constructors (`VLLMEmbeddingClient` in
 `vllm/embedding.py`, `VLLMReranker` in `vllm/reranker.py`) and the module
@@ -81,16 +81,16 @@ flowchart LR
     end
 
     subgraph servers["vLLM servers — long-running, model stays warm"]
-        EMB["embed :8001<br/>Qwen3-VL-Embedding-2B<br/>GPU 2 (EMBED_GPU)<br/>/v1/embeddings"]
-        RER["rerank :8002<br/>Qwen3-VL-Reranker-2B<br/>GPU 1 (RERANK_GPU)<br/>/v1/rerank"]
+        EMB["embed :8001<br/>Qwen3-VL-Embedding-2B<br/>GPU 0 (EMBED_GPU)<br/>/v1/embeddings"]
+        RER["rerank :8002<br/>Qwen3-VL-Reranker-2B<br/>GPU 0 (RERANK_GPU)<br/>/v1/rerank"]
     end
 
     CLI -->|"POST /v1/embeddings"| EMB
     API -->|"POST /v1/embeddings"| EMB
     API -->|"POST /v1/rerank"| RER
 
-    EMB -.->|"several GB"| GPU2["GPU 2"]
-    RER -.->|"~bf16 weights"| GPU1["GPU 1"]
+    EMB -.->|"~0.45 mem-frac"| GPU0["GPU 0 (VLLM_GPU)"]
+    RER -.->|"~0.45 mem-frac"| GPU0
 ```
 
 ### Why out of process? (three independent reasons, all real)
@@ -115,14 +115,18 @@ extra (`Pillow`, `numpy`, `httpx`, `tqdm`) is pure HTTP-client code with **no GP
 and no torch**, so installing it never conflicts with the cu128 pin and FTS-only
 deployments need no GPU at all.
 
-### Why two GPUs?
+### One GPU, two servers — start sequentially
 
-The Makefile pins the servers to **distinct** GPUs (`EMBED_GPU ?= 2`,
-`RERANK_GPU ?= 1`) on purpose. From the Makefile comment: co-locating both on one
-GPU triggers vLLM's "memory profiling" race — when one server frees a few GB
-during init, the other's `profile_run` aborts with an `AssertionError`. With each
-server on its own GPU they can each use most of its memory
-(`EMBED_MEM_FRAC ?= 0.90`, `RERANK_MEM_FRAC ?= 0.85`).
+Both vLLM servers default to the **same** GPU (`VLLM_GPU ?= 0`, with
+`EMBED_GPU ?= $(VLLM_GPU)` and `RERANK_GPU ?= $(VLLM_GPU)`). The two 2B models
+co-locate comfortably at half memory each (`EMBED_MEM_FRAC ?= 0.45`,
+`RERANK_MEM_FRAC ?= 0.45` — ~88 GB on a 96 GB card). Override the card per
+invocation with `make embed-server VLLM_GPU=N`.
+
+**Start them sequentially** — bring the embed server fully up before launching
+the rerank server. Co-locating two servers that init *concurrently* triggers
+vLLM's "memory profiling" race: when one server frees a few GB mid-init, the
+other's `profile_run` aborts. Starting them one at a time avoids the race.
 
 ---
 
@@ -166,7 +170,7 @@ CDI spec not found" on NVIDIA-only hosts.
 --port 8001
 --enable-prefix-caching
 --dtype bfloat16
---gpu-memory-utilization 0.90    # EMBED_MEM_FRAC (own GPU → can use most of it)
+--gpu-memory-utilization 0.45    # EMBED_MEM_FRAC (shares the GPU with the reranker)
 --max-model-len 8192
 --limit-mm-per-prompt '{"image": 1}'
 --mm-processor-kwargs '{"min_pixels": 153664, "max_pixels": 153664}'  # pin pixels (see §7)
@@ -179,7 +183,7 @@ CDI spec not found" on NVIDIA-only hosts.
 --runner pooling
 --port 8002
 --dtype bfloat16
---gpu-memory-utilization 0.85    # RERANK_MEM_FRAC
+--gpu-memory-utilization 0.45    # RERANK_MEM_FRAC (shares the GPU with the embedder)
 --max-model-len 4096
 --limit-mm-per-prompt '{"image": 0, "video": 0}'   # reranker is text-only here
 --hf_overrides '{"architectures":["Qwen3VLForSequenceClassification"],
@@ -366,7 +370,8 @@ and `prefilter`.
 | `semantic` | cosine over `chunks.text_embedding` | `_vector_search(..., "text_embedding")` with embedded query |
 | `visual` | cosine over `chunk_frames.frame_embedding` | `_frame_search(...)` — image query *or* text query (shared space), joined back to `chunks` |
 | `scene` | cosine over `chunk_frames.caption_embedding` | `_frame_search(..., column="caption_embedding")` — text query vs the Swedish frame caption, joined back to `chunks` |
-| `hybrid` | FTS **+** text-vector, fused | Lance native hybrid query (`search(query_type="hybrid")`) |
+| `scene_fts` | BM25 over `chunk_frames.caption` | `_frame_fts_search(...)` — keyword query vs the Swedish frame caption, joined back to `chunks` |
+| `hybrid` | FTS **+** text-vector, fused | Lance native hybrid query (`search(query_type="hybrid", vector_column_name="text_embedding")`) |
 | `all` | FTS + text-vector + frame-vector + caption-vector | up to four rankings fused by `_rrf_fuse()`, optional rerank |
 
 `visual` and `scene` are the same join (`_frame_search`) over two different
@@ -390,15 +395,17 @@ the top candidates with full-precision vectors (see
 - **RRF (reciprocal-rank fusion, `k=60`)** is the parameter-free default. Each leg
   returns a ranked list; each candidate's score is the sum of `1/(k + rank)` over
   the lists it appears in. In **`hybrid`**, Lance's native `RRFReranker()` fuses
-  the FTS + text-vector pair. In **`all`**, raudio fuses *three* rankings (FTS,
-  text-vector, frame-vector) with its own `_rrf_fuse()` helper, keyed on
-  `(doc_id, chunk_id)`, because Lance's native RRF only covers the
-  FTS-plus-one-vector case. The 3-way `all` mode is **always equal-weight RRF** —
-  there is currently no per-leg image-vs-text weight.
+  the FTS + text-vector pair (the hybrid query passes
+  `vector_column_name="text_embedding"` because `chunks` has two vector columns).
+  In **`all`**, raudio fuses *up to four* rankings (FTS, text-vector,
+  frame-vector, caption/scene-vector) with its own `_rrf_fuse()` helper, keyed on
+  the chunk, because Lance's native RRF only covers the FTS-plus-one-vector case.
+  The independent legs are **unioned** by chunk (not chained). The `all` mode is
+  **always equal-weight RRF** — there is currently no per-leg image-vs-text weight.
 - **`LinearCombinationReranker(weight)`** is a 2-way blend used **only** in
   `hybrid` when the Balance slider (`weight`) is set:
   `final = weight·vectorScore + (1 − weight)·ftsScore` (0 = pure FTS, 1 = pure
-  vector). It cannot express three legs, so the slider is ignored in `all`.
+  vector). It cannot express more than two legs, so the slider is ignored in `all`.
 
 ```mermaid
 sequenceDiagram
@@ -411,7 +418,7 @@ sequenceDiagram
     FE->>API: GET /api/search?q=…&mode=hybrid&rerank=true
     API->>EMB: embed_text([vec_text])  (chat-shaped /v1/embeddings)
     EMB-->>API: raw 2048-d → l2_normalize → 2048-d unit vector
-    API->>LDB: search(query_type="hybrid").vector(vec).text(fts_query).rerank(fusion)
+    API->>LDB: search(query_type="hybrid", vector_column_name="text_embedding").vector(vec).text(fts_query).rerank(fusion)
     Note over LDB: BM25 candidates + ANN candidates (IVF_PQ cosine)<br/>fused by RRF (default) or LinearCombination (slider)
     LDB-->>API: fused candidate list
     alt rerank=true
@@ -433,16 +440,19 @@ letting the result list be longer than the reranked window.
 
 The reranker is **text-only**: it scores the user's combined text intent
 (`q + q_vec`) jointly with each candidate's transcript `text`; it never sees the
-image or the vectors. It applies to `fts`, `semantic`, `scene`, `hybrid`, and
-`all`. For image-only `visual` search there is no query text, so rerank is a
+image or the vectors. It applies to `fts`, `semantic`, `scene`, `scene_fts`,
+`hybrid`, and `all`. For image-only `visual` search there is no query text, so rerank is a
 **no-op** there (results keep their frame-similarity order regardless of the toggle).
 
 > **Frame search gating:** `mode=visual` and the frame branch of `mode=all` query
 > the `chunk_frames` table (`_frame_search`: rank by `frame_embedding`, dedup to
 > one best frame per chunk key, then fetch the matching `chunks` rows and re-order
-> to the frame ranking). The wiring is complete; it returns hits only once
-> `feature frame_embedding` has populated `chunk_frames.frame_embedding`. Both
-> `_vector_search` and `_frame_search` degrade to `[]` (not an error) when the
+> to the frame ranking). On the live DB `chunk_frames.frame_embedding` is fully
+> built (all 145,175 rows + `frame_embedding_idx`), so `visual` and the frame leg
+> of `all` return hits today. The genuinely-open piece is **captions** — `scene`
+> and `scene_fts` return **empty** until `make captions` builds
+> `chunk_frames.caption` + `caption_embedding` (needs the Gemma server on `:8003`).
+> Both `_vector_search` and `_frame_search` degrade to `[]` (not an error) when the
 > embedding column doesn't exist yet, so fusion modes still return their other
 > legs.
 
@@ -481,9 +491,10 @@ The mechanics (from the comment block above `_IMAGE_SIDE` in `vllm/image.py`):
 the server's `153664`-px pin → both produce 196 tokens. (An earlier `_IMAGE_SIDE
 = 448` produced 256 tokens and overflowed the server's buffer — the historical
 recurring crash documented in [INVESTIGATION.md](INVESTIGATION.md) Part B.) The
-fix is **unverified end-to-end** — `feature frame_embedding` has not yet completed
-a full run on GPU — so validate with `make embed-server-docker && make
-embed-chunk-frames` before trusting the image-embed path.
+fix is **verified end-to-end** — `feature frame_embedding` has run to completion
+on the live DB, populating all 145,175 `chunk_frames.frame_embedding` rows and
+building the `frame_embedding_idx` IVF_PQ index, so the image-embed path is no
+longer a blocker.
 
 `image_to_data_url()` calls `_square_crop()` to center-crop to a square and resize
 to `_IMAGE_SIDE`; aspect ratio is deliberately sacrificed because we only care
@@ -557,7 +568,7 @@ rebuilding the indexes after the bulk writes.
 | Change caption image resolution | `frame_to_data_url` / `_CAPTION_MAX_SIDE` in [`vllm/image.py`](../src/raudio/vllm/image.py) (full frame, no square crop) |
 | Change the caption model / prompt / language | `RAUDIO_CAPTION_*` env or `feature caption --model/--instruction/--url`; defaults in [`vllm/caption.py`](../src/raudio/vllm/caption.py) |
 | Launch / configure the vLLM servers | [`Makefile`](../Makefile) — `embed-server*`, `rerank-server*` targets (the caption VLM is run externally; raudio is only its client) |
-| Change which GPU each server uses | `EMBED_GPU` / `RERANK_GPU` in the Makefile |
+| Change which GPU the servers use | `VLLM_GPU` (both default here) — or `EMBED_GPU` / `RERANK_GPU` to split them — in the Makefile |
 | Change search fusion / add a mode | [`backend/search/service.py`](../backend/search/service.py) — `run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`; modes in [`backend/search/spec.py`](../backend/search/spec.py) |
 | Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/raudio/vllm/) satisfying `EmbeddingClient`, wire it via `backend/clients.py` / `features/columns.py` |
 | Add a new derived column | one entry in `FEATURES` in [`features/columns.py`](../src/raudio/features/columns.py) |

@@ -114,8 +114,9 @@ and `torch` are **core dependencies** (installed by a plain `uv sync`), but
 heavy — so `transcribe.py` imports them **lazily** inside `run_transcribe` and
 raises a clear hint to re-run `uv sync` if they are somehow missing. That keeps
 `raudio --help` fast and lets the FTS-only / search-only paths run without
-touching the GPU. (The only *optional* extra is `multimodal`, the client-side
-embedding/reranker stack — unrelated to ASR.)
+touching the GPU. (The *optional* extras are `multimodal`, the client-side
+embedding/reranker stack, and `atlas` (evoc / scikit-learn, for `raudio feature
+atlas`) — both unrelated to ASR.)
 
 ---
 
@@ -216,14 +217,14 @@ erDiagram
         float start
         float end
         str text
-        float score
+        float score "nullable (float or None)"
         list words
     }
     WordSegment {
         str text
         float start
         float end
-        float score
+        float score "nullable (float or None)"
     }
 ```
 

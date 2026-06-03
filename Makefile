@@ -27,7 +27,7 @@ GPU             ?= 2
 	ingest ingest-with-media ingest-full reindex-fts \
 	pipeline pipeline-sharded pipeline-multimodal \
 	embed-server rerank-server embed-server-docker rerank-server-docker vllm-stop kernels-prepare embed-chunks extract-chunk-frames embed-chunk-frames \
-	caption-chunk-frames embed-captions captions \
+	caption-chunk-frames embed-captions captions topics \
 	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
 	hf-upload-db hf-upload-videos hf-upload-all hf-download-db hf-download-all \
 	reingest search query demo shell clean clean-db clean-run reset download
@@ -357,6 +357,9 @@ embed-captions:       ## Embed chunk_frames.caption → caption_embedding + IVF_
 # Caption pipeline: write the Swedish captions, then embed them for scene search.
 # Reuses existing frames — run `extract-chunk-frames` first if chunk_frames is empty.
 captions: caption-chunk-frames embed-captions  ## Caption frames + embed captions (scene search).
+
+topics:               ## Build Swedish topic layers (Toponymy, isolated env; needs atlas map + Gemma :8003 + embed :8001).
+	uv run raudio --db $(DB) feature topics
 
 # Full multimodal indexing chain. Existing `pipeline` runs first, then the
 # three new stages add the multimodal columns + indexes. Resumable: each

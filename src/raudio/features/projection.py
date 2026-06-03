@@ -9,6 +9,12 @@ Attaches three scalar columns to ``chunks`` from ``text_embedding``:
 * ``atlas_cluster`` — a semantic cluster id (``-1`` = noise) from the public
   :class:`evoc.EVoC` estimator, used as a "colour by cluster" option in the UI.
 
+The triplet is **namespaced** by ``column_prefix`` so a second, parallel
+projection can coexist: the default ``'atlas_'`` (text, from ``text_embedding``)
+and ``'atlas_img_'`` (visual, from a chunk-level ``frame_embedding``) write
+``atlas_x/y/cluster`` vs ``atlas_img_x/y/cluster`` respectively. The two cluster
+id spaces are independent EVōC fits and never comparable.
+
 Unlike the per-batch features in :mod:`raudio.features.columns`, every row's
 value depends on *all* rows (a single global fit), so this can't run as an
 ``add_columns`` UDF. It mirrors :func:`upsert_blob_column`'s two-pass shape:
@@ -39,6 +45,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Default (text-space) namespace prefix; the X/Y/cluster column names derive
+#: from it (``atlas_x`` / ``atlas_y`` / ``atlas_cluster``). The visual space
+#: passes ``column_prefix='atlas_img_'`` to get a parallel, non-clashing triplet.
+DEFAULT_ATLAS_PREFIX = "atlas_"
 ATLAS_X_COLUMN = "atlas_x"
 ATLAS_Y_COLUMN = "atlas_y"
 ATLAS_CLUSTER_COLUMN = "atlas_cluster"
@@ -50,10 +60,22 @@ DEFAULT_N_NEIGHBORS = 15
 DEFAULT_N_EPOCHS = 50
 
 
+def atlas_columns(column_prefix: str = DEFAULT_ATLAS_PREFIX) -> tuple[str, str, str]:
+    """The ``(x, y, cluster)`` column names for a projection namespace.
+
+    ``'atlas_'`` → ``('atlas_x', 'atlas_y', 'atlas_cluster')`` (text, default);
+    ``'atlas_img_'`` → ``('atlas_img_x', 'atlas_img_y', 'atlas_img_cluster')``
+    (visual). The cluster ids of the two spaces are NOT comparable — each is an
+    independent EVōC fit — so they deliberately live in separate columns.
+    """
+    return f"{column_prefix}x", f"{column_prefix}y", f"{column_prefix}cluster"
+
+
 def project_atlas_columns(
     chunks_path: str | Path,
     *,
     source_column: str = "text_embedding",
+    column_prefix: str = DEFAULT_ATLAS_PREFIX,
     n_neighbors: int = DEFAULT_N_NEIGHBORS,
     n_epochs: int = DEFAULT_N_EPOCHS,
     seed: int | None = None,
@@ -62,23 +84,28 @@ def project_atlas_columns(
     overwrite: bool = False,
     progress: Callable[[int], None] | None = None,
 ) -> int:
-    """Fit EVōC and attach ``atlas_x`` / ``atlas_y`` / ``atlas_cluster``.
+    """Fit EVōC and attach ``{prefix}x`` / ``{prefix}y`` / ``{prefix}cluster``.
+
+    ``column_prefix`` namespaces the output triplet so a second projection (e.g.
+    the visual ``frame_embedding`` space at ``column_prefix='atlas_img_'``) can
+    coexist with the default text space. ``source_column`` chooses the embedding
+    column EVōC fits over.
 
     Returns the number of rows projected (``0`` when the columns already exist
     and ``overwrite`` is ``False``). Raises :class:`ValueError` if
     ``source_column`` is absent or has any ``NULL`` rows — EVōC can't fit a
     partially-embedded table, so the failure is loud and actionable.
     """
+    x_col, y_col, cluster_col = atlas_columns(column_prefix)
     ds = lance.dataset(str(chunks_path))
 
     if source_column not in ds.schema.names:
         raise ValueError(
-            f"'{source_column}' column missing — run `raudio feature text_embedding` first"
+            f"'{source_column}' column missing — run "
+            f"`raudio feature {source_column}` (or `frame_embedding` for the visual space) first"
         )
 
-    targets = [ATLAS_X_COLUMN, ATLAS_Y_COLUMN] + (
-        [ATLAS_CLUSTER_COLUMN] if with_clusters else []
-    )
+    targets = [x_col, y_col] + ([cluster_col] if with_clusters else [])
     if all(c in ds.schema.names for c in targets) and not overwrite:
         logger.info("%s already present — pass --all to rebuild", ", ".join(targets))
         return 0
@@ -88,21 +115,19 @@ def project_atlas_columns(
         return 0
 
     xy = _evoc_layout(matrix, n_neighbors=n_neighbors, n_epochs=n_epochs, seed=seed)
-    clusters = (
-        _evoc_clusters(matrix, n_neighbors=n_neighbors, seed=seed) if with_clusters else None
-    )
+    clusters = _evoc_clusters(matrix, n_neighbors=n_neighbors, seed=seed) if with_clusters else None
     del matrix  # ~1 GB for 145k × 2048 float32 — free before the attach passes
 
     _attach_column_by_row_id(
         chunks_path,
-        ATLAS_X_COLUMN,
+        x_col,
         dict(zip(row_ids, xy[:, 0].tolist(), strict=True)),
         pa.float32(),
         batch_rows=batch_rows,
     )
     _attach_column_by_row_id(
         chunks_path,
-        ATLAS_Y_COLUMN,
+        y_col,
         dict(zip(row_ids, xy[:, 1].tolist(), strict=True)),
         pa.float32(),
         batch_rows=batch_rows,
@@ -111,7 +136,7 @@ def project_atlas_columns(
     if clusters is not None:
         _attach_column_by_row_id(
             chunks_path,
-            ATLAS_CLUSTER_COLUMN,
+            cluster_col,
             dict(zip(row_ids, clusters.tolist(), strict=True)),
             pa.int32(),
             batch_rows=batch_rows,
@@ -127,9 +152,7 @@ def _load_embedding_matrix(
     dim = ds.schema.field(source_column).type.list_size
     row_ids: list[int] = []
     blocks: list[np.ndarray] = []
-    for batch in ds.to_batches(
-        columns=[source_column], with_row_id=True, batch_size=batch_rows
-    ):
+    for batch in ds.to_batches(columns=[source_column], with_row_id=True, batch_size=batch_rows):
         col = batch.column(source_column)
         if col.null_count > 0:
             raise ValueError(
@@ -165,9 +188,7 @@ def _evoc_layout(
     try:
         from evoc.label_propagation import label_propagation_init
 
-        initial = label_propagation_init(
-            graph, n_components=2, data=matrix, random_state=rng
-        )
+        initial = label_propagation_init(graph, n_components=2, data=matrix, random_state=rng)
     except Exception as e:  # noqa: BLE001 — init is an optimisation; fall back to random
         logger.warning("EVōC label-prop init failed (%s); using random init", e)
 
