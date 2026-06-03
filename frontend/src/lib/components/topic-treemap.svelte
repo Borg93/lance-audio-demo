@@ -1,15 +1,19 @@
 <script lang="ts">
   /**
-   * Zoomable topic treemap (Tree page).
+   * Topic treemap (Tree page) with two views + a noise toggle.
    *
-   * Renders the nested topic hierarchy (`getTopics().hierarchy`) one level at a
-   * time: the LayerChart <Treemap> computes the rectangular layout, we draw the
-   * current root's direct children as SVG cells. Clicking a branch zooms in
-   * (drill-down); a breadcrumb zooms back out. "Show results" hands a topic off
-   * to Search via `/?topic=<name>` (matched against every topic_l* layer).
+   * The LayerChart <Treemap> computes the rectangular layout from the topic
+   * hierarchy (`getTopics().hierarchy`); we draw the cells as SVG:
    *
-   * The `(övrigt)` bucket is HDBSCAN noise (stored as NULL, so it matches no
-   * topic_l* value) — shown muted and non-interactive.
+   *   • "Flat" (drill)  — one level at a time. Click a branch to zoom in, a
+   *     breadcrumb to zoom out. The focused, low-clutter view.
+   *   • "Nested" — every level at once, children nested inside their parent
+   *     (parent label in the top strip). See sub-structure without drilling.
+   *
+   * Clicking a leaf (or "Show results") hands the topic to Search via
+   * `/?topic=<name>`. The `(övrigt)` noise bucket (unclustered chunks) is hidden
+   * by default — toggle "Show noise" to bring it back (shown muted). Topic names
+   * are Swedish (the data); the chrome is English.
    */
   import { Chart, Svg } from 'layerchart';
   import { Treemap } from 'layerchart/hierarchy';
@@ -17,7 +21,7 @@
   import { scaleOrdinal } from 'd3-scale';
   import { schemeTableau10 } from 'd3-scale-chromatic';
   import { goto } from '$app/navigation';
-  import { ChevronRight, ArrowRight } from 'lucide-svelte';
+  import { ChevronRight, ArrowRight, Eye, EyeOff } from 'lucide-svelte';
   import type { TopicNode } from '$lib/api';
 
   // `noiseLabel` is the unclustered-bucket name, sourced from /api/topics
@@ -25,6 +29,11 @@
   let { hierarchy, noiseLabel }: { hierarchy: TopicNode; noiseLabel: string } = $props();
 
   const fmt = (n: number) => n.toLocaleString('sv-SE');
+  const sumLeaves = (d: TopicNode) => (d.children?.length ? 0 : (d.value ?? 0));
+
+  let view = $state<'drill' | 'nested'>('drill');
+  let showNoise = $state(false);
+  let hovered = $state<string | null>(null);
 
   // Drill stack: branches descended into below the root. The breadcrumb is the
   // root prop + this stack (kept separate so referencing the prop stays
@@ -33,21 +42,46 @@
   const path = $derived<TopicNode[]>([hierarchy, ...drill]);
   const current = $derived<TopicNode>(drill.at(-1) ?? hierarchy);
 
-  // d3 hierarchy for the current node: branches contribute 0 (leaves carry the
+  /** Drop the noise bucket (recursively) so real topics fill the canvas. */
+  function pruneNoise(node: TopicNode): TopicNode {
+    if (!node.children) return node;
+    return { ...node, children: node.children.filter((c) => c.name !== noiseLabel).map(pruneNoise) };
+  }
+
+  const displayData = $derived(showNoise ? current : pruneNoise(current));
+
+  // d3 hierarchy for the shown node: branches contribute 0 (leaves carry the
   // chunk count), so the treemap areas sum cleanly. Largest topics first.
   const root = $derived(
-    d3hierarchy<TopicNode>(current)
-      .sum((d) => (d.children?.length ? 0 : (d.value ?? 0)))
+    d3hierarchy<TopicNode>(displayData)
+      .sum(sumLeaves)
       .sort((a, b) => (b.value ?? 0) - (a.value ?? 0)),
   );
 
+  // Chunks hidden by the noise toggle (for the breadcrumb hint).
+  const hiddenCount = $derived.by(() => {
+    if (showNoise) return 0;
+    const full = d3hierarchy<TopicNode>(current).sum(sumLeaves);
+    return (full.value ?? 0) - (root.value ?? 0);
+  });
+
+  // Nested view reserves a top strip per branch for its label; drill view doesn't.
+  const pad = $derived(
+    view === 'nested'
+      ? { paddingInner: 2, paddingOuter: 2, paddingTop: 16 }
+      : { paddingInner: 3, paddingOuter: 0, paddingTop: 0 },
+  );
+
   const color = scaleOrdinal<string, string>(schemeTableau10);
-  const fillFor = (node: TopicNode) =>
-    node.name === noiseLabel ? 'var(--color-muted)' : color(node.name);
+  /** A node's hue = its broadest (depth-1) ancestor, so a topic + its
+   *  sub-topics share a colour family across both views. */
+  function nodeFill(node: HierarchyRectangularNode<TopicNode>): string {
+    if (node.data.name === noiseLabel) return 'var(--color-muted)';
+    const top = node.ancestors().find((n) => n.depth === 1);
+    return color(top?.data.name ?? node.data.name);
+  }
 
   const isInteractive = (node: TopicNode) => node.name !== noiseLabel;
-
-  let hovered = $state<string | null>(null);
 
   function onCell(node: TopicNode) {
     if (!isInteractive(node)) return;
@@ -73,8 +107,8 @@
 </script>
 
 <div class="flex h-full w-full flex-col">
-  <!-- Breadcrumb + "show results for current branch" -->
-  <div class="flex items-center gap-1 border-b border-border bg-card/30 px-4 py-2 text-xs">
+  <!-- Breadcrumb + view/noise controls -->
+  <div class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-4 py-2 text-xs">
     {#each path as node, i (i)}
       {#if i > 0}<ChevronRight class="size-3 text-muted-foreground/50" />{/if}
       <button
@@ -88,30 +122,76 @@
         {node.name}
       </button>
     {/each}
-    <span class="ml-1 text-muted-foreground/70">· {fmt(root.value ?? 0)} segment</span>
+    <span class="ml-1 text-muted-foreground/70">
+      · {fmt(root.value ?? 0)} chunks{#if hiddenCount > 0} · noise hidden: {fmt(hiddenCount)}{/if}
+    </span>
 
-    {#if path.length > 1 && isInteractive(current)}
+    <div class="ml-auto flex items-center gap-2">
+      <!-- noise toggle -->
       <button
         type="button"
-        class="ml-auto inline-flex items-center gap-1 rounded-md border border-border bg-secondary px-2 py-0.5 font-medium text-foreground transition-colors hover:bg-secondary/70"
-        onclick={() => showResults(current.name)}
+        class="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        onclick={() => (showNoise = !showNoise)}
+        title={showNoise ? 'Hide unclustered (övrigt)' : 'Show unclustered (övrigt)'}
       >
-        Visa resultat <ArrowRight class="size-3" />
+        {#if showNoise}<EyeOff class="size-3" /> Hide noise{:else}<Eye class="size-3" /> Show noise{/if}
       </button>
-    {/if}
+
+      <!-- view switch -->
+      <div class="flex items-center gap-0.5 rounded-md border border-border p-0.5">
+        <button
+          type="button"
+          class="rounded px-1.5 py-0.5 font-medium transition-colors hover:bg-secondary/70"
+          class:bg-secondary={view === 'drill'}
+          class:text-foreground={view === 'drill'}
+          class:text-muted-foreground={view !== 'drill'}
+          onclick={() => (view = 'drill')}
+          title="One level at a time — click to zoom in"
+        >
+          Flat
+        </button>
+        <button
+          type="button"
+          class="rounded px-1.5 py-0.5 font-medium transition-colors hover:bg-secondary/70"
+          class:bg-secondary={view === 'nested'}
+          class:text-foreground={view === 'nested'}
+          class:text-muted-foreground={view !== 'nested'}
+          onclick={() => (view = 'nested')}
+          title="All levels nested at once"
+        >
+          Nested
+        </button>
+      </div>
+
+      {#if path.length > 1 && isInteractive(current)}
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded-md border border-border bg-secondary px-2 py-0.5 font-medium text-foreground transition-colors hover:bg-secondary/70"
+          onclick={() => showResults(current.name)}
+        >
+          Show results <ArrowRight class="size-3" />
+        </button>
+      {/if}
+    </div>
   </div>
 
   <!-- Treemap canvas -->
   <div class="min-h-0 flex-1 p-2">
     <Chart data={root}>
       <Svg>
-        <Treemap hierarchy={root} paddingInner={3}>
+        <Treemap hierarchy={root} {...pad}>
           {#snippet children({ nodes }: { nodes: HierarchyRectangularNode<TopicNode>[] })}
-            {#each nodes.filter((n) => n.depth === 1) as node (node.data.name)}
+            {@const visible =
+              view === 'nested' ? nodes.filter((n) => n.depth >= 1) : nodes.filter((n) => n.depth === 1)}
+            {#each visible as node, i (i)}
               {@const w = node.x1 - node.x0}
               {@const h = node.y1 - node.y0}
-              {@const interactive = isInteractive(node.data)}
+              {@const isBranch = !!node.data.children?.length}
+              {@const isNoise = node.data.name === noiseLabel}
+              {@const interactive = !isNoise}
+              {@const header = view === 'nested' && isBranch}
               {@const label = fit(node.data.name, w)}
+              {@const hot = hovered === node.data.name}
               <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
               <g
                 role={interactive ? 'button' : undefined}
@@ -127,42 +207,58 @@
                 onmouseenter={() => (hovered = node.data.name)}
                 onmouseleave={() => (hovered = null)}
               >
-                <title>
-                  {node.data.name} — {fmt(node.value ?? 0)} segment{node.data.children?.length
-                    ? ' (klicka för att zooma in)'
+                <title
+                  >{node.data.name} — {fmt(node.value ?? 0)} chunks{isBranch
+                    ? ' (click to zoom in)'
                     : interactive
-                      ? ' (klicka för att visa resultat)'
-                      : ' (ej klustrade)'}
-                </title>
+                      ? ' (click to show results)'
+                      : ' (unclustered)'}</title
+                >
                 <rect
                   x={node.x0}
                   y={node.y0}
                   width={w}
                   height={h}
-                  rx={3}
-                  fill={fillFor(node.data)}
-                  opacity={interactive ? (hovered === node.data.name ? 1 : 0.85) : 0.35}
+                  rx={view === 'nested' ? 4 : 3}
+                  fill={nodeFill(node)}
+                  fill-opacity={isNoise ? 0.3 : header ? 0.4 : 1}
+                  opacity={hot ? 1 : 0.92}
                   stroke="var(--color-background)"
-                  stroke-width={hovered === node.data.name ? 2 : 1}
+                  stroke-width={hot ? 2 : 1}
                 />
-                {#if w > 46 && h > 22 && label}
-                  <text
-                    x={node.x0 + 7}
-                    y={node.y0 + 17}
-                    class="pointer-events-none fill-white text-[12px] font-semibold"
-                    style="paint-order: stroke; stroke: rgba(0,0,0,0.35); stroke-width: 2.5px;"
-                  >
-                    {label}
-                  </text>
-                  {#if h > 38}
+                {#if label && w > 44}
+                  {#if header}
+                    {#if h > 16}
+                      <text
+                        x={node.x0 + 6}
+                        y={node.y0 + 12}
+                        class="pointer-events-none fill-white text-[11px] font-semibold"
+                        style="paint-order: stroke; stroke: rgba(0,0,0,0.4); stroke-width: 2.5px;"
+                      >
+                        {label}
+                      </text>
+                    {/if}
+                  {:else if h > 22}
                     <text
                       x={node.x0 + 7}
-                      y={node.y0 + 33}
-                      class="pointer-events-none fill-white/85 text-[11px] tabular-nums"
-                      style="paint-order: stroke; stroke: rgba(0,0,0,0.3); stroke-width: 2px;"
+                      y={node.y0 + (view === 'nested' ? 13 : 17)}
+                      class="pointer-events-none fill-white {view === 'nested'
+                        ? 'text-[11px]'
+                        : 'text-[12px]'} font-semibold"
+                      style="paint-order: stroke; stroke: rgba(0,0,0,0.35); stroke-width: 2.5px;"
                     >
-                      {fmt(node.value ?? 0)}
+                      {label}
                     </text>
+                    {#if h > (view === 'nested' ? 28 : 38)}
+                      <text
+                        x={node.x0 + 7}
+                        y={node.y0 + (view === 'nested' ? 26 : 33)}
+                        class="pointer-events-none fill-white/85 text-[10px] tabular-nums"
+                        style="paint-order: stroke; stroke: rgba(0,0,0,0.3); stroke-width: 2px;"
+                      >
+                        {fmt(node.value ?? 0)}
+                      </text>
+                    {/if}
                   {/if}
                 {/if}
               </g>

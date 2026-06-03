@@ -367,7 +367,9 @@ export const TopicsResponseSchema = z.object({
     hierarchy: TopicNodeSchema.nullable(),
     // The bucket name the backend uses for unclustered chunks (source of truth in
     // topic_tree.py:NOISE_LABEL) — the treemap reads it instead of hardcoding it.
-    noise_label: z.string(),
+    // Optional so an older backend (pre-`noise_label`) degrades (noise shown as a
+    // normal topic) rather than hard-failing the whole page on a zod mismatch.
+    noise_label: z.string().optional(),
 });
 export type TopicsResponse = z.infer<typeof TopicsResponseSchema>;
 

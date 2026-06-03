@@ -225,7 +225,8 @@
       for (let i = 0; i < n; i++) {
         const o = i * 4;
         const c = cl[i]!;
-        if (c >= 0 && hidden.has(c)) {
+        // Noise (c < 0) shares one hide key (-1); clusters use their own id.
+        if (hidden.has(c < 0 ? -1 : c)) {
           buf[o + 3] = 0; // fully hidden
           continue;
         }
@@ -687,10 +688,33 @@
             </div>
           {/each}
           {#if clusterStats.noise > 0}
-            <div class="mt-1 flex items-center gap-2 border-t border-border/60 px-1 pt-1 text-muted-foreground">
-              <span class="size-2.5 shrink-0 rounded-full" style:background={isDark ? '#52525b' : '#cccccc'}></span>
-              <span>noise (unclustered)</span>
-              <span class="ml-auto font-mono">{clusterStats.noise.toLocaleString()}</span>
+            {@const noiseHidden = crossFilter.hiddenClusters.has(-1)}
+            <div
+              class="mt-1 flex w-full items-center gap-1 rounded border-t border-border/60 px-1 pt-1 hover:bg-secondary/50"
+              class:opacity-40={noiseHidden}
+            >
+              <button
+                type="button"
+                class="flex flex-1 items-center gap-2 text-left text-muted-foreground"
+                onclick={() => pickCluster(-1)}
+                title="Select the unclustered (noise) points"
+              >
+                <span class="size-2.5 shrink-0 rounded-full" style:background={isDark ? '#52525b' : '#cccccc'}></span>
+                <span>noise (unclustered)</span>
+                <span class="ml-auto font-mono">{clusterStats.noise.toLocaleString()}</span>
+              </button>
+              <button
+                type="button"
+                class="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                onclick={() => crossFilter.toggleClusterHidden(-1)}
+                title={noiseHidden ? 'Show noise on map' : 'Hide noise on map'}
+              >
+                {#if noiseHidden}
+                  <EyeOff class="size-3.5" />
+                {:else}
+                  <Eye class="size-3.5" />
+                {/if}
+              </button>
             </div>
           {/if}
         </div>

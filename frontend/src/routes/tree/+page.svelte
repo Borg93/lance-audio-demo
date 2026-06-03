@@ -34,7 +34,7 @@
           return;
         }
         hierarchy = res.hierarchy;
-        noiseLabel = res.noise_label;
+        noiseLabel = res.noise_label ?? ''; // '' (no match) on an older backend
         phase = 'ready';
       } catch (e) {
         if (!cancelled) {
