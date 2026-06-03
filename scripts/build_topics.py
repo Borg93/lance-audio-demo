@@ -32,7 +32,6 @@ frontend shows them as a multi-select facet. They are *filters*, not a search.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -79,12 +78,10 @@ def main() -> int:
     ap.add_argument("--min-clusters", type=int, default=6)
     ap.add_argument("--base-min-cluster-size", type=int, default=100)
     ap.add_argument("--max-layers", type=int, default=None)
-    ap.add_argument("--concurrency", type=int, default=8, help="concurrent LLM naming calls")
     args = ap.parse_args()
 
-    # The async namer doesn't reliably forward base_url to the OpenAI client, so
-    # point the client at the local Gemma via env (the embedder's explicit
-    # base_url for :8001 still overrides this for its own calls).
+    # Point the OpenAI client at the local Gemma via env (belt-and-suspenders with
+    # the explicit base_url below); the embedder's explicit :8001 still wins for it.
     os.environ["OPENAI_API_KEY"] = "local"
     os.environ["OPENAI_BASE_URL"] = args.llm_url
 
@@ -92,7 +89,11 @@ def main() -> int:
     import pyarrow as pa
     from toponymy import KeyphraseBuilder, Toponymy, ToponymyClusterer
     from toponymy.embedding_wrappers import OpenAIEmbedder
-    from toponymy.llm_wrappers import AsyncOpenAINamer
+
+    # Synchronous namer on purpose: Toponymy drives naming with one asyncio.run()
+    # PER LAYER, and AsyncOpenAINamer binds its semaphore to the first loop, so it
+    # dies with "Semaphore is bound to a different event loop" on later layers.
+    from toponymy.llm_wrappers import OpenAINamer
 
     db = Path(args.db)
     chunks_path = db / "chunks.lance"
@@ -110,17 +111,22 @@ def main() -> int:
             np.asarray(tbl.column("atlas_y").to_pylist(), dtype=np.float32),
         ]
     )
+    if not (np.isfinite(embedding_vectors).all() and np.isfinite(clusterable_vectors).all()):
+        sys.exit(
+            "text_embedding or atlas_x/atlas_y contains NULL/NaN — rebuild "
+            "`raudio feature text_embedding` and `raudio feature atlas --space text` "
+            "so every chunk is populated before topic modelling."
+        )
     print(
         f"topics: {len(documents)} chunks · embed {embedding_vectors.shape} · map {clusterable_vectors.shape}",
         file=sys.stderr,
     )
 
     embedder = OpenAIEmbedder(api_key="local", base_url=args.embed_url, model=args.embed_model)
-    namer = AsyncOpenAINamer(
+    namer = OpenAINamer(
         api_key="local",
         base_url=args.llm_url,
         model=args.llm_model,
-        max_concurrent_requests=args.concurrency,
         llm_specific_instructions=(
             "Svara alltid på svenska. Ge korta, beskrivande och distinkta ämnesnamn."
         ),
@@ -148,25 +154,31 @@ def main() -> int:
     model.fit(documents, embedding_vectors, clusterable_vectors)
 
     # Per-chunk topic name at each layer, aligned to the scan order above.
+    # Noise rows (cluster -1) come back as the literal 'Unlabelled' from
+    # make_topic_name_vector — store NULL instead so "no topic" is a clean filter.
     n_layers = len(model.cluster_layers_)
-    layer_names = {
-        f"topic_l{layer_id}": [str(x) for x in layer.make_topic_name_vector().tolist()]
-        for layer_id, layer in enumerate(model.cluster_layers_)
+
+    def _names(layer) -> list[str | None]:
+        return [None if x == "Unlabelled" else str(x) for x in layer.make_topic_name_vector().tolist()]
+
+    layer_names: dict[str, list[str | None]] = {
+        f"topic_l{layer_id}": _names(layer) for layer_id, layer in enumerate(model.cluster_layers_)
     }
 
-    # Per-VIDEO dominant topic: the majority broadest-layer topic among each
-    # video's chunks, written onto every chunk so the backend can filter videos
-    # by theme (dedup by doc_id) without a separate documents-table join. No extra
-    # model calls — pure aggregation of the chunk topics already named above.
+    # Per-VIDEO dominant topic: majority of the broadest layer's (non-null) topic
+    # among each video's chunks, written onto every chunk so the backend can filter
+    # videos by theme (dedup by doc_id). Pure aggregation — no extra model calls.
+    # Videos whose chunks are all noise get NULL (not 'Unlabelled').
     from collections import Counter
 
     doc_ids = tbl.column("doc_id").to_pylist()
     broadest = layer_names[f"topic_l{n_layers - 1}"]
     votes: dict[object, Counter] = {}
     for doc_id, name in zip(doc_ids, broadest, strict=True):
-        votes.setdefault(doc_id, Counter())[name] += 1
+        if name is not None:
+            votes.setdefault(doc_id, Counter())[name] += 1
     dominant = {doc_id: counter.most_common(1)[0][0] for doc_id, counter in votes.items()}
-    layer_names["doc_topic"] = [dominant[doc_id] for doc_id in doc_ids]
+    layer_names["doc_topic"] = [dominant.get(doc_id) for doc_id in doc_ids]
 
     # Attach the columns keyed by _rowid (order-independent, like raudio's engine).
     # Drop any prior topic columns so a re-run rebuilds cleanly.
@@ -187,21 +199,22 @@ def main() -> int:
 
     ds.add_columns(attach, read_columns=["_rowid"])
 
-    # Names + hierarchy artifact for the frontend topic facet / tree.
-    artifact = {
-        "n_layers": n_layers,
-        "topic_names": model.topic_names_,  # list[list[str]] per layer
-        "cluster_tree": [
-            {"parent": list(parent), "children": [list(c) for c in children]}
-            for parent, children in model.cluster_tree_.items()
-        ],
-    }
-    artifact_path = Path(f"{args.db}.topics.json")
-    artifact_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Lance-native fast filtering: a BITMAP scalar index on the low-cardinality
+    # facet columns (per-video doc_topic + the broadest chunk layer). The topic
+    # LABELS live in the string columns themselves — no sidecar catalog file. Both
+    # the flat facet AND the nested hierarchy for a treemap are reconstructable from
+    # the columns: DISTINCT topic_l{k} = the facet; grouping the (topic_l0, topic_l1,
+    # …) tuples with chunk counts gives the parent→child tree.
+    ds = lance.dataset(str(chunks_path))
+    for facet_col in ("doc_topic", f"topic_l{n_layers - 1}"):
+        try:
+            ds.create_scalar_index(facet_col, index_type="BITMAP")
+        except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
+            print(f"  (bitmap index on {facet_col} skipped: {e})", file=sys.stderr)
 
     print(
         f"WROTE topics: {len(documents)} chunks · {n_layers} layers "
-        f"(topic_l0..topic_l{n_layers - 1}) + doc_topic (per-video) · artifact {artifact_path}",
+        f"(topic_l0..topic_l{n_layers - 1}) + doc_topic (per-video), BITMAP-indexed",
         file=sys.stderr,
     )
     print(len(documents))  # stdout: row count for the calling CLI

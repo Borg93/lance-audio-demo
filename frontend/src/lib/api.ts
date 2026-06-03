@@ -112,6 +112,8 @@ export interface SearchSpec {
     namn?: string | undefined;
     referenskod?: string | undefined;
     extraid?: string | undefined;
+    /** Topic name (Tree page) — matches any topic_l* layer; browses that topic's chunks. */
+    topic?: string | undefined;
     image?: File | null | undefined;
 }
 
@@ -159,6 +161,7 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
         if (spec.namn) fd.append('namn', spec.namn);
         if (spec.referenskod) fd.append('referenskod', spec.referenskod);
         if (spec.extraid) fd.append('extraid', spec.extraid);
+        if (spec.topic) fd.append('topic', spec.topic);
         const r = await fetcher('/api/search', { method: 'POST', body: fd });
         return asJson(r, HitsArraySchema);
     }
@@ -176,6 +179,7 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
     if (spec.namn) params.set('namn', spec.namn);
     if (spec.referenskod) params.set('referenskod', spec.referenskod);
     if (spec.extraid) params.set('extraid', spec.extraid);
+    if (spec.topic) params.set('topic', spec.topic);
     const r = await fetcher(`/api/search?${params}`);
     return asJson(r, HitsArraySchema);
 }
@@ -231,17 +235,20 @@ export const mediaUrl = (doc_id: string) => `/api/media/${encodeURIComponent(doc
 // streams compact coord/colour/key arrays for the scatter renderer, and
 // `chunk` lazily fetches one chunk's full detail when a point is selected.
 
-/** The two projection spaces the atlas can be built on. `text` = transcript
+/** The three projection spaces the atlas can be built on. `text` = transcript
  *  semantics (`text_embedding` → atlas_*); `visual` = the per-chunk frame image
- *  vector (`frame_embedding` → atlas_img_*). */
-export type AtlasSpace = 'text' | 'visual';
+ *  vector (`frame_embedding` → atlas_img_*); `caption` = the frame's Swedish
+ *  caption embedding (`caption_embedding` → atlas_cap_*). */
+export type AtlasSpace = 'text' | 'visual' | 'caption';
 
 const AtlasStatusSchema = z.object({
     projected: z.boolean(),
     rows: z.number().int(),
     space: z.string().optional(),
-    // Which spaces are built — gates the Text/Visual toggle.
-    spaces: z.object({ text: z.boolean(), visual: z.boolean() }).optional(),
+    // Which spaces are built — gates the Text/Visual/Caption toggle.
+    spaces: z
+        .object({ text: z.boolean(), visual: z.boolean(), caption: z.boolean() })
+        .optional(),
 });
 export type AtlasStatus = z.infer<typeof AtlasStatusSchema>;
 
@@ -281,7 +288,11 @@ export async function getAtlasPoints(
     space: AtlasSpace = 'text',
     fetcher: typeof fetch = fetch,
 ): Promise<AtlasPoints> {
-    const r = await fetcher(`/api/atlas/points?space=${space}`);
+    // `v` busts any HTTP cache (the response sets max-age=300) left by a build
+    // whose payload shape differed — notably entries from before `rowid` was
+    // added, which would silently break the selection table. Bump when the
+    // points payload shape changes; the backend ignores the extra param.
+    const r = await fetcher(`/api/atlas/points?space=${space}&v=2`);
     if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new ApiError(r.status, body?.detail ?? r.statusText);
@@ -317,4 +328,39 @@ export async function getAtlasChunks(
         body: JSON.stringify({ rowids }),
     });
     return asJson(r, z.array(HitSchema));
+}
+
+// ── Topics (Tree page) ────────────────────────────────────────────────────
+// `raudio feature topics` clusters chunks (Toponymy) into a nested topic
+// hierarchy and stores it as Lance JSONB in `topics.lance`. `getTopics` reads
+// that one tree; the LayerChart <Treemap> renders it, and clicking a node sends
+// `topic=` to /api/search (matched against every topic_l* layer column).
+
+/** One node of the topic tree: a leaf carries `value` (chunk count), a branch
+ *  carries `children`. Mirrors the shape `build_topic_tree` writes. */
+export interface TopicNode {
+    name: string;
+    value?: number | undefined;
+    children?: TopicNode[] | undefined;
+}
+
+const TopicNodeSchema: z.ZodType<TopicNode> = z.lazy(() =>
+    z.object({
+        name: z.string(),
+        value: z.number().optional(),
+        children: z.array(TopicNodeSchema).optional(),
+    }),
+);
+
+export const TopicsResponseSchema = z.object({
+    built: z.boolean(),
+    layers: z.number().int(),
+    n_chunks: z.number().int(),
+    hierarchy: TopicNodeSchema.nullable(),
+});
+export type TopicsResponse = z.infer<typeof TopicsResponseSchema>;
+
+/** The topic hierarchy for the Tree treemap (`built: false` if not generated). */
+export async function getTopics(fetcher: typeof fetch = fetch): Promise<TopicsResponse> {
+    return asJson(await fetcher('/api/topics'), TopicsResponseSchema);
 }

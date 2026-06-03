@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { page } from '$app/state';
   import {
     search,
     listDocuments,
@@ -66,6 +68,12 @@
   let mapHits = $state<Hit[]>([]);
   let mapSelectionTotal = $state(0);
   const MAP_TABLE_COLS = ['thumbnail', 'namn', 'language', 'start', 'end', 'text'];
+
+  // The Map-view table shows the lasso/legend selection when there is one,
+  // otherwise the active search hits (text or image search) — which are also
+  // highlighted on the map. So searching populates the table too, not only map
+  // selections; a lasso then narrows it to the picked region.
+  const mapTableHits = $derived(mapSelectionTotal > 0 ? mapHits : hits);
 
   // DIRECTION A — search/filter → dim+highlight the map. When the map is shown,
   // project the current search hits onto point indices so matches light up and
@@ -151,17 +159,23 @@
   /** Selected document in browse mode (so the grid can highlight it). */
   const activeDocId = $derived(active?.doc_id ?? null);
 
-  const isBrowsing = $derived(!spec.q && !spec.image);
+  const isBrowsing = $derived(!spec.q && !spec.image && !spec.topic);
   const docsTotalPages = $derived(Math.max(1, Math.ceil(docsTotal / PER_PAGE)));
 
   async function runSearch(next: SearchSpec) {
     // Reset paging on a new search.
     spec = { ...next, n: next.n ?? PAGE_STEP };
     allLoaded = false;
-    if (!spec.q && !spec.image) {
+    if (!spec.q && !spec.image && !spec.topic) {
       hits = [];
       return;
     }
+    // A new search supersedes any prior map selection so the Map-view table +
+    // dimming reflect the fresh hits, not a stale lasso (mapTableHits is
+    // `mapSelectionTotal > 0 ? mapHits : hits`). A later lasso re-narrows.
+    crossFilter.clearSelection();
+    mapHits = [];
+    mapSelectionTotal = 0;
     loadingHits = true;
     error = null;
     try {
@@ -235,6 +249,14 @@
    * filter — it then silently stuck across the next search and produced 0
    * hits. Now nothing is implicitly filtered.
    */
+  // Hand-off from the Tree page: `/?topic=<name>` opens Search already filtered
+  // to that topic — a filter-only browse (no query text), backed by the
+  // topic-only branch in `run_search`. Runs once on mount.
+  onMount(() => {
+    const topic = page.url.searchParams.get('topic');
+    if (topic) runSearch({ q: '', topic, n: spec.n ?? 100, mode: spec.mode });
+  });
+
   function openDoc(doc: Document) {
     active = {
       _score: 0,
@@ -359,25 +381,31 @@
           />
           <div class="flex h-56 min-h-0 flex-col border-t border-border bg-card/30">
             <div class="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs">
-              <span class="font-medium text-foreground">Map selection</span>
               {#if mapSelectionTotal > 0}
+                <span class="font-medium text-foreground">Map selection</span>
                 <span class="text-muted-foreground">
                   {mapSelectionTotal.toLocaleString()} chunks
                   {#if mapSelectionTotal > mapHits.length}
                     <span class="text-muted-foreground/70">· showing {mapHits.length}</span>
                   {/if}
                 </span>
+              {:else if hits.length > 0}
+                <span class="font-medium text-foreground">Search results</span>
+                <span class="text-muted-foreground">
+                  {hits.length.toLocaleString()} hits · highlighted on the map
+                </span>
               {:else}
-                <span class="text-muted-foreground">lasso a region, or click a legend, to list its chunks</span>
+                <span class="font-medium text-foreground">Selection</span>
+                <span class="text-muted-foreground">lasso a region, click a legend, or search to list chunks</span>
               {/if}
             </div>
             <div class="min-h-0 flex-1 overflow-auto">
-              {#if mapHits.length}
+              {#if mapTableHits.length}
                 <HitTable
-                  hits={mapHits}
+                  hits={mapTableHits}
                   {active}
                   visible={MAP_TABLE_COLS}
-                  query=""
+                  query={mapSelectionTotal > 0 ? '' : spec.q}
                   onselect={(h) => (active = h)}
                 />
               {/if}

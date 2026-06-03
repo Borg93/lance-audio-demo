@@ -23,14 +23,17 @@ def cmd_feature(
     ] = None,
     instruction: Annotated[
         str | None,
-        typer.Option("--instruction", help="Override the caption prompt (caption only; default: Swedish)."),
+        typer.Option(
+            "--instruction", help="Override the caption prompt (caption only; default: Swedish)."
+        ),
     ] = None,
     space: Annotated[
         str,
         typer.Option(
             "--space",
-            help="atlas only: 'text' (text_embedding → atlas_*) or 'visual' "
-            "(chunk frame_embedding → atlas_img_*).",
+            help="atlas only: 'text' (text_embedding → atlas_*), 'visual' "
+            "(chunk frame_embedding → atlas_img_*), or 'caption' "
+            "(chunk caption_embedding → atlas_cap_*).",
         ),
     ] = "text",
     batch_size: Annotated[int, typer.Option("--batch-size", help="Rows per embed batch.")] = 256,
@@ -40,7 +43,9 @@ def cmd_feature(
     ] = True,
     create_index: Annotated[
         bool,
-        typer.Option("--create-index/--no-create-index", help="Build IVF_PQ index (vector features)."),
+        typer.Option(
+            "--create-index/--no-create-index", help="Build IVF_PQ index (vector features)."
+        ),
     ] = True,
     num_partitions: Annotated[int, typer.Option("--num-partitions")] = 256,
     num_sub_vectors: Annotated[int, typer.Option("--num-sub-vectors")] = 64,
@@ -90,17 +95,21 @@ def cmd_feature(
     elif not (_Ctx.db / f"{feature.table}.lance").exists():
         _die(f"Table '{feature.table}' missing — run `raudio extract-chunk-frames` first.")
 
-    options = FeatureRunOptions(
-        url=url,
-        model=model,
-        instruction=instruction,
-        batch_rows=batch_size,
-        overwrite=not only_null,
-        create_index=create_index,
-        num_partitions=num_partitions,
-        num_sub_vectors=num_sub_vectors,
-        checkpoint=checkpoint,
-        space=space,
+    # model_validate (not kwargs) so `space` is validated against its Literal at
+    # runtime — a bad `--space` fails loudly here instead of silently routing.
+    options = FeatureRunOptions.model_validate(
+        {
+            "url": url,
+            "model": model,
+            "instruction": instruction,
+            "batch_rows": batch_size,
+            "overwrite": not only_null,
+            "create_index": create_index,
+            "num_partitions": num_partitions,
+            "num_sub_vectors": num_sub_vectors,
+            "checkpoint": checkpoint,
+            "space": space,
+        }
     )
     typer.echo(f"Building feature '{name}' on {feature.table} …", err=True)
     with tqdm(unit="row", smoothing=0.05) as pbar:

@@ -26,6 +26,7 @@ from backend.media.router import router as media_router
 from backend.search.router import router as search_router
 from backend.state import open_resources
 from backend.system.router import router as system_router
+from backend.topics.router import router as topics_router
 
 
 def create_app(db_path: str | Path) -> FastAPI:
@@ -41,6 +42,7 @@ def create_app(db_path: str | Path) -> FastAPI:
     app.include_router(media_router)
     app.include_router(system_router)
     app.include_router(atlas_router)
+    app.include_router(topics_router)
 
     # API-only — the Bun frontend serves assets and proxies /api/*.
     # expose_headers is load-bearing for browser Range seeking.

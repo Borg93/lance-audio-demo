@@ -37,13 +37,16 @@ router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 _SPACES: dict[str, dict[str, str]] = {
     "text": {"x": "atlas_x", "y": "atlas_y", "cluster": "atlas_cluster"},
     "visual": {"x": "atlas_img_x", "y": "atlas_img_y", "cluster": "atlas_img_cluster"},
+    "caption": {"x": "atlas_cap_x", "y": "atlas_cap_y", "cluster": "atlas_cap_cluster"},
 }
 
 
 def _space_cols(space: str) -> dict[str, str]:
     cols = _SPACES.get(space)
     if cols is None:
-        raise HTTPException(status_code=400, detail=f"unknown space '{space}' (text|visual)")
+        raise HTTPException(
+            status_code=400, detail=f"unknown space '{space}' (text|visual|caption)"
+        )
     return cols
 
 
@@ -94,7 +97,7 @@ def _factorize(values: list[Any]) -> tuple[list[int], list[str]]:
 @router.get("/status")
 def atlas_status(
     state: StateDep,
-    space: Literal["text", "visual"] = Query(
+    space: Literal["text", "visual", "caption"] = Query(
         "text", description="Projection space to report rows for."
     ),
 ) -> dict[str, Any]:
@@ -115,13 +118,17 @@ def atlas_status(
 @router.get("/points")
 def atlas_points(
     state: StateDep,
-    space: Literal["text", "visual"] = Query("text", description="Projection space to read."),
+    space: Literal["text", "visual", "caption"] = Query(
+        "text", description="Projection space to read."
+    ),
 ) -> JSONResponse:
     """Compact arrays for the scatter renderer (coords + colour codes + keys)."""
     cols = _space_cols(space)
     x_col, y_col, cluster_col = cols["x"], cols["y"], cols["cluster"]
     if not _is_projected(state, space):
-        hint = "raudio feature atlas" if space == "text" else "raudio feature atlas --space visual"
+        hint = (
+            "raudio feature atlas" if space == "text" else f"raudio feature atlas --space {space}"
+        )
         raise HTTPException(
             status_code=400,
             detail=f"{space} 2D projection not built yet — run `{hint}`",

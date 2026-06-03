@@ -10,13 +10,13 @@
  *   • `selectedIds` — what the user picked ON THE MAP (lasso / box / cluster /
  *     legend / click).
  *
- * The composition `visible(i) = matchesFilter && (!hasSelection || selected)`
- * is what both the map recolour and the table read, so a lasso AFTER a search
- * shows only the search hits inside the lasso, and a search AFTER a lasso
- * re-highlights within the selection — bidirectional lock-step.
+ * The map recolour reads BOTH Sets per point: a search miss (`filteredIds`)
+ * ghosts a point hardest, a selection miss (`selectedIds`) dims it less — so a
+ * lasso AFTER a search shows the hits inside the lasso, and a search AFTER a
+ * lasso re-highlights within the selection — bidirectional lock-step.
  *
  * Renderer-agnostic: holds plain Sets + scalars, no EmbeddingView types. The
- * map component derives its `category` Uint8Array from `visible(i)`; the page
+ * map component derives its per-point RGBA alpha from the two Sets; the page
  * feeds `setFilteredFromHits` and reads `selectedIds`.
  */
 
@@ -70,14 +70,6 @@ class CrossFilter {
     }
     get hasFilter(): boolean {
         return this.filteredIds !== null;
-    }
-
-    /** Per-point predicate composing the two Sets (the single source of truth). */
-    visible(i: number): boolean {
-        const f = this.filteredIds;
-        if (f !== null && !f.has(i)) return false;
-        if (this.selectedIds.size > 0 && !this.selectedIds.has(i)) return false;
-        return true;
     }
 
     // ── setters ──────────────────────────────────────────────────────────────

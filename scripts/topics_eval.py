@@ -52,7 +52,10 @@ def main() -> int:
     import lance
     from toponymy import KeyphraseBuilder, Toponymy, ToponymyClusterer
     from toponymy.embedding_wrappers import OpenAIEmbedder
-    from toponymy.llm_wrappers import AsyncOpenAINamer
+
+    # Sync namer: AsyncOpenAINamer binds its semaphore to the first event loop and
+    # Toponymy runs one asyncio.run() per layer → "bound to a different event loop".
+    from toponymy.llm_wrappers import OpenAINamer
 
     ds = lance.dataset(str(Path(args.db) / "chunks.lance"))
     total = ds.count_rows()
@@ -71,11 +74,10 @@ def main() -> int:
     print(f"SAMPLE: {len(documents)} of {total} chunks", file=sys.stderr)
 
     embedder = OpenAIEmbedder(api_key="local", base_url=args.embed_url, model=args.embed_model)
-    namer = AsyncOpenAINamer(
+    namer = OpenAINamer(
         api_key="local",
         base_url=args.llm_url,
         model=args.llm_model,
-        max_concurrent_requests=args.concurrency,
         llm_specific_instructions="Svara alltid på svenska. Ge korta, beskrivande och distinkta ämnesnamn.",
     )
     model = Toponymy(

@@ -118,12 +118,16 @@ def _build_where_clause(
     namn: str | None,
     referenskod: str | None,
     extraid: str | None,
+    topic: str | None = None,
+    topic_columns: list[str] | None = None,
     raw: str | None = None,
 ) -> str | None:
     """Compose the SQL WHERE clause for metadata filters.
 
     ``raw`` is a user-typed SQL expression ANDed in verbatim (wrapped in parens)
     — intentionally *not* quoted, since it is meant to be SQL, not a value.
+    ``topic`` exact-matches any of ``topic_columns`` (the nested topic_l* layers),
+    so a treemap node at any depth filters the chunks tagged with that name.
     """
     clauses: list[str] = []
     if language:
@@ -134,6 +138,9 @@ def _build_where_clause(
         clauses.append(f"referenskod LIKE '%{_sql_quote(referenskod)}%'")
     if extraid:
         clauses.append(f"extraid = '{_sql_quote(extraid)}'")
+    if topic and topic_columns:
+        ors = " OR ".join(f"{col} = '{_sql_quote(topic)}'" for col in topic_columns)
+        clauses.append(f"({ors})")
     if raw and raw.strip():
         clauses.append(f"({raw})")
     return " AND ".join(clauses) if clauses else None
@@ -202,11 +209,18 @@ def run_search(
     All paths return the same hit shape (alignments_json parsed into
     `alignments`). The frontend renders one card type for everything.
     """
+    topic_columns = (
+        [name for name in chunks.schema.names if name.startswith("topic_l")]
+        if spec.topic
+        else None
+    )
     where = _build_where_clause(
         language=spec.language,
         namn=spec.namn,
         referenskod=spec.referenskod,
         extraid=spec.extraid,
+        topic=spec.topic,
+        topic_columns=topic_columns,
         raw=spec.where,
     )
 
@@ -214,6 +228,22 @@ def run_search(
     # (keyword + meaning question). The reranker is text-only: it never sees the
     # image or the vectors, only this string vs each candidate's transcript.
     rerank_query = " ".join(p for p in (spec.q, spec.q_vec) if p)
+
+    # ── Filter-only browse (no query text or image) — list rows matching the
+    # WHERE clause, e.g. a topic facet clicked on the Tree page. Nothing to
+    # rank, so it's a plain Lance scan; no filter means nothing to list. ──
+    if not spec.q and not spec.q_vec and image_bytes is None:
+        if not where:
+            return []
+        try:
+            raw = (
+                chunks.to_lance()
+                .to_table(columns=_PAYLOAD_COLUMNS, filter=where, limit=spec.n)
+                .to_pylist()
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"browse failed: {e}") from e
+        return _postprocess_hits(raw, chunk_frames)
 
     # ── FTS ───────────────────────────────────────────────────────
     if spec.mode == "fts":

@@ -42,6 +42,10 @@ class SearchSpec(BaseModel):
     namn: str | None = None
     referenskod: str | None = None
     extraid: str | None = None
+    # Topic facet (Tree page): a topic name matched exactly against any topic_l*
+    # layer column on chunks (the layers are nested, so one name filters the
+    # chunks tagged with it at whatever layer the user clicked).
+    topic: str | None = None
     fuzziness: int = 0
     phrase: bool = False
     # weight ∈ [0, 1]: bias toward FTS (0) or vector (1). None = neutral RRF.

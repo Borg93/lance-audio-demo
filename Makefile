@@ -179,7 +179,11 @@ pipeline-sharded: shards  ## Transcribe all $(SHARDS) shards in parallel (one GP
 # ─── Viewer: Python backend + Bun frontend ──────────────────────────────────
 BACKEND_HOST ?= 127.0.0.1
 BACKEND_PORT ?= 8000
-FRONTEND_PORT ?= 3000
+# `make frontend` builds + serves the prebuilt SPA on this port via the Bun
+# static server (server.ts binds 0.0.0.0 and proxies /api/* → the backend).
+# Forward this port over SSH / your editor to reach it as localhost:5274.
+# Prefer this over `frontend-dev` for remote use — no Vite recompile spinner.
+FRONTEND_PORT ?= 5274
 
 backend:              ## Run the FastAPI backend (Lance reads, /api/*).
 	uv run raudio --db $(DB) serve --host $(BACKEND_HOST) --port $(BACKEND_PORT)

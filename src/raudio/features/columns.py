@@ -16,7 +16,7 @@ import logging
 # Pydantic ``Feature`` model resolves its ``run`` field annotation at class-build time.
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pyarrow as pa
@@ -220,62 +220,61 @@ def chunk_frame_embedding_column(
     chunks_path: str | Path,
     frames_path: str | Path,
     *,
+    column: str = FRAME_EMBED_COLUMN,
     frame_idx: int = 0,
     batch_rows: int = 4096,
     overwrite: bool = False,
     progress: Callable[[int], None] | None = None,
 ) -> int:
-    """Attach a CHUNK-level ``frame_embedding`` to ``chunks`` from ``chunk_frames``.
+    """Attach a CHUNK-level copy of a per-frame vector ``column`` to ``chunks``.
 
-    The visual atlas projects a chunk-level image vector, but ``frame_embedding``
-    lives PER-FRAME on ``chunk_frames`` (keyed by ``…/frame_idx``). This is a
-    pure Lance scan+join — NO re-embedding: it reads the representative frame's
-    (``frame_idx=0``, the same frame the UI/captions/``/chunk-frame`` already
-    treat as canonical) ``frame_embedding`` and attaches it to ``chunks`` keyed
-    on ``(doc_id, speech_id, chunk_id)`` via ``add_columns``.
+    The visual/caption atlases project a chunk-level vector, but the source
+    (``frame_embedding`` / ``caption_embedding``) lives PER-FRAME on
+    ``chunk_frames`` (keyed by ``…/frame_idx``). This is a pure Lance scan+join —
+    NO re-embedding: it reads the representative frame's (``frame_idx=0``, the
+    same frame the UI/captions/``/chunk-frame`` already treat as canonical)
+    ``column`` and attaches it to ``chunks`` keyed on
+    ``(doc_id, speech_id, chunk_id)`` via ``add_columns``.
 
     Returns the number of chunk rows that received a vector (a chunk with no
     matching representative frame stays ``NULL``). Raises if ``chunk_frames``
-    lacks ``frame_embedding`` (run ``raudio feature frame_embedding`` first).
+    lacks ``column`` (run the matching ``raudio feature`` step first).
     """
     import lance
 
     frames_ds = lance.dataset(str(frames_path))
-    if FRAME_EMBED_COLUMN not in frames_ds.schema.names:
+    if column not in frames_ds.schema.names:
         raise ValueError(
-            f"'{FRAME_EMBED_COLUMN}' column missing on {frames_path} — run "
-            f"`raudio feature frame_embedding` before the visual atlas."
+            f"'{column}' column missing on {frames_path} — run the matching "
+            f"`raudio feature {column}` step before the chunk-level join."
         )
 
     chunks_ds = lance.dataset(str(chunks_path))
-    if FRAME_EMBED_COLUMN in chunks_ds.schema.names:
+    if column in chunks_ds.schema.names:
         if not overwrite:
-            logger.info(
-                "%s already on chunks — nothing to do (pass overwrite=True)", FRAME_EMBED_COLUMN
-            )
+            logger.info("%s already on chunks — nothing to do (pass overwrite=True)", column)
             return 0
-        chunks_ds.drop_columns([FRAME_EMBED_COLUMN])
+        chunks_ds.drop_columns([column])
         chunks_ds = lance.dataset(str(chunks_path))
 
     # Build a {chunk key → representative-frame vector} map from one filtered scan.
-    rep = frames_ds.to_table(
-        columns=[*CHUNK_KEYS, FRAME_EMBED_COLUMN], filter=f"frame_idx = {int(frame_idx)}"
-    )
-    vec_by_key: dict[tuple[Any, int, int], list[float]] = {}
+    rep = frames_ds.to_table(columns=[*CHUNK_KEYS, column], filter=f"frame_idx = {int(frame_idx)}")
+    vec_by_key: dict[tuple[str, int, int], list[float]] = {}
     docs = rep.column("doc_id").to_pylist()
     speeches = rep.column("speech_id").to_pylist()
     chunk_ids = rep.column("chunk_id").to_pylist()
-    vectors = rep.column(FRAME_EMBED_COLUMN).to_pylist()
+    vectors = rep.column(column).to_pylist()
     for d, s, c, v in zip(docs, speeches, chunk_ids, vectors, strict=True):
         if v is not None:
             vec_by_key[(d, int(s), int(c))] = v
     logger.info(
-        "loaded %d representative-frame vector(s) (frame_idx=%d) for the chunk-level join",
+        "loaded %d representative-frame %s vector(s) (frame_idx=%d) for the chunk-level join",
         len(vec_by_key),
+        column,
         frame_idx,
     )
 
-    schema = pa.schema([pa.field(FRAME_EMBED_COLUMN, VECTOR_TYPE, nullable=True)])
+    schema = pa.schema([pa.field(column, VECTOR_TYPE, nullable=True)])
     matched = 0
 
     @lance.batch_udf(output_schema=schema)
@@ -293,9 +292,9 @@ def chunk_frame_embedding_column(
         out = pa.array(values, type=VECTOR_TYPE)
         if progress is not None:
             progress(batch.num_rows)
-        return pa.RecordBatch.from_arrays([out], names=[FRAME_EMBED_COLUMN])
+        return pa.RecordBatch.from_arrays([out], names=[column])
 
-    logger.info("attaching chunk-level %s via add_columns", FRAME_EMBED_COLUMN)
+    logger.info("attaching chunk-level %s via add_columns", column)
     chunks_ds.add_columns(attach, read_columns=CHUNK_KEYS, batch_size=batch_rows)
     return matched
 
@@ -317,10 +316,10 @@ class FeatureRunOptions(BaseModel):
     num_partitions: int = 256
     num_sub_vectors: int = 64
     checkpoint: Path | None = None
-    # Atlas projection space: 'text' (default, from text_embedding) or 'visual'
-    # (from a chunk-level frame_embedding). Routes the 'atlas' feature; ignored
-    # by every other feature.
-    space: str = "text"
+    # Atlas projection space — routes the 'atlas' feature, ignored by the rest:
+    # 'text' (text_embedding → atlas_*), 'visual' (chunk frame_embedding →
+    # atlas_img_*), or 'caption' (chunk caption_embedding → atlas_cap_*).
+    space: Literal["text", "visual", "caption"] = "text"
 
 
 class Feature(BaseModel):
@@ -462,9 +461,11 @@ def _run_caption_embedding(
 def _run_atlas(
     db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
 ) -> int:
-    """Text-space atlas, or route to the visual path when ``--space visual``."""
+    """Text-space atlas, or route to the visual/caption path per ``--space``."""
     if opts.space == "visual":
         return _run_atlas_visual(db_path, opts, progress)
+    if opts.space == "caption":
+        return _run_atlas_caption(db_path, opts, progress)
     from .projection import project_atlas_columns
 
     return project_atlas_columns(
@@ -510,6 +511,44 @@ def _run_atlas_visual(
     )
 
 
+def _run_atlas_caption(
+    db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
+) -> int:
+    """Caption-space atlas: chunk-level ``caption_embedding`` → ``atlas_cap_*``.
+
+    Mirrors :func:`_run_atlas_visual` but over the frame's Swedish-caption text
+    vector instead of the raw image vector: (a) join each chunk's representative
+    (``frame_idx=0``) ``caption_embedding`` from ``chunk_frames`` onto ``chunks``,
+    then (b) project it into ``atlas_cap_x/atlas_cap_y/atlas_cap_cluster``. So the
+    map clusters chunks by what their frame *depicts* (described in language),
+    distinct from text (what's said) and visual (raw image similarity).
+    """
+    from .projection import project_atlas_columns
+
+    chunks_path = db_path / "chunks.lance"
+    frames_path = db_path / "chunk_frames.lance"
+    if not frames_path.exists():
+        raise ValueError(
+            "chunk_frames table missing — run `raudio feature caption` and "
+            "`raudio feature caption_embedding` before the caption atlas."
+        )
+    chunk_frame_embedding_column(
+        chunks_path,
+        frames_path,
+        column=CAPTION_EMBED_COLUMN,
+        batch_rows=opts.batch_rows,
+        overwrite=opts.overwrite,
+    )
+    return project_atlas_columns(
+        chunks_path,
+        source_column=CAPTION_EMBED_COLUMN,
+        column_prefix="atlas_cap_",
+        overwrite=opts.overwrite,
+        batch_rows=opts.batch_rows,
+        progress=progress,
+    )
+
+
 def _run_topics(
     db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
 ) -> int:
@@ -533,6 +572,11 @@ def _run_topics(
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"topics worker failed (exit {proc.returncode})")
+    # The isolated worker wrote the topic_l*/doc_topic columns; derive the nested
+    # hierarchy from them and store it as JSONB in Lance (for the Tree treemap).
+    from .topic_tree import build_topic_tree
+
+    build_topic_tree(db_path)
     lines = (proc.stdout or "").strip().splitlines()
     try:
         return int(lines[-1]) if lines else 0
@@ -584,6 +628,13 @@ FEATURES: dict[str, Feature] = {
         description="Visual EVōC map from chunk-level frame_embedding "
         "(atlas_img_x/atlas_img_y/atlas_img_cluster). Same as `atlas --space visual`.",
         run=_run_atlas_visual,
+    ),
+    "atlas_caption": Feature(
+        name="atlas_caption",
+        table="chunks",
+        description="Caption EVōC map from chunk-level caption_embedding "
+        "(atlas_cap_x/atlas_cap_y/atlas_cap_cluster). Same as `atlas --space caption`.",
+        run=_run_atlas_caption,
     ),
     "topics": Feature(
         name="topics",

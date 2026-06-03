@@ -35,6 +35,7 @@ def search_get(
     namn: Annotated[str | None, Query()] = None,
     referenskod: Annotated[str | None, Query()] = None,
     extraid: Annotated[str | None, Query()] = None,
+    topic: Annotated[str | None, Query()] = None,
     fuzziness: Annotated[int, Query()] = 0,
     phrase: Annotated[bool, Query()] = False,
     weight: Annotated[float | None, Query()] = None,
@@ -52,6 +53,7 @@ def search_get(
         namn=namn,
         referenskod=referenskod,
         extraid=extraid,
+        topic=topic,
         fuzziness=fuzziness,
         phrase=phrase,
         weight=weight,
@@ -59,7 +61,7 @@ def search_get(
         where=where,
         prefilter=prefilter,
     )
-    if not spec.q:
+    if not spec.q and not spec.topic:
         return []
     return run_search(
         state.chunks, state.chunk_frames_tbl, get_embedder, get_reranker, spec, image_bytes=None
@@ -82,6 +84,7 @@ async def search_post(
     namn: Annotated[str | None, Form()] = None,
     referenskod: Annotated[str | None, Form()] = None,
     extraid: Annotated[str | None, Form()] = None,
+    topic: Annotated[str | None, Form()] = None,
     q_vec: Annotated[str, Form()] = "",
     where: Annotated[str | None, Form()] = None,
     prefilter: Annotated[bool, Form()] = True,
@@ -96,6 +99,7 @@ async def search_post(
         namn=namn,
         referenskod=referenskod,
         extraid=extraid,
+        topic=topic,
         fuzziness=0,
         phrase=False,
         weight=weight,
@@ -104,7 +108,7 @@ async def search_post(
         prefilter=prefilter,
     )
     image_bytes = await image.read() if image is not None else None
-    if not spec.q and not image_bytes:
+    if not spec.q and not image_bytes and not spec.topic:
         return []
     # run_search makes blocking vLLM (httpx) + Lance calls — keep the event loop free.
     return await run_in_threadpool(

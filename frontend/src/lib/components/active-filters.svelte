@@ -17,6 +17,7 @@
     if (spec.namn) out.push({ key: 'namn', label: 'Name', value: spec.namn });
     if (spec.referenskod) out.push({ key: 'referenskod', label: 'Ref', value: spec.referenskod });
     if (spec.extraid) out.push({ key: 'extraid', label: 'ID', value: spec.extraid });
+    if (spec.topic) out.push({ key: 'topic', label: 'Topic', value: spec.topic });
     if (spec.where) {
       const expr = spec.where.length > 48 ? `${spec.where.slice(0, 48)}…` : spec.where;
       out.push({ key: 'where', label: 'SQL', value: expr });
@@ -36,6 +37,7 @@
       namn: undefined,
       referenskod: undefined,
       extraid: undefined,
+      topic: undefined,
       where: undefined,
     };
     onchange?.(spec);

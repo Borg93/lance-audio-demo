@@ -49,10 +49,6 @@
   // build a per-point RGBA buffer directly. We still bound the number of
   // DISTINCT cluster/language hues only to keep the legend sane.
   const MAX_DISTINCT = 512;
-  // How many legend rows to render (the legend box already scrolls). The visual
-  // space has ~2000 mostly-tiny clusters, so we show the largest N and note the
-  // rest rather than capping at an arbitrary handful.
-  const LEGEND_LIMIT = 200;
 
   let error = $state<string | null>(null);
   let loading = $state(true);
@@ -61,8 +57,10 @@
   let y = $state.raw<Float32Array | null>(null);
   let grid = $state.raw<SpatialGrid | null>(null); // uniform bucket index for hover
   let visualBuilt = $state(false); // whether atlas_img_* exists (gates the toggle)
+  let captionBuilt = $state(false); // whether atlas_cap_* exists (gates the toggle)
 
   let pointSize = $state(0); // 0 = auto
+  let filterAlpha = $state(8); // 0..30 — opacity of search-filtered-out points (toolbar "filtered" slider)
   let selectionCount = $state(0);
   let tableLoading = $state(false);
   let mode = $state<'lasso' | 'pan'>('lasso');
@@ -166,7 +164,10 @@
     (async () => {
       try {
         const status = await getAtlasStatus(crossFilter.space);
-        if (!cancelled) visualBuilt = status.spaces?.visual ?? false;
+        if (!cancelled) {
+          visualBuilt = status.spaces?.visual ?? false;
+          captionBuilt = status.spaces?.caption ?? false;
+        }
       } catch {
         /* leave visualBuilt as-is */
       }
@@ -185,6 +186,7 @@
   async function switchSpace(space: AtlasSpace): Promise<void> {
     if (space === crossFilter.space) return;
     if (space === 'visual' && !visualBuilt) return; // gated
+    if (space === 'caption' && !captionBuilt) return; // gated
     crossFilter.setSpace(space);
   }
 
@@ -236,7 +238,7 @@
   const ACCENT_RGB = $derived(hueRgb(1, 4));
   const BG_COLOR = $derived(isDark ? '#0a0a0a' : '#ffffff');
 
-  const DIM_ALPHA = 30; // cross-filter-dimmed points: faint but present
+  const DIM_ALPHA = 30; // selection-dimmed (lasso context): faint but present
   const NOISE_ALPHA = 70; // HDBSCAN noise: muted so coloured clusters dominate
 
   /**
@@ -270,6 +272,17 @@
     const colorBy = crossFilter.colorBy;
     const buf = new Uint8Array(n * 4);
 
+    // Read both cross-filter Sets once (tracks them as deps + avoids 145k method
+    // calls). A search miss ghosts a point harder than a selection miss, so a
+    // handful of search hits stand out against the whole corpus.
+    const fIds = crossFilter.filteredIds;
+    const sel = crossFilter.selectedIds;
+    const alphaFor = (i: number, base: number): number => {
+      if (fIds !== null && !fIds.has(i)) return filterAlpha;
+      if (sel.size > 0 && !sel.has(i)) return DIM_ALPHA;
+      return base;
+    };
+
     if (colorBy === 'cluster' && p.cluster) {
       const r = clusterRanking;
       if (!r) return null;
@@ -286,16 +299,16 @@
           continue;
         }
         let col: Rgb;
-        let alpha: number;
+        let base: number;
         if (c < 0) {
           col = noise;
-          alpha = NOISE_ALPHA;
+          base = NOISE_ALPHA;
         } else {
           const rank = slotOf.get(c) ?? -1;
           col = rank < 0 ? other : hueRgb(rank + 1, distinct + 1);
-          alpha = 255;
+          base = 255;
         }
-        if (!crossFilter.visible(i)) alpha = DIM_ALPHA;
+        const alpha = alphaFor(i, base);
         buf[o] = col.r;
         buf[o + 1] = col.g;
         buf[o + 2] = col.b;
@@ -312,7 +325,7 @@
         const o = i * 4;
         const code = lang[i] ?? 0;
         const col = code < distinct ? hueRgb(code + 1, distinct + 1) : other;
-        const alpha = crossFilter.visible(i) ? 255 : DIM_ALPHA;
+        const alpha = alphaFor(i, 255);
         buf[o] = col.r;
         buf[o + 1] = col.g;
         buf[o + 2] = col.b;
@@ -328,7 +341,7 @@
       buf[o] = accent.r;
       buf[o + 1] = accent.g;
       buf[o + 2] = accent.b;
-      buf[o + 3] = crossFilter.visible(i) ? 255 : DIM_ALPHA;
+      buf[o + 3] = alphaFor(i, 255);
     }
     return buf;
   });
@@ -351,8 +364,7 @@
         const color = rank < 0 ? (isDark ? '#71717a' : '#a1a1aa') : hueCss(rank + 1, distinct + 1);
         return { id, color, count };
       })
-      .sort((a, b) => b.count - a.count)
-      .slice(0, LEGEND_LIMIT);
+      .sort((a, b) => b.count - a.count);
   });
 
   /** Distinct non-noise cluster count + noise (unclustered) point count — for
@@ -384,8 +396,7 @@
         color: code < distinct ? hueCss(code + 1, distinct + 1) : isDark ? '#71717a' : '#a1a1aa',
         count,
       }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, LEGEND_LIMIT);
+      .sort((a, b) => b.count - a.count);
   });
 
   const languageTotal = $derived(pts?.languages?.length ?? 0);
@@ -492,7 +503,14 @@
     }
     const rowids = pts?.rowid;
     if (!rowids) {
-      onSelectionHits?.([], idx.length);
+      // No per-point rowid (e.g. a stale cached /points) — we can't fetch the
+      // rows. Report an EMPTY selection (total 0, not idx.length) so the page
+      // falls back to its search hits / empty-state rather than showing an empty
+      // table under a misleading "N chunks" header. A cache-busted /points
+      // (api.ts) restores rowids; this is just the belt-and-braces guard.
+      console.warn('atlas: /points payload has no rowid — cannot list selection (stale cache?)');
+      selectionCount = 0;
+      onSelectionHits?.([], 0);
       return;
     }
     const ids = idx
@@ -673,6 +691,17 @@
         >
           Visual
         </Button>
+        <Button
+          variant={crossFilter.space === 'caption' ? 'secondary' : 'ghost'}
+          size="sm"
+          disabled={!captionBuilt}
+          title={captionBuilt
+            ? 'Caption (frame-caption embedding) map'
+            : 'Not built yet — run `raudio feature atlas --space caption`'}
+          onclick={() => switchSpace('caption')}
+        >
+          Caption
+        </Button>
         <span class="text-border">·</span>
         <!-- lasso / pan mode -->
         <Button
@@ -697,13 +726,24 @@
         <span class="text-border">·</span>
         <span class="text-muted-foreground">size</span>
         <input type="range" min="0" max="8" step="0.5" bind:value={pointSize} class="w-16 accent-primary" />
+        <span class="text-border">·</span>
+        <span class="text-muted-foreground">filtered</span>
+        <input
+          type="range"
+          min="0"
+          max="30"
+          step="1"
+          bind:value={filterAlpha}
+          class="w-16 accent-primary"
+          title="Opacity of points filtered out by a search · drag left to hide, right to show more"
+        />
       </div>
 
       <!-- legend / distribution (clickable → select) -->
       {#if legendMode === 'cluster' && clusterLegend.length}
         <div class="absolute right-3 top-3 max-h-[60%] w-52 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur">
           <div class="mb-1 flex items-center gap-2">
-            <span class="font-medium text-muted-foreground">Clusters · {clusterLegend.length} of {clusterStats.total}</span>
+            <span class="font-medium text-muted-foreground">Clusters · {clusterStats.total.toLocaleString()}</span>
             {#if crossFilter.hiddenClusters.size > 0}
               <button
                 type="button"
@@ -749,15 +789,10 @@
               <span class="ml-auto font-mono">{clusterStats.noise.toLocaleString()}</span>
             </div>
           {/if}
-          {#if clusterStats.total > clusterLegend.length}
-            <div class="mt-1 px-1 text-muted-foreground/70">
-              +{(clusterStats.total - clusterLegend.length).toLocaleString()} smaller clusters not shown
-            </div>
-          {/if}
         </div>
       {:else if legendMode === 'language' && languageLegend.length}
         <div class="absolute right-3 top-3 max-h-[60%] w-48 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur">
-          <div class="mb-1 font-medium text-muted-foreground">Languages · {languageLegend.length} of {languageTotal}</div>
+          <div class="mb-1 font-medium text-muted-foreground">Languages · {languageTotal.toLocaleString()}</div>
           {#each languageLegend as l (l.code)}
             <button
               type="button"

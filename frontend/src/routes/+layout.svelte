@@ -3,7 +3,7 @@
   import { browser } from '$app/environment';
   import { page } from '$app/state';
   import type { ComponentType, Snippet } from 'svelte';
-  import { AudioLines, Search, Map, BookOpen } from 'lucide-svelte';
+  import { AudioLines, Search, Map, FolderTree, BookOpen } from 'lucide-svelte';
   import * as Sidebar from '$lib/components/ui/sidebar';
   import ThemeToggle from '$lib/components/theme-toggle.svelte';
   import StatusBadge from '$lib/components/status-badge.svelte';
@@ -13,6 +13,7 @@
   const NAV: { href: string; label: string; icon: ComponentType; hint: string }[] = [
     { href: '/', label: 'Search', icon: Search, hint: 'Find moments across transcripts, video & scenes' },
     { href: '/atlas', label: 'Atlas', icon: Map, hint: 'Explore the embedding map of every chunk' },
+    { href: '/tree', label: 'Tree', icon: FolderTree, hint: 'Browse topics as a zoomable treemap' },
     { href: '/guide', label: 'Guide', icon: BookOpen, hint: 'How search works — signals, fusion & rerank' },
   ];
 
