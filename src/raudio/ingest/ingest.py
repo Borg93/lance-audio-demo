@@ -407,7 +407,9 @@ def ingest_many(
 
     metadata_index = load_metadata_csv(metadata_csv) if metadata_csv else None
     if metadata_csv:
-        logger.info(f"loaded metadata for {len(metadata_index or {})} bildid(s) from {metadata_csv}")
+        logger.info(
+            f"loaded metadata for {len(metadata_index or {})} bildid(s) from {metadata_csv}"
+        )
 
     docs_list = list(docs)
     chunk_rows: list[dict[str, Any]] = []
@@ -440,8 +442,7 @@ def ingest_many(
     # English stemmer can't reduce forms like `ministern`/`vägen`/`ansåg` to a
     # shared stem, so those queries return zero hits — use "Swedish" to fix.
     logger.info(
-        f"building FTS index on 'text' (language={fts_language}) over "
-        f"{table.count_rows()} row(s)…"
+        f"building FTS index on 'text' (language={fts_language}) over {table.count_rows()} row(s)…"
     )
     table.create_fts_index(
         "text",
@@ -450,7 +451,13 @@ def ingest_many(
         remove_stop_words=False,
         language=fts_language,
     )
-    for col in ("doc_id", "audio_path"):
+    # Scalar BTREE indexes for the equality filters that actually prune: doc_id +
+    # audio_path back the per-row lookups (caption-attach + chunk-frame joins),
+    # and extraid is a selective archival-id facet (~1.2k distinct → ~0.5%/value).
+    # `language` is deliberately omitted (monolingual corpus → one value at 100%,
+    # so an index prunes nothing); namn/referenskod are filtered with LIKE '%…%',
+    # which a BTREE can't accelerate.
+    for col in ("doc_id", "audio_path", "extraid"):
         try:
             table.create_scalar_index(col, index_type="BTREE", replace=True)
         except Exception as e:  # noqa: BLE001

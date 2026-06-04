@@ -199,14 +199,14 @@ def cmd_extract_chunk_frames(
                 )
             )
     if missing:
-        typer.echo(f"  warning: {missing} chunk(s) had no resolvable source MP4 — skipped.", err=True)
+        typer.echo(
+            f"  warning: {missing} chunk(s) had no resolvable source MP4 — skipped.", err=True
+        )
     if not frame_jobs:
         typer.echo("Nothing extractable.", err=True)
         return
 
-    typer.echo(
-        f"Extracting {len(frame_jobs)} frame(s) from {audio_root} (jobs={jobs}).", err=True
-    )
+    typer.echo(f"Extracting {len(frame_jobs)} frame(s) from {audio_root} (jobs={jobs}).", err=True)
     frames = extract_chunk_frames_parallel(
         frame_jobs, width=width, jpeg_quality=jpeg_quality, timeout=timeout, workers=jobs
     )
@@ -291,7 +291,7 @@ def cmd_compact(
     # (BTREE) indexes ingest builds for per-row lookups — recreate them or
     # `doc_id`/`audio_path` filters silently fall back to full scans. Mirrors
     # ingest.py: only the chunks table carries these columns, so guard on it.
-    for col in ("doc_id", "audio_path"):
+    for col in ("doc_id", "audio_path", "extraid"):
         if col in table.schema.names:
             try:
                 table.create_scalar_index(col, index_type="BTREE", replace=True)

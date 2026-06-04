@@ -16,9 +16,13 @@ Run:  raudio serve --db ./transcripts.lance --port 8000
 
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.atlas.router import router as atlas_router
@@ -27,15 +31,34 @@ from backend.search.router import router as search_router
 from backend.state import open_resources
 from backend.system.router import router as system_router
 from backend.topics.router import router as topics_router
+from backend.warmup import warm_caches
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Warm the Lance index + atlas-points caches on startup, off the event loop.
+
+    Resources are opened eagerly in the factory body (so a bare ``TestClient`` has
+    them); the lifespan only warms caches. It runs under ``raudio serve`` but not
+    under a context-manager-less ``TestClient`` — which is exactly where warmup
+    belongs (the real DB) and not (tiny test fixtures). Best-effort: a warmup
+    failure is logged, never fatal to startup.
+    """
+    try:
+        await run_in_threadpool(warm_caches, app.state.resources)
+    except Exception:  # noqa: BLE001 — warmup must never block the server coming up
+        logging.getLogger(__name__).warning("cache warmup failed", exc_info=True)
+    yield
 
 
 def create_app(db_path: str | Path) -> FastAPI:
     """Build the API-only FastAPI app."""
-    app = FastAPI(title="raudio api")
+    app = FastAPI(title="raudio api", lifespan=_lifespan)
 
-    # Open Lance handles once, synchronously, in the factory body — not a
+    # Open Lance handles once, synchronously, in the factory body — not the
     # lifespan: TestClient(create_app(db)) is used without the context manager,
     # so a lifespan would never run and app.state.resources would be unset.
+    # (The lifespan above only warms caches, which tests rightly skip.)
     app.state.resources = open_resources(db_path)
 
     app.include_router(search_router)
