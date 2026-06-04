@@ -11,6 +11,7 @@
     "prepare": "svelte-kit sync"
   },
   "dependencies": {
+    "@xyflow/svelte": "^1.6.0",
     "bits-ui": "^2.0.0",
     "clsx": "^2.1.1",
     "embedding-atlas": "^0.21.0",
