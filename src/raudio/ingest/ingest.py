@@ -451,13 +451,12 @@ def ingest_many(
         remove_stop_words=False,
         language=fts_language,
     )
-    # Scalar BTREE indexes for the equality filters that actually prune: doc_id +
-    # audio_path back the per-row lookups (caption-attach + chunk-frame joins),
-    # and extraid is a selective archival-id facet (~1.2k distinct → ~0.5%/value).
-    # `language` is deliberately omitted (monolingual corpus → one value at 100%,
-    # so an index prunes nothing); namn/referenskod are filtered with LIKE '%…%',
-    # which a BTREE can't accelerate.
-    for col in ("doc_id", "audio_path", "extraid"):
+    # Scalar BTREE indexes for the per-row lookups / join keys: doc_id +
+    # audio_path. Do NOT add `extraid` (or any other column hit by a
+    # `with_row_id=True` + multi-clause filter) here: that combination trips a
+    # Lance planner bug that silently returns 0 rows — it broke /api/chunk-frame.
+    # See backend/media/router.py.
+    for col in ("doc_id", "audio_path"):
         try:
             table.create_scalar_index(col, index_type="BTREE", replace=True)
         except Exception as e:  # noqa: BLE001

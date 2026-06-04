@@ -291,7 +291,7 @@ def cmd_compact(
     # (BTREE) indexes ingest builds for per-row lookups — recreate them or
     # `doc_id`/`audio_path` filters silently fall back to full scans. Mirrors
     # ingest.py: only the chunks table carries these columns, so guard on it.
-    for col in ("doc_id", "audio_path", "extraid"):
+    for col in ("doc_id", "audio_path"):
         if col in table.schema.names:
             try:
                 table.create_scalar_index(col, index_type="BTREE", replace=True)
