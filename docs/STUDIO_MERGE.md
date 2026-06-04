@@ -4,7 +4,7 @@
 > Tauri 2 desktop application called **Studio**. It is a *planning* document — architecture,
 > contracts, trade-offs, and a phased roadmap. There is **no implementation code** here;
 > mermaid diagrams, interface sketches, and decision tables stand in for it. Tone follows
-> [`GUIDE.md`](GUIDE.md): one mental model, stated decisions, honest unknowns.
+> [`GUIDE.md`](../GUIDE.md): one mental model, stated decisions, honest unknowns.
 >
 > Status of inputs at time of writing (2026-05-29):
 > - **ranymizer** source available at `/tmp/ranymizer-ref` — the structural + styling template.

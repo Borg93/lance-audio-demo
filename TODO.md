@@ -10,6 +10,7 @@ Living checklist for `raudio`. Update as items land.
 
 > **Contents:** [Active blockers](#active-blockers-do-these-next) ·
 > [Visual search wiring](#visual--cross-modal-search-wiring) ·
+> [Future bets](#future--bigger-bets) ·
 > [UX backlog](#ux-backlog) · [Hygiene](#cleanup--hygiene) ·
 > [Code-quality backlog](#code-quality-backlog) ·
 > [Search perf](#search-performance) · [vLLM perf](#vllm-performance) ·
@@ -19,10 +20,12 @@ Living checklist for `raudio`. Update as items land.
 
 ## Active blockers (do these next)
 
-The text/FTS, semantic (`text_embedding`), and **visual** (`frame_embedding`)
-pipelines are all done and serving on the live DB. The one cross-modal leg still
-returning empty is **scene** (`caption_embedding`) — the frames have no Swedish
-captions yet. See [Open work: captions](#open-work-captions-scene-search).
+**None.** Every retrieval leg is built and serving on the live DB: text/FTS,
+semantic (`text_embedding`), **visual** (`frame_embedding`), and **scene**
+(`caption` + `caption_embedding` — both keyword `scene_fts` and vector `scene`).
+The **embedding atlas** and **topic modeling + Tree** are live too (see the ✅
+sections below). Remaining work is the backlog + the
+[future bets](#future--bigger-bets) (voice/speaker search, the Studio desktop merge).
 
 ### ✅ 1. `extract-chunk-frames` ran end to end (RESOLVED)
 
@@ -82,71 +85,120 @@ frame-distance ranking. `/api/chunk-frame` reads only the `chunk_frames` table.
 
 **Live end to end:** with `chunk_frames.frame_embedding` populated + indexed
 (145,175 rows), the visual happy path is exercised — not just the graceful-empty
-fallback. The `caption_embedding` (scene) leg still degrades to `[]` until
-captions are built (see [Open work: captions](#open-work-captions-scene-search)).
+fallback. The `caption_embedding` (scene) leg is **also live now** (captions
+built — see [✅ Captions + scene search](#-captions--scene-search-done)).
 
-### 📋 `/api/health` should report `chunk_frames` state
-
-`/api/health` (`backend/system/router.py::health`) currently reports DB path,
-table list, and `chunks` / `documents` row counts, plus embed/rerank pings.
-`backend/state.py` already computes `has_embeddings` for `chunk_frames` (only
-logs it). Surface a `chunk_frames` row count + `has_embeddings` boolean in the
-health payload and render it in `frontend/src/lib/components/status-badge.svelte`
-(which today shows only tables/chunks/documents). ~6 LOC each side.
+### 🟡 (parked) `/api/health` could surface `chunk_frames` count + `has_embeddings`
+Cosmetic for a single-user demo: `chunk_frames` already appears in
+`health.db.tables`, and frame fetches self-heal via the 404 fallback
+(`features.framesUnavailable`). ~6 LOC each side if ever wanted.
 
 ---
 
-## Open work: captions (scene search)
+## ✅ Captions + scene search (done)
 
-The genuinely-missing cross-modal piece. The `scene` and `scene_fts` search
-modes are wired in code but return **empty** on the live DB because
-`chunk_frames` has no `caption` / `caption_embedding` column yet — its columns
-are `doc_id, speech_id, chunk_id, frame_idx, frame_blob, frame_mime,
-frame_width, frame_height, frame_embedding`. The frame JPEGs and their image
-vectors (`frame_embedding`) already exist; what's left is to *describe* each
-frame in Swedish and embed that description.
+`chunk_frames` now carries `caption` (a Swedish caption of the representative
+frame, generated from `frame_blob` via the **Gemma-4** server on `:8003`) and
+`caption_embedding` (2048-d, embed server `:8001`) — both crash-resumable and
+reusing the existing frames (never re-extracted). `scene` (cosine over
+`caption_embedding`), `scene_fts` (BM25 over `caption`), and the caption leg of
+`all` are live; captions also render in the search list, table, and player.
+Built with `make captions` (`raudio feature caption` + `caption_embedding`).
 
-### 📋 Run `make captions` to build `caption` + `caption_embedding`
-Two-stage, resumable, reuses the existing frames (never re-extracts):
+---
 
-```bash
-make captions   # = caption-chunk-frames + embed-captions
-```
+## ✅ Embedding atlas + Topics + Tree (done)
 
-- **`caption-chunk-frames`** (`raudio feature caption`) generates a Swedish
-  caption per frame from `frame_blob` into `chunk_frames.caption`. **Needs the
-  Gemma server (a generative VLM, Gemma 4) running on `:8003`** (`CAPTION_URL` in
-  the Makefile) — *not* the embed/rerank servers.
-- **`embed-captions`** (`raudio feature caption_embedding`) embeds
-  `chunk_frames.caption` into the shared 2048-d space as `caption_embedding`
-  (+ IVF index) using the embed server on `:8001`.
+### ✅ Embedding atlas (`/atlas`)
+EVōC 2-D projection of `chunks` (`atlas_x/y` + `atlas_cluster`) over
+`text_embedding`, plus `--space visual` (`frame_embedding` → `atlas_img_*`) and
+`--space caption` (`caption_embedding` → `atlas_cap_*`). Rendered by a custom
+**WebGPU** instanced-quad scatter (no WebGL2/Canvas2D), with lasso/box/legend
+selection cross-filtered to Search. `raudio feature atlas [--space …]`, served
+via `/api/atlas/*`.
 
-Once both columns exist, `scene` (cosine over `caption_embedding`), `scene_fts`
-(BM25 over `caption`), and the caption leg of `all` light up with no further
-backend changes — `backend/search/service.py::_frame_search` already queries
-`caption_embedding` and the `scene_fts` BM25 path is in place.
+### ✅ Topic modeling + Tree page (`/tree`)
+`raudio feature topics` clusters chunks with Toponymy in an **isolated PEP723
+worker** (so the main env never depends on `transformers<5`): per-chunk
+`topic_l0/l1/l2` + per-video `doc_topic` (BITMAP-indexed), and the nested
+hierarchy stored as Lance **JSONB** in `topics.lance`. The Tree page is a
+LayerChart `<Treemap>` (Flat + Nested views, hide-noise toggle, drill-down) that
+hands a topic to Search via `/?topic=`. Backed by `GET /api/topics` + a `topic=`
+filter on `/api/search` (matches any `topic_l*` layer via the shared
+`topic_layer_columns`). Caveat: ~64% of chunks are HDBSCAN noise at the finest
+layer — retune `base-min-cluster-size` / layers later if the long tail matters.
+
+### ✅ Atlas topic colours
+The atlas can colour points by **Topic** (broadest `topic_l*` layer) or **Video
+topic** (`doc_topic`), with a clickable named legend that selects → table → seed
+search. Implemented as one DRY categorical channel shared with the language
+colouring.
+
+---
+
+## Future / bigger bets
+
+### 📋 Video-level concatenated text + summarization
+Today there is **no per-video full text and no video-level summary** — a "video"
+exists only as its ~125 scattered `chunks` rows. (`FEATURES["summary"]` exists but
+is *chunk-level* and not even built; `documents` carries metadata/blobs but no
+transcript.) Two clean per-video columns on the `documents` table, same
+roll-up-by-`doc_id` pattern as `doc_topic`:
+- **`documents.full_text`** — concatenate each video's chunk `text` ordered by
+  `start`, grouped by `doc_id`. **Pure aggregation, no model**; enables full-video
+  FTS and feeds the summary. (`FEATURES["doc_text"]`, `table="documents"`.)
+- **`documents.doc_summary`** — an LLM summary of `full_text` (instruct LLM `:8004`
+  or long-context Gemma-4 `:8003`). Likely needs a **map-reduce / hierarchical**
+  pass (per-chunk summaries → reduce) since a full press conference overflows one
+  prompt — the chunk-level `summary` feature is the natural first stage.
+  (`FEATURES["doc_summary"]`, `table="documents"`.)
+
+### 📋 Voice / speaker search (ECAPA x-vectors)
+Add an **audio** embedding axis: a per-chunk 1024-d speaker embedding so you can
+upload a voice clip and find chunks where a similar-sounding voice speaks (and
+cluster the corpus *by speaker*). Encoder:
+`marksverdhei/Qwen3-Voice-Embedding-12Hz-0.6B` — a standalone ECAPA-TDNN x-vector
+extracted from Qwen3-TTS-0.6B-**Base** (Apache-2.0, ~6.3M params, 24 kHz mono →
+1024-d). Maps cleanly onto the existing machinery:
+
+- **Encoder** — a *local in-process* HF model (lives with `asr/`, **not**
+  `vllm/`); run it in an isolated env / a `voice` extra (`trust_remote_code` + a
+  possibly-pinned `transformers`, same discipline as the topics worker).
+- **Audio slicing** — extend `media/frames.py`'s ffmpeg fast-seek to pull each
+  chunk's `[start,end]` as 24 kHz mono wav (the audio analog of the JPEG frame
+  extractor).
+- **Feature** — `FEATURES["speaker_embedding"]`: slice → encode → write a 1024-d
+  column + IVF (cosine) index, crash-resumable like the caption build.
+- **Search** — a `voice` mode: multipart **audio upload** → encode → vector
+  search over `speaker_embedding` (mirrors the `visual` image-upload path); plus
+  a "more of this voice" action on a hit using its stored vector.
+- **Atlas** — a `--space voice` projection → speaker clusters spatially.
+
+Caveats: x-vectors assume one speaker per clip (overlap/applause muddy them);
+need ~1.5–3 s+ of audio per clip; normalize → cosine. **De-risk first** by
+loading the model in isolation and confirming same- vs different-speaker cosine
+separates, before wiring the pipeline.
+
+### 📋 Studio desktop merge (ranymizer + raudio + multimodal-webgpu-demo → Tauri)
+Fold the three SvelteKit apps into one Tauri 2 **"Studio"** shell, where raudio
+becomes the server-backed **Search sandbox**. Full architecture, contracts, and a
+phased roadmap live in **[docs/STUDIO_MERGE.md](docs/STUDIO_MERGE.md)** (moved out
+of the repo root). Not started; the biggest piece is the shell + sandbox registry
+(phase P0).
 
 ---
 
 ## UX backlog
 
-### 📋 Persist active filters across a hard reload
-Active filters live in component state only; a full page reload drops them.
-`active-filters.svelte` renders removable pills (`namn`, `referenskod`,
-`extraid`, `language`, raw `where`) and is correct — it does *not* wipe state on
-mount. A nicety: mirror those fields to `localStorage` (or the URL query string)
-so the last filter set survives a refresh.
+Audited 2026-06 against the code — mostly done or YAGNI for a single-user demo:
 
-### 📋 Hit-card thumbnail: use the exact frame instead of the doc thumbnail
-`hit-card.svelte` renders the doc thumbnail (`/api/thumbnail/{doc_id}`). Once
-`chunk_frames` is populated we have the exact frame per hit
-(`/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}`) — switch search-mode hits
-to that and drop the extra request per card.
-
-### 📋 Debounce + auto-search on the search input
-`search-bar.svelte` submits on Enter / button. For fast typers an optional
-~300 ms debounced auto-search on non-empty input would feel snappier. Combine
-with the existing loading state in `+page.svelte`.
+- ✅ **Hit-card shows the exact per-chunk frame** (`chunkFrameUrl`, gated by
+  `features.framesUnavailable`; the doc thumbnail is just the poster behind it) — done.
+- 🟡 **Persist filters across a hard reload** — dropped: no deep-link/sharing need,
+  filters already auto-apply, and a re-search is cheap.
+- 🟡 **Debounce / auto-search the text box** — dropped: each query hits vLLM + Lance
+  over 145k rows, so Enter-to-search is correct; the cheap controls (filters,
+  settings) already auto-apply.
 
 ---
 
@@ -167,26 +219,66 @@ adds a column. Run `make compact` (or `raudio compact`) afterward to consolidate
 fragments and rebuild the IVF_PQ indexes. Optional at this dataset size — just
 slightly faster scans.
 
-### 📋 Resolve the stray `images_per.jpg`
-Test image in the repo root (gitignored). Delete it or move it to
-`tests/fixtures/` for use in unit tests.
-
-### 📋 Fix stale Makefile help text
-The `extract-chunk-frames` target's `##` help still reads "into
-`chunks.frame_blob`" — frames now go into the `chunk_frames` table. One-line fix.
+### ✅ Removed stray `images_per.jpg` + fixed the Makefile help text (done)
+Deleted the untracked repo-root test image, and corrected the
+`extract-chunk-frames` `##` help to say it writes into the `chunk_frames` table.
 
 ---
 
 ## Search performance
 
-Vector / multimodal search is acceptable but not free. Items ordered roughly by
-impact-per-effort.
+The worthwhile work here is **✅ done** (recall knobs, read-path caching, scalar
+indexes, compaction — below). Everything still marked 📋 was **audited 2026-06 and
+is parked / YAGNI for a single-user local demo**: sub-millisecond serialization
+wins (`alignments_json`), exact-repeat-only gains (query-vector LRU), or
+concurrency/rare-mode-only payoffs (parallel `all` legs, `IVF_HNSW_SQ`). Revisit
+only if a profiler or real concurrency makes them bite. The benchmarking recipe at
+the end is kept as reference.
 
 ### ✅ IVF_PQ recall knobs (`nprobes` + `refine_factor`) (done)
 All vector legs (`semantic`, the hybrid vector leg, and `_frame_search`) pass
 `nprobes=20` + `refine_factor=3` (`_VECTOR_NPROBES` / `_VECTOR_REFINE_FACTOR` in
 `backend/search/service.py`). This was the "feels broken / re-query reflex"
 recall fix from INVESTIGATION §A3.
+
+### ✅ Read-path caching: memoize `/atlas/points`, shared handle, startup warmup (done)
+- **`GET /atlas/points` memoized** on `(space, dataset version)` — the 145k-row
+  scan+factorize runs once per version, not per request (`backend/atlas/router.py`,
+  `_POINTS_CACHE`). ~3× on repeat (0.59s → 0.19s warm).
+- **`chunks` dataset handle cached** on `AppState` (`chunks_ds = chunks.to_lance()`
+  once at startup; `backend/state.py`) — avoids re-seeding Lance's metadata/index
+  cache per request; reused by every read path.
+- **Startup warmup** (`backend/warmup.py` + the app lifespan) preloads every
+  IVF/scalar/FTS index + the atlas-points payload so the first request isn't cold
+  (`cache warmup done in ~1.4s`).
+
+### ✅ Scalar indexes on the equality-filter columns (done)
+`doc_id` + `audio_path` (chunks) and `doc_id` (chunk_frames) back the per-row
+lookups (caption-attach + frame joins); **`extraid`** (chunks) was added for the
+selective archival-id facet — `analyze_plan` confirms it pushes into a
+`ScalarIndexQuery(extraid_idx)`. **`language` is deliberately NOT indexed** (corpus
+is 100% `sv`, so an index prunes nothing); `namn`/`referenskod` are filtered with
+`LIKE '%…%'`, which a BTREE can't accelerate. Built in `ingest.py`, rebuilt by
+`raudio compact`. Verified `num_unindexed_rows=0` on every index (`index_stats`).
+
+### ✅ `compact` keeps scalar indexes + honors `TABLE` (done)
+`raudio compact` rebuilds the BTREE scalar indexes after `compact_files`
+(compaction otherwise invalidates the row addresses they point at) and now compacts
+`--table` (`TABLE=chunk_frames` for the frames table), not just `chunks`
+(`src/raudio/cli/media.py`).
+
+### 📋 Prune old dataset versions (disk, not latency)
+`chunk_frames` retains **80** versions (5.1 G), `chunks` **21** (4.2 G) — every
+feature/index write left an old version behind. `ds.cleanup_old_versions(older_than=…)`
+reclaims the unreferenced files. **Irreversible** (drops time-travel/rollback) — run
+with a conservative retention window after confirming no history is needed.
+
+### 📋 Considered, marginal at this scale (145k rows, single local node)
+Shared `lance.Session` across the 3 table handles (caches are per-table; modest
+memory, not latency), `LANCE_IO_THREADS`/`LANCE_CPU_THREADS` bumps (local default
+8 IO threads is fine for small projected scans), and `IVF_HNSW_SQ`/`IVF_RQ` over
+the current `IVF_PQ`. Compacting `chunk_frames` (73 frags) is low-value — the frame
+reads are index-driven, not scan-bound.
 
 ### 📋 Stop fetching `alignments_json` in the search projection
 `alignments_json` is a multi-KB JSONB blob per chunk that the result list never
@@ -214,12 +306,10 @@ so it's already one call. The `all` legs are independent and unioned by chunk vi
 with `asyncio.gather` + `run_in_executor` (Lance is sync). Pairs with the
 async-client item under [vLLM perf](#vllm-performance).
 
-### 📋 Default the cross-encoder rerank off in the UI
-The cross-encoder (`Qwen3-VL-Reranker-2B`) adds ~200–500 ms when toggled on.
-`SearchSpec.rerank` already defaults `False` and the rerank window is bounded to
-the top `rerank_n` (default 20) — verify the Settings popover
-(`search-settings.svelte`) defaults the toggle off and labels it "best quality,
-slower."
+### ✅ Cross-encoder rerank defaults off in the UI (done)
+`search-settings.svelte` declares `rerank = $bindable(false)` (off) as a labelled
+Switch ("Rerank results"); `SearchSpec.rerank` defaults `False` and `rerank_n` is
+only sent when rerank is on. Verified — nothing to do.
 
 ### 📋 (Stretch) Try `IVF_HNSW_SQ` for the frame-embedding index
 Better recall at the cost of memory; might let `nprobes` stay low and end up
@@ -252,6 +342,12 @@ print(f'avg {total/n*1000:.1f} ms / query')
 ---
 
 ## vLLM performance
+
+⚪ **Mostly ops/diagnostics + parked stretch items — not active code TODOs.**
+`--enable-prefix-caching` is already set in the Makefile; the `/metrics` recipe,
+the GPU-budget note, and the prefix-caching check are *diagnostic/ops references*;
+the async client, FP8, and `--async-scheduling` are concurrency/throughput wins
+that are **YAGNI at single-user scale**. Kept as context for if/when that changes:
 
 A single `POST /v1/embeddings` against `Qwen3-VL-Embedding-2B` takes ~100–300 ms
 (plus ~5 ms localhost RTT). A hybrid search fires it once per query, so combined
