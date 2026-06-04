@@ -28,6 +28,7 @@ GPU             ?= 2
 	pipeline pipeline-sharded pipeline-multimodal \
 	embed-server rerank-server embed-server-docker rerank-server-docker vllm-stop kernels-prepare embed-chunks extract-chunk-frames embed-chunk-frames \
 	caption-chunk-frames embed-captions captions topics \
+	atlas atlas-visual atlas-caption atlas-all features-all stack-up stack-down \
 	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
 	hf-upload-db hf-upload-videos hf-upload-all hf-download-db hf-download-all \
 	reingest search query demo shell clean clean-db clean-run reset download
@@ -345,7 +346,7 @@ embed-chunks:         ## Embed chunks.text → text_embedding column + IVF_PQ in
 	uv run --extra multimodal raudio --db $(DB) feature text_embedding --url $(EMBED_URL)
 
 EXTRACT_JOBS    ?= 16
-extract-chunk-frames: ## ffmpeg → one JPEG per chunk.start into chunks.frame_blob.
+extract-chunk-frames: ## ffmpeg → one JPEG per chunk.start into the chunk_frames table.
 	uv run raudio --db $(DB) extract-chunk-frames --audio-root $(AUDIO_DIR) --jobs $(EXTRACT_JOBS)
 
 embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ index.
@@ -362,16 +363,35 @@ embed-captions:       ## Embed chunk_frames.caption → caption_embedding + IVF_
 # Reuses existing frames — run `extract-chunk-frames` first if chunk_frames is empty.
 captions: caption-chunk-frames embed-captions  ## Caption frames + embed captions (scene search).
 
+# ─── Atlas 2-D projections (EVōC; CPU-only, needs the `atlas` extra) ──────────
+# Build the atlas_*_x/y/cluster columns the Atlas view reads. Run each after its
+# embedding exists: text ← embed-chunks, visual ← embed-chunk-frames,
+# caption ← embed-captions. EVōC is CPU-only (no GPU/embed-server needed).
+atlas:                ## Text EVōC map (atlas_x/y/cluster) from chunks.text_embedding.
+	uv run --extra atlas raudio --db $(DB) feature atlas
+atlas-visual:         ## Visual EVōC map (atlas_img_*) from frame_embedding.
+	uv run --extra atlas raudio --db $(DB) feature atlas --space visual
+atlas-caption:        ## Caption EVōC map (atlas_cap_*) from caption_embedding.
+	uv run --extra atlas raudio --db $(DB) feature atlas --space caption
+atlas-all: atlas atlas-visual atlas-caption  ## All three atlas projections.
+
 topics:               ## Build Swedish topic layers (Toponymy, isolated env; needs atlas map + Gemma :8003 + embed :8001).
 	uv run raudio --db $(DB) feature topics
+
+# ─── Complete feature DAG (everything the serving DB carries) ─────────────────
+# The full multimodal + atlas + topics chain in dependency order. Assumes
+# `ingest-full` already ran and the embed server (:8001) + your Gemma (:8003) are
+# up. Each stage is resumable (skips populated rows). Hours of GPU for 145k rows.
+# This is what `pipeline-multimodal` was missing (captions, atlas, topics).
+features-all: embed-chunks extract-chunk-frames embed-chunk-frames captions atlas-all topics compact  ## Build every derived column on $(DB).
 
 # Full multimodal indexing chain. Existing `pipeline` runs first, then the
 # three new stages add the multimodal columns + indexes. Resumable: each
 # new stage skips already-populated rows via `WHERE … IS NULL`.
 pipeline-multimodal: pipeline embed-chunks extract-chunk-frames embed-chunk-frames compact
 
-compact:               ## Compact fragments and rebuild IVF_PQ indexes (run after bulk writes).
-	uv run raudio --db $(DB) compact
+compact:               ## Compact $(TABLE)'s fragments + rebuild its indexes (run after bulk writes; TABLE=chunk_frames for frames).
+	uv run raudio --db $(DB) --table $(TABLE) compact
 	@echo "── multimodal indexing complete ────────────────────────────────"
 
 E2E_DOCS        ?= 2
@@ -384,6 +404,14 @@ dev:                  ## Run backend + frontend together (tmux or two terminals)
 	@echo "  1) make backend"
 	@echo "  2) make frontend"
 	@echo "Then open http://localhost:$(FRONTEND_PORT)"
+
+# ─── Whole-stack bring-up (4 services, detached + health-gated) ──────────────
+# One command for embed:8001 → rerank:8002 → backend:8000 → frontend:5274.
+# Sequential vLLM start + idempotent (skips healthy ports). See docs/REPRODUCE.md.
+stack-up:             ## Start the full stack detached (DB=transcripts_v2.lance VLLM_GPU=0).
+	DB=$(DB) VLLM_GPU=$(VLLM_GPU) bash scripts/serve-all.sh up
+stack-down:           ## Stop the detached stack started by `make stack-up`.
+	bash scripts/serve-all.sh down
 
 hf-upload-db:         ## Sync $(DB)/ to hf://buckets/$(HF_BUCKET)/transcripts.lance/
 	@test -n "$(HF_BUCKET)" || (echo "Set HF_BUCKET=namespace/bucket"; exit 2)

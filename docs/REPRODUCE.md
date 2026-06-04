@@ -1,0 +1,267 @@
+# Reproducing raudio from scratch
+
+> The single authoritative runbook: from a fresh clone to a running, searchable
+> system. For *what each stage does* see [PIPELINE.md](PIPELINE.md) (ASR) and
+> [GUIDE.md](../GUIDE.md) (architecture); this doc is the **ordered, exact
+> command sequence + verification gates**.
+
+There are **two** things people mean by "reproduce", and they need different
+paths. Pick one:
+
+| Path | You want… | Cost | Result |
+|---|---|---|---|
+| **A — Restore the artifact** | the *exact published results* (the demo DB) | minutes + bandwidth | **bit-identical** `transcripts_v2.lance` |
+| **B — Rebuild from raw** | to regenerate the corpus from videos (new data, or verify the method) | **hours of GPU** | functionally equivalent, **not** byte-identical |
+
+> [!IMPORTANT]
+> **"Exact" reproduction = Path A.** The build pipeline (Path B) is **not
+> bit-reproducible**: Whisper beam search, IVF_PQ k-means (random init), the EVōC
+> 2-D layout, Toponymy clustering, and Gemma caption sampling are all
+> unseeded/stochastic. Two clean rebuilds produce *equivalent* search behaviour
+> but different bytes, vectors, and cluster ids. If you need the exact numbers
+> behind a result, restore the artifact.
+
+> [!WARNING]
+> **The #1 footgun: the database name.** The live/serving DB is
+> **`transcripts_v2.lance`**, but every `Makefile` target defaults to
+> `DB=./transcripts.lance`. Always pass `DB=transcripts_v2.lance` (or `export
+> DB=transcripts_v2.lance`) for the real corpus, or you will silently build/serve
+> an empty DB. Every command below makes `DB` explicit.
+
+---
+
+## 0. Prerequisites (both paths)
+
+```bash
+make check-deps        # verifies uv + ffmpeg + hf + GPU, prints install hints
+```
+
+| Tool / pin | Required | Notes |
+|---|---|---|
+| **uv** | yes | `curl -LsSf https://astral.sh/uv/install.sh \| sh` — drives all Python |
+| **Python ≥ 3.11** | yes | `requires-python` in `pyproject.toml` |
+| **ffmpeg** | Path B | frame/thumbnail extraction + ASR audio decode |
+| **Bun** | viewer | builds + serves the SvelteKit frontend |
+| **NVIDIA GPU** | semantic/visual/scene | a 96 GB card hosts both 2 B vLLM models at 0.45 mem-frac |
+| **Docker** | optional | only for the `*-server-docker` vLLM route (bundles CUDA) |
+| **hf CLI** | Path A + uploads | `pip install "huggingface_hub[cli]" && hf auth login` |
+
+**Version pins that matter** (don't drift these without re-reading
+[INVESTIGATION.md](INVESTIGATION.md)):
+
+- `torch==2.11.0+cu128` / `torchaudio==2.11.0+cu128` (the `pytorch-cu128` index) —
+  driver 570.x supports CUDA 12.8; cu130 wheels fail "driver too old".
+- **vLLM `0.22.0`** (`VLLM_PIN`) for both embed + rerank servers.
+- Driver tension: vLLM ≥ 0.20 wants driver ≥ 575 (CUDA 12.9) for the *native*
+  (uvx) server. On a 12.8 driver, use the **Docker** variant (`make
+  embed-server-docker`) which ships its own CUDA.
+- Blackwell (sm_120): pre-fetch FA3 kernels once — `make kernels-prepare`.
+
+**Models** (downloaded on first use, cached in `~/.cache/huggingface`):
+
+| Role | Model id | Served by |
+|---|---|---|
+| ASR transcribe | `KBLab/kb-whisper-large` | in-process (Path B) |
+| ASR align (sv) | `KBLab/wav2vec2-large-voxrex-swedish` | in-process (Path B) |
+| Text/image embed | `Qwen/Qwen3-VL-Embedding-2B` | vLLM `:8001` |
+| Reranker | `Qwen/Qwen3-VL-Reranker-2B` | vLLM `:8002` |
+| Captioner | `google/gemma-4-31B-it` | **your** Gemma at `:8003` (external — raudio is only a client) |
+
+Install Python deps:
+
+```bash
+make install                       # = uv sync (core: ASR + torch + FastAPI)
+# extras are pulled per-command by `uv run --extra …`, or eagerly:
+uv sync --extra multimodal --extra atlas
+```
+
+---
+
+## Path A — Restore the published artifact (exact)
+
+The corpus + videos live in a HuggingFace bucket. Pull them, then serve.
+
+```bash
+export HF_BUCKET=<namespace>/<bucket>      # the published bucket
+export DB=transcripts_v2.lance
+
+hf auth login                              # once
+make hf-download-all HF_BUCKET=$HF_BUCKET DB=$DB
+#   ↳ pulls transcripts_v2.lance/ + videos + output/ + thumbnails/
+```
+
+Verify the restore (counts should match the published numbers):
+
+```bash
+uv run python - <<'PY'
+import lance
+for t in ("chunks", "chunk_frames"):
+    ds = lance.dataset(f"transcripts_v2.lance/{t}.lance")
+    print(t, "rows:", ds.count_rows(), "indices:",
+          sorted(i["name"] for i in ds.list_indices()))
+PY
+# expect: chunks ~145k (text_idx, text_embedding_idx, doc_id_idx, …);
+#         chunk_frames ~145k (frame_embedding_idx, caption_idx,
+#                             caption_embedding_idx, doc_id_idx)
+```
+
+Then jump to [§ Serving the stack](#serving-the-stack). Done — this *is* the
+exact result.
+
+---
+
+## Path B — Rebuild from raw (method reproduction)
+
+The full DAG, in dependency order. Each stage is **resumable** (skips already-
+populated rows / files), so a crash is safe to re-run. Run every command with
+`DB=transcripts_v2.lance`.
+
+```mermaid
+flowchart TD
+    CSV["video_batcher.csv (in-repo seed)"] --> DL[download videos]
+    DL --> TR[transcribe → alignment JSON]
+    TR --> TH[thumbnail]
+    TH --> ING["ingest-full → chunks + documents (+FTS, BTREE)"]
+    ING --> TE[embed-chunks → text_embedding]
+    ING --> XF[extract-chunk-frames → chunk_frames]
+    XF --> FE[embed-chunk-frames → frame_embedding]
+    XF --> CAP["captions → caption + caption_embedding"]
+    TE --> AT[atlas → atlas_x/y/cluster]
+    FE --> ATV[atlas --space visual → atlas_img_*]
+    CAP --> ATC[atlas --space caption → atlas_cap_*]
+    AT --> TOP[topics → topic_l* + doc_topic]
+    ATV --> TOP
+    ATC --> TOP
+    TOP --> CO[compact]
+```
+
+### B.1 — Acquire + transcribe (CPU/GPU, hours)
+
+```bash
+export DB=transcripts_v2.lance LANGUAGE=sv AUDIO_DIR=./input/sv
+
+make download                         # video_batcher.csv → input/sv/*.mp4
+make transcribe AUDIO_DIR=$AUDIO_DIR  # → output/sv/alignments/*.json  (GPU)
+make thumbnail                        # → thumbnails/*.jpg
+```
+
+Gate: `ls output/sv/alignments/*.json | wc -l` should equal your video count.
+
+### B.2 — Ingest → `chunks` + `documents`
+
+```bash
+make ingest-full DB=$DB               # builds chunks (+ Swedish FTS, BTREE) + documents
+```
+
+Gate:
+
+```bash
+uv run python -c "import lance; ds=lance.dataset('$DB/chunks.lance'); \
+print('chunks:', ds.count_rows(), '| indices:', [i['name'] for i in ds.list_indices()])"
+```
+
+### B.3 — Multimodal columns (needs the embed server up — see §Serving)
+
+> Start `make embed-server` (or `-docker`) **first** — these are its clients.
+
+```bash
+make embed-chunks DB=$DB              # chunks.text_embedding + IVF_PQ   (~25 min/145k)
+make extract-chunk-frames DB=$DB      # chunk_frames table + frame_blob  (ffmpeg, ~30 min)
+make embed-chunk-frames DB=$DB        # chunk_frames.frame_embedding + IVF_PQ
+make captions DB=$DB                  # caption (needs your Gemma :8003) + caption_embedding
+#   = caption-chunk-frames + embed-captions; resumable via $(DB).caption.ckpt
+```
+
+Gate (no NULLs in the embedding columns):
+
+```bash
+uv run python - <<'PY'
+import lance
+c  = lance.dataset("transcripts_v2.lance/chunks.lance")
+cf = lance.dataset("transcripts_v2.lance/chunk_frames.lance")
+print("text_embedding NULLs:", c.count_rows(filter="text_embedding IS NULL"))
+print("frame_embedding NULLs:", cf.count_rows(filter="frame_embedding IS NULL"))
+print("caption_embedding NULLs:", cf.count_rows(filter="caption_embedding IS NULL"))
+PY
+```
+
+### B.4 — Atlas projections + topics (CPU EVōC + Gemma naming)
+
+```bash
+make atlas-all DB=$DB                 # atlas (text) + atlas-visual + atlas-caption
+make topics DB=$DB                    # Toponymy layers named by Gemma over the atlas map
+make compact DB=$DB TABLE=chunk_frames  # merge fragments + rebuild indexes (optional housekeeping)
+```
+
+> `make atlas-all`, `make atlas`, and `features-all` were added to fill the
+> previous gap where the atlas step had no Make target. `make features-all
+> DB=$DB` runs B.3 + B.4 as one chain.
+
+Gate: `make atlas` columns present →
+`uv run python -c "import lance; print([n for n in lance.dataset('$DB/chunks.lance').schema.names if n.startswith('atlas_') or n.startswith('topic_')])"`.
+
+---
+
+## Serving the stack
+
+Four processes. The two vLLM servers **must start sequentially** (launching both
+at once trips vLLM's memory-profiling race). One script does it all, health-gated
+and detached:
+
+```bash
+make stack-up DB=transcripts_v2.lance     # embed:8001 → rerank:8002 → backend:8000 → frontend:5274
+# … or the underlying script directly, with knobs:
+DB=transcripts_v2.lance VLLM_GPU=0 bash scripts/serve-all.sh up
+make stack-down                            # stop them all
+```
+
+What it brings up (idempotent — skips any port already healthy):
+
+| Service | Port | Command it runs | GPU |
+|---|---|---|---|
+| vLLM embed | 8001 | `make embed-server` | `VLLM_GPU` (default 0) |
+| vLLM rerank | 8002 | `make rerank-server` | `VLLM_GPU` |
+| FastAPI backend | 8000 | `raudio --db $DB serve` | — |
+| Frontend (Bun) | 5274 | `frontend/server.ts` (prod build, proxies `/api`) | — |
+
+> FTS-only / search-only? You can skip the vLLM servers and run just `make
+> backend` + `make frontend` — semantic/visual/scene degrade to empty, FTS works.
+> Remote box? Forward `-L 5274:127.0.0.1:5274` and open `localhost:5274`.
+
+---
+
+## Final verification (the smoke test)
+
+```bash
+# all four up?
+for p in 8000 8001 8002 5274; do
+  printf "%s " $p; curl -s -o /dev/null -w '%{http_code}\n' \
+    "http://127.0.0.1:$p/$([ $p = 8000 ] && echo api/health || ([ $p = 5274 ] && echo '' || echo health))"
+done
+
+# every search mode returns hits on the live data
+for m in fts semantic visual scene scene_fts hybrid all; do
+  printf "%-10s " $m
+  curl -s "http://127.0.0.1:8000/api/search?q=regeringen&mode=$m&n=3" \
+    | python3 -c "import sys,json;print('hits:', len(json.load(sys.stdin)))"
+done
+```
+
+`scripts/e2e_smoke.py` (`make e2e-smoke`) runs **ingest → text + frame embeddings
+→ backend smoke** on a 2-doc throwaway DB (it consumes existing alignment JSON —
+no transcribe — and skips the caption/scene half). It covers
+fts/semantic/visual/hybrid/all, so it's the fastest proof the core write+search
+path works without the full corpus; it does **not** exercise transcribe or scene.
+
+---
+
+## Footgun checklist
+
+- [ ] `DB=transcripts_v2.lance` on **every** command (Makefile default is wrong).
+- [ ] Start vLLM **embed before rerank**, never simultaneously (`serve-all.sh`
+      enforces this).
+- [ ] On a CUDA-12.8 driver, use `make embed-server-docker` / `rerank-server-docker`.
+- [ ] Blackwell: `make kernels-prepare` once before the native `embed-server`.
+- [ ] Captions/topics need **your own Gemma at `:8003`** — raudio never starts it.
+- [ ] FTS must be built with `--fts-language Swedish` (the English stemmer mangles
+      `ministern`/`vägen`); `make ingest-full` does this, or `make reindex-fts`.
