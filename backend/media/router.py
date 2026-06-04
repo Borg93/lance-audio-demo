@@ -61,23 +61,33 @@ def chunk_frame(
     if state.chunk_frames_ds is None:
         raise HTTPException(status_code=404, detail="frame not extracted yet")
 
+    # frame_idx is matched in Python, NOT in the SQL predicate. With a scalar
+    # (BTREE) index on chunk_frames.doc_id, the combination of `with_row_id=True`
+    # + a multi-clause filter that *also* constrains frame_idx trips a Lance
+    # planner bug that silently returns 0 rows (the row is there — verified via a
+    # filter without the frame_idx clause). Keying on (doc_id, speech_id,
+    # chunk_id) in SQL and selecting frame_idx here sidesteps it; a chunk has only
+    # a handful of frames, so the extra rows are negligible.
     keyed = state.chunk_frames_ds.to_table(
-        columns=["frame_mime"],
+        columns=["frame_mime", "frame_idx"],
         filter=(
-            f"doc_id = '{doc_id}' AND speech_id = {int(speech_id)} "
-            f"AND chunk_id = {int(chunk_id)} AND frame_idx = {int(frame_idx)}"
+            f"doc_id = '{doc_id}' AND speech_id = {int(speech_id)} AND chunk_id = {int(chunk_id)}"
         ),
         with_row_id=True,
-        limit=1,
     )
-    if keyed.num_rows == 0:
+    row = next(
+        (
+            i
+            for i in range(keyed.num_rows)
+            if keyed.column("frame_idx")[i].as_py() == int(frame_idx)
+        ),
+        None,
+    )
+    if row is None:
         raise HTTPException(status_code=404, detail="frame not extracted yet")
-    rowid = keyed.column("_rowid")[0].as_py()
-    mime = (
-        keyed.column("frame_mime")[0].as_py()
-        if keyed.column("frame_mime")[0].is_valid
-        else "image/jpeg"
-    )
+    rowid = keyed.column("_rowid")[row].as_py()
+    mime_cell = keyed.column("frame_mime")[row]
+    mime = mime_cell.as_py() if mime_cell.is_valid else "image/jpeg"
     try:
         blob = state.chunk_frames_ds.take_blobs("frame_blob", ids=[rowid])[0]
     except Exception as e:
