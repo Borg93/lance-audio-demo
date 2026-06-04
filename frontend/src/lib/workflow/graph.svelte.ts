@@ -24,11 +24,14 @@
  */
 
 import type { Edge, Node } from '@xyflow/svelte';
+import { z } from 'zod';
 import { browser } from '$app/environment';
-import { search, type Hit, type SearchMode, type SearchSpec } from '$lib/api';
+import { search, SearchModeSchema, type Hit, type SearchMode, type SearchSpec } from '$lib/api';
 
-/** The pipeline stages. A node's `type` (used to pick its component) is its kind. */
-export type NodeKind = 'query' | 'image' | 'filter' | 'search' | 'combine' | 'results';
+/** The pipeline stages, as a runtime list (drives the persistence schema). */
+export const NODE_KINDS = ['query', 'image', 'filter', 'search', 'combine', 'results'] as const;
+/** A node's `type` (used to pick its component) is its kind. */
+export type NodeKind = (typeof NODE_KINDS)[number];
 
 export type RunStatus = 'idle' | 'running' | 'done' | 'error';
 
@@ -72,14 +75,51 @@ export interface NodeConfig {
     enabled: boolean;
 }
 
-/** The serialisable slice of a node's config (everything except the image File). */
-type PersistedConfig = Omit<NodeConfig, 'image'>;
+// ── Persistence schema (Zod — parse, don't validate, at the localStorage boundary) ──
 
-interface PersistedGraph {
-    nodes: { id: string; type: NodeKind; position: { x: number; y: number } }[];
-    edges: { id: string; source: string; target: string; label?: string; animated?: boolean }[];
-    config: Record<string, PersistedConfig>;
-}
+/** Per-node config as stored (no image File). Every field self-heals to a sane
+ *  default on bad/old data via `.catch`, and `n` is clamped to [1, 100]. */
+const ConfigSchema = z.object({
+    q: z.string().catch(''),
+    imageName: z.string().catch(''),
+    where: z.string().catch(''),
+    language: z.string().catch(''),
+    namn: z.string().catch(''),
+    mode: SearchModeSchema.catch('fts'),
+    n: z
+        .number()
+        .catch(24)
+        .transform((v) => Math.max(1, Math.min(100, Math.round(v)))),
+    rerank: z.boolean().catch(false),
+    combineMode: z.enum(['union', 'intersect']).catch('union'),
+    label: z.string().catch(''),
+    enabled: z.boolean().catch(true),
+});
+
+const PersistedNodeSchema = z.object({
+    id: z.string(),
+    type: z.enum(NODE_KINDS),
+    position: z.object({ x: z.number(), y: z.number() }),
+});
+
+const PersistedEdgeSchema = z.object({
+    id: z.string(),
+    source: z.string(),
+    target: z.string(),
+    label: z.string().optional(),
+    animated: z.boolean().optional(),
+});
+
+/** A structurally-bad node (unknown kind, missing position) fails the whole
+ *  parse, so `load()` falls back to `seed()` instead of crashing the canvas. */
+const PersistedGraphSchema = z.object({
+    nodes: z.array(PersistedNodeSchema).min(1),
+    edges: z.array(PersistedEdgeSchema).default([]),
+    config: z.record(z.string(), ConfigSchema).default({}),
+});
+
+type PersistedConfig = z.infer<typeof ConfigSchema>;
+type PersistedGraph = z.infer<typeof PersistedGraphSchema>;
 
 export interface NodeRuntime {
     status: RunStatus;
@@ -180,28 +220,6 @@ function blankRuntime(): NodeRuntime {
         scopeCapped: false,
         droppedInputs: 0,
     };
-}
-
-/** Coerce an untrusted persisted config slice into a valid NodeConfig — bad or
- *  old-schema values fall back to defaults. Image is never persisted (stays null). */
-function sanitizeConfig(raw: Partial<PersistedConfig> | undefined): NodeConfig {
-    const c = defaultConfig();
-    if (!raw || typeof raw !== 'object') return c;
-    if (typeof raw.q === 'string') c.q = raw.q;
-    if (typeof raw.imageName === 'string') c.imageName = raw.imageName;
-    if (typeof raw.where === 'string') c.where = raw.where;
-    if (typeof raw.language === 'string') c.language = raw.language;
-    if (typeof raw.namn === 'string') c.namn = raw.namn;
-    // `as SearchMode` is sound here — the some() guard just confirmed the value.
-    if (SEARCH_MODES.some((m) => m.value === raw.mode)) c.mode = raw.mode as SearchMode;
-    if (typeof raw.n === 'number' && Number.isFinite(raw.n)) {
-        c.n = Math.max(1, Math.min(100, Math.round(raw.n)));
-    }
-    if (typeof raw.rerank === 'boolean') c.rerank = raw.rerank;
-    if (raw.combineMode === 'union' || raw.combineMode === 'intersect') c.combineMode = raw.combineMode;
-    if (typeof raw.label === 'string') c.label = raw.label;
-    if (typeof raw.enabled === 'boolean') c.enabled = raw.enabled;
-    return c;
 }
 
 /** Escape a value for inlining in a SQL single-quoted string literal. */
@@ -479,62 +497,48 @@ class WorkflowGraph {
     /** Rehydrate from localStorage; returns false (→ caller seeds) if absent/bad. */
     private load(): boolean {
         if (!browser) return false;
+        let parsed: PersistedGraph;
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
             if (!raw) return false;
-            const data = JSON.parse(raw) as PersistedGraph;
-            if (!Array.isArray(data.nodes) || data.nodes.length === 0) return false;
-
-            // Validate every node up front — a structurally bad entry (schema
-            // drift, partial write, unknown kind) fails safe to seed() rather
-            // than crashing Svelte Flow's render on a missing position.
-            const nodes: Node[] = [];
-            for (const n of data.nodes) {
-                if (
-                    !n ||
-                    typeof n.id !== 'string' ||
-                    !(n.type in KIND_LABEL) ||
-                    !n.position ||
-                    typeof n.position.x !== 'number' ||
-                    typeof n.position.y !== 'number'
-                ) {
-                    return false;
-                }
-                nodes.push({
-                    id: n.id,
-                    type: n.type,
-                    position: { x: n.position.x, y: n.position.y },
-                    data: {},
-                });
-            }
-            const ids = new Set(nodes.map((n) => n.id));
-            const edges: Edge[] = [];
-            for (const e of data.edges ?? []) {
-                if (!e || typeof e.id !== 'string' || !ids.has(e.source) || !ids.has(e.target)) continue;
-                edges.push({
-                    id: e.id,
-                    source: e.source,
-                    target: e.target,
-                    ...(e.label ? { label: e.label } : {}),
-                    ...(e.animated ? { animated: true } : {}),
-                });
-            }
-            const config: Record<string, NodeConfig> = {};
-            const runtime: Record<string, NodeRuntime> = {};
-            for (const n of nodes) {
-                config[n.id] = sanitizeConfig(data.config?.[n.id]);
-                runtime[n.id] = blankRuntime();
-            }
-            // Assign only once everything validated — no half-applied bad state.
-            this.nodes = nodes;
-            this.edges = edges;
-            this.config = config;
-            this.runtime = runtime;
-            this.seq = this.maxSeq();
-            return true;
+            // Parse + validate at the boundary; a bad node shape / unknown kind
+            // fails the parse, so we fall back to seed() instead of crashing.
+            const result = PersistedGraphSchema.safeParse(JSON.parse(raw));
+            if (!result.success) return false;
+            parsed = result.data;
         } catch {
-            return false;
+            return false; // not valid JSON
         }
+
+        const nodes: Node[] = parsed.nodes.map((n) => ({
+            id: n.id,
+            type: n.type,
+            position: { x: n.position.x, y: n.position.y },
+            data: {},
+        }));
+        const ids = new Set(nodes.map((n) => n.id));
+        const edges: Edge[] = parsed.edges
+            .filter((e) => ids.has(e.source) && ids.has(e.target)) // drop dangling edges
+            .map((e) => ({
+                id: e.id,
+                source: e.source,
+                target: e.target,
+                ...(e.label ? { label: e.label } : {}),
+                ...(e.animated ? { animated: true } : {}),
+            }));
+        const config: Record<string, NodeConfig> = {};
+        const runtime: Record<string, NodeRuntime> = {};
+        for (const n of nodes) {
+            const pc = parsed.config[n.id];
+            config[n.id] = pc ? { ...pc, image: null } : defaultConfig();
+            runtime[n.id] = blankRuntime();
+        }
+        this.nodes = nodes;
+        this.edges = edges;
+        this.config = config;
+        this.runtime = runtime;
+        this.seq = this.maxSeq();
+        return true;
     }
 
     /** Highest numeric suffix across node ids (so new ids never collide). */
