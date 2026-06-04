@@ -67,7 +67,8 @@
       {:else if rt.status === 'done'}
         <span class="text-muted-foreground">
           <span class="text-foreground">{rt.count}</span> hits · {rt.ms} ms{#if rt.scopedDocs}
-            · within <span class="text-foreground">{rt.scopedDocs}</span> videos{/if}
+            · within <span class="text-foreground">{rt.scopedDocs}</span> videos{#if rt.scopeCapped}
+              <span class="text-amber-500"> (capped)</span>{/if}{/if}
         </span>
         {#if rt.count === 0 && rt.scopedDocs}
           <div class="mt-1 text-amber-500">
@@ -77,6 +78,12 @@
         {/if}
       {:else}
         <span class="text-muted-foreground/70">idle — add a query or image, then Run</span>
+      {/if}
+      {#if rt.droppedInputs > 0}
+        <div class="mt-1 text-amber-500">
+          {rt.droppedInputs} extra input{rt.droppedInputs > 1 ? 's' : ''} ignored — a Search uses one
+          query + one image. Use a Combine node to merge result sets.
+        </div>
       {/if}
     </div>
 

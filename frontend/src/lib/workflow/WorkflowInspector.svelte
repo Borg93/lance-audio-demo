@@ -1,8 +1,8 @@
 <script lang="ts">
   /** Persistent right panel. Click a node → see its inputs + intermediate
    *  results; click a result → play it here (reuses PlayerPane). */
-  import { ArrowLeft } from 'lucide-svelte';
-  import { graph, modeLabel, nodeLabel, STATUS_DOT } from '$lib/workflow/graph.svelte';
+  import { ArrowLeft, Copy, Eye, EyeOff } from 'lucide-svelte';
+  import { graph, modeLabel, nodeLabel, RERANK_TOP_N, STATUS_DOT } from '$lib/workflow/graph.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import HitList from '$lib/workflow/HitList.svelte';
 
@@ -40,9 +40,13 @@
       r.push(['Mode', modeLabel(cfg.mode)]);
       r.push(['Query', cfg.q || (cfg.mode === 'visual' ? '(from image)' : '—')]);
       r.push(['Results', String(cfg.n)]);
-      if (cfg.rerank) r.push(['Rerank', 'top 20']);
-      if (rt?.scopedDocs) r.push(['Scope', `within ${rt.scopedDocs} videos`]);
+      if (cfg.rerank) r.push(['Rerank', `top ${RERANK_TOP_N}`]);
+      if (rt?.scopedDocs)
+        r.push(['Scope', `within ${rt.scopedDocs} videos${rt.scopeCapped ? ' (capped)' : ''}`]);
       if (rt?.ms != null) r.push(['Time', `${rt.ms} ms`]);
+    }
+    if (kind === 'combine') {
+      r.push(['Combine', cfg.combineMode === 'intersect' ? 'intersect (∩)' : 'union (∪)']);
     }
     return r;
   });
@@ -73,6 +77,32 @@
       <PlayerPane hit={graph.selectedHit} />
     {:else if id && kind && cfg && rt}
       <div class="flex flex-col gap-3 p-3 text-xs">
+        <div class="flex items-center gap-1.5">
+          <input
+            class="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary"
+            placeholder={title}
+            aria-label="Rename node"
+            bind:value={cfg.label}
+          />
+          <button
+            type="button"
+            onclick={() => graph.duplicateNode(id)}
+            title="Duplicate node"
+            aria-label="Duplicate node"
+            class="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Copy class="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onclick={() => graph.setConfig(id, { enabled: !cfg.enabled })}
+            title={cfg.enabled ? 'Disable (bypass) node' : 'Enable node'}
+            aria-label="Toggle node enabled"
+            class="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            {#if cfg.enabled}<EyeOff class="size-3.5" />{:else}<Eye class="size-3.5" />{/if}
+          </button>
+        </div>
         <div class="flex items-center gap-2">
           <span class="size-2 shrink-0 rounded-full {STATUS_DOT[rt.status]}"></span>
           <span class="text-muted-foreground">{statusText}</span>

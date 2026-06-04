@@ -4,6 +4,7 @@ import QueryNode from './nodes/QueryNode.svelte';
 import ImageNode from './nodes/ImageNode.svelte';
 import FilterNode from './nodes/FilterNode.svelte';
 import SearchNode from './nodes/SearchNode.svelte';
+import CombineNode from './nodes/CombineNode.svelte';
 import ResultsNode from './nodes/ResultsNode.svelte';
 
 export const nodeTypes: NodeTypes = {
@@ -11,5 +12,6 @@ export const nodeTypes: NodeTypes = {
     image: ImageNode,
     filter: FilterNode,
     search: SearchNode,
+    combine: CombineNode,
     results: ResultsNode,
 };

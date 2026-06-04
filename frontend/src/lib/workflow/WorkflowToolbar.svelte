@@ -7,7 +7,7 @@
   import { Button } from '$lib/components/ui';
   import { graph, nodeLabel, type NodeKind } from '$lib/workflow/graph.svelte';
 
-  const ADDABLE: NodeKind[] = ['query', 'image', 'filter', 'search', 'results'];
+  const ADDABLE: NodeKind[] = ['query', 'image', 'filter', 'search', 'combine', 'results'];
   const { screenToFlowPosition } = useSvelteFlow();
 
   // Stagger repeated adds so they don't stack exactly. Not rendered → plain let.

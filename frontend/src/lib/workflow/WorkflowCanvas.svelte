@@ -12,6 +12,14 @@
   // mount — good enough for a POC, the canvas just needs the right base palette.
   const colorMode: ColorMode =
     browser && document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+
+  // Autosave: snapshot() reads nodes/edges/config deeply, so this effect re-runs
+  // on any change; debounce the localStorage write so typing doesn't thrash it.
+  $effect(() => {
+    const json = graph.snapshot();
+    const timer = setTimeout(() => graph.persist(json), 400);
+    return () => clearTimeout(timer);
+  });
 </script>
 
 <div class="h-full w-full">

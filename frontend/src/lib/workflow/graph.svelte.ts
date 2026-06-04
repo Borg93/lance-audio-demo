@@ -8,37 +8,43 @@
  * Three pieces of state, kept deliberately separate:
  *   • `nodes` / `edges` — the Svelte Flow graph (`$state.raw`, replaced
  *     wholesale; Svelte Flow binds + mutates these on drag/connect/delete).
- *   • `config`  — per-node USER input (the query text, search mode, filter…),
- *     keyed by node id. Deep `$state` so node forms edit it reactively.
- *   • `runtime` — per-node RUN state (status / hits / error / timing), keyed by
- *     node id. Populated by `run()`, read by the nodes to render themselves.
+ *   • `config`  — per-node USER input (query, mode, filter, label…), keyed by id.
+ *   • `runtime` — per-node RUN state (status / hits / error / timing), keyed by id.
  *
  * Edges carry STATE forward. Each node produces a `NodeOutput`:
  *   • a partial `SearchSpec` (a query, an image, metadata filters), and/or
  *   • a `Hit[]` result set.
  * `run()` walks the graph in topological order and merges every incoming
- * output into the next node's input. Two things flow down a wire into a Search:
- *   • a query/image/filter  → WHAT to search for, and
- *   • an upstream result set → WHERE to search (the Search scopes itself to the
- *     videos those results came from, via `doc_id IN (…)`).
- * So `Image → Search·Visual → Search·Scene → Search·Keyword → Results` reads as
- * "find clips like this image, then among those find ones whose scene matches,
- * then among those find ones where this is said" — each stage refining the last.
+ * output into the next node's input. Into a Search, a query/image/filter is
+ * WHAT to search for and an upstream result set is WHERE (scopes via
+ * `doc_id IN (…)`). A Combine node unions/intersects its incoming result sets.
+ *
+ * The whole graph (topology + config, minus the un-serialisable image File) is
+ * autosaved to localStorage and rehydrated on load.
  */
 
 import type { Edge, Node } from '@xyflow/svelte';
+import { browser } from '$app/environment';
 import { search, type Hit, type SearchMode, type SearchSpec } from '$lib/api';
 
-/** The five pipeline stages. A node's `type` (used to pick its component) is
- *  its kind. */
-export type NodeKind = 'query' | 'image' | 'filter' | 'search' | 'results';
+/** The pipeline stages. A node's `type` (used to pick its component) is its kind. */
+export type NodeKind = 'query' | 'image' | 'filter' | 'search' | 'combine' | 'results';
 
 export type RunStatus = 'idle' | 'running' | 'done' | 'error';
+
+/** How a Combine node merges its incoming result sets. */
+export type CombineMode = 'union' | 'intersect';
+
+const STORAGE_KEY = 'raudio-workflow-graph-v1';
 
 /** Cap on the distinct videos a Search is scoped to by upstream results: the
  *  `doc_id IN (…)` clause keeps at most this many (highest-ranked first), so a
  *  large upstream set can't blow up the SQL. */
 const MAX_SCOPE_DOCS = 80;
+
+/** Head size the cross-encoder reranker re-scores when a Search has rerank on.
+ *  One source of truth so the run() spec and the Inspector badge can't drift. */
+export const RERANK_TOP_N = 20;
 
 /** Per-node user input. One flat shape covers every kind (each node UI only
  *  edits the fields it cares about) — simpler than a discriminated union for a
@@ -46,7 +52,9 @@ const MAX_SCOPE_DOCS = 80;
 export interface NodeConfig {
     /** query node, and the Search node's own inline query. */
     q: string;
-    /** image: the uploaded file fed to the visual leg (POST multipart). */
+    /** image: the uploaded file fed to the visual leg (POST multipart). Never
+     *  persisted (a File can't serialise) — `imageName` survives a reload so the
+     *  Image node can prompt for re-upload. */
     image: File | null;
     imageName: string;
     /** filter: a raw SQL WHERE plus the common scalar facets. */
@@ -57,27 +65,44 @@ export interface NodeConfig {
     mode: SearchMode;
     n: number;
     rerank: boolean;
+    /** combine: union vs intersect of incoming result sets. */
+    combineMode: CombineMode;
+    /** ergonomics: optional custom title; disabled nodes are bypassed on run. */
+    label: string;
+    enabled: boolean;
+}
+
+/** The serialisable slice of a node's config (everything except the image File). */
+type PersistedConfig = Omit<NodeConfig, 'image'>;
+
+interface PersistedGraph {
+    nodes: { id: string; type: NodeKind; position: { x: number; y: number } }[];
+    edges: { id: string; source: string; target: string; label?: string; animated?: boolean }[];
+    config: Record<string, PersistedConfig>;
 }
 
 export interface NodeRuntime {
     status: RunStatus;
     error: string | null;
-    /** Result hits (Search and Results nodes). */
+    /** Result hits (Search / Combine / Results nodes). */
     hits: Hit[] | null;
     /** Result count summary (cheap to render without holding the array). */
     count: number | null;
     /** Last run wall-clock in ms (Search node). */
     ms: number | null;
-    /** How many videos this Search was scoped to by an upstream stage (null =
-     *  searched the whole corpus). */
+    /** How many videos this Search was scoped to by upstream results (null = whole corpus). */
     scopedDocs: number | null;
+    /** True when the scope hit `MAX_SCOPE_DOCS` and was truncated. */
+    scopeCapped: boolean;
+    /** Count of upstream inputs ignored because only one query/image is used. */
+    droppedInputs: number;
 }
 
 /** What travels along an edge from a node to its successors. */
 interface NodeOutput {
     /** Partial search spec contributed by this node (query text, image, filters). */
     spec: Partial<SearchSpec>;
-    /** A concrete result set, once a Search node has produced one. */
+    /** A concrete result set, once a Search/Combine node has produced one. */
     hits: Hit[] | null;
 }
 
@@ -99,6 +124,7 @@ const KIND_LABEL: Record<NodeKind, string> = {
     image: 'Image',
     filter: 'Filter',
     search: 'Search',
+    combine: 'Combine',
     results: 'Results',
 };
 
@@ -115,6 +141,17 @@ export const STATUS_DOT: Record<RunStatus, string> = {
 /** Identity key for a hit (doc/speech/chunk), used to de-dupe result sets. */
 const hitKey = (h: Hit): string => `${h.doc_id}|${h.speech_id}|${h.chunk_id}`;
 
+/** De-duplicate hits by identity, preserving first-seen (rank) order. */
+function dedupeHits(hits: Hit[]): Hit[] {
+    const seen = new Set<string>();
+    return hits.filter((h) => {
+        const k = hitKey(h);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+    });
+}
+
 function defaultConfig(): NodeConfig {
     return {
         q: '',
@@ -126,11 +163,45 @@ function defaultConfig(): NodeConfig {
         mode: 'fts',
         n: 24,
         rerank: false,
+        combineMode: 'union',
+        label: '',
+        enabled: true,
     };
 }
 
 function blankRuntime(): NodeRuntime {
-    return { status: 'idle', error: null, hits: null, count: null, ms: null, scopedDocs: null };
+    return {
+        status: 'idle',
+        error: null,
+        hits: null,
+        count: null,
+        ms: null,
+        scopedDocs: null,
+        scopeCapped: false,
+        droppedInputs: 0,
+    };
+}
+
+/** Coerce an untrusted persisted config slice into a valid NodeConfig — bad or
+ *  old-schema values fall back to defaults. Image is never persisted (stays null). */
+function sanitizeConfig(raw: Partial<PersistedConfig> | undefined): NodeConfig {
+    const c = defaultConfig();
+    if (!raw || typeof raw !== 'object') return c;
+    if (typeof raw.q === 'string') c.q = raw.q;
+    if (typeof raw.imageName === 'string') c.imageName = raw.imageName;
+    if (typeof raw.where === 'string') c.where = raw.where;
+    if (typeof raw.language === 'string') c.language = raw.language;
+    if (typeof raw.namn === 'string') c.namn = raw.namn;
+    // `as SearchMode` is sound here — the some() guard just confirmed the value.
+    if (SEARCH_MODES.some((m) => m.value === raw.mode)) c.mode = raw.mode as SearchMode;
+    if (typeof raw.n === 'number' && Number.isFinite(raw.n)) {
+        c.n = Math.max(1, Math.min(100, Math.round(raw.n)));
+    }
+    if (typeof raw.rerank === 'boolean') c.rerank = raw.rerank;
+    if (raw.combineMode === 'union' || raw.combineMode === 'intersect') c.combineMode = raw.combineMode;
+    if (typeof raw.label === 'string') c.label = raw.label;
+    if (typeof raw.enabled === 'boolean') c.enabled = raw.enabled;
+    return c;
 }
 
 /** Escape a value for inlining in a SQL single-quoted string literal. */
@@ -173,7 +244,7 @@ class WorkflowGraph {
     private seq = 0;
 
     constructor() {
-        this.seed();
+        if (!this.load()) this.seed();
     }
 
     /** Kind of a node by id (its Svelte Flow `type`). */
@@ -199,9 +270,7 @@ class WorkflowGraph {
             'search-said': query('fts', 'skatt'),
             results: defaultConfig(),
         };
-        this.runtime = Object.fromEntries(
-            Object.keys(this.config).map((id) => [id, blankRuntime()]),
-        );
+        this.runtime = Object.fromEntries(Object.keys(this.config).map((id) => [id, blankRuntime()]));
         this.nodes = [
             { id: 'image', type: 'image', position: { x: -60, y: 60 }, data: {} },
             { id: 'search-visual', type: 'search', position: { x: 240, y: 40 }, data: {} },
@@ -211,20 +280,8 @@ class WorkflowGraph {
         ];
         this.edges = [
             { id: 'e-img', source: 'image', target: 'search-visual', label: 'image' },
-            {
-                id: 'e-v-scene',
-                source: 'search-visual',
-                target: 'search-scene',
-                label: 'refine',
-                animated: true,
-            },
-            {
-                id: 'e-scene-said',
-                source: 'search-scene',
-                target: 'search-said',
-                label: 'refine',
-                animated: true,
-            },
+            { id: 'e-v-scene', source: 'search-visual', target: 'search-scene', label: 'refine', animated: true },
+            { id: 'e-scene-said', source: 'search-scene', target: 'search-said', label: 'refine', animated: true },
             { id: 'e-said-res', source: 'search-said', target: 'results' },
         ];
         this.seq = 0;
@@ -243,6 +300,25 @@ class WorkflowGraph {
         this.runtime = { ...this.runtime, [id]: blankRuntime() };
         this.nodes = [...this.nodes, { id, type: kind, position, data: {} }];
         return id;
+    }
+
+    /** Duplicate a node (its config, sans the image File) at a small offset. */
+    duplicateNode(id: string): string {
+        const src = this.config[id];
+        const kind = this.kindOf(id);
+        if (!src || !kind) return id;
+        const newId = `${kind}-${++this.seq}`;
+        const srcNode = this.nodes.find((n) => n.id === id);
+        const pos = srcNode
+            ? { x: srcNode.position.x + 48, y: srcNode.position.y + 48 }
+            : { x: 0, y: 0 };
+        this.config = {
+            ...this.config,
+            [newId]: { ...src, image: null, label: src.label ? `${src.label} copy` : '' },
+        };
+        this.runtime = { ...this.runtime, [newId]: blankRuntime() };
+        this.nodes = [...this.nodes, { id: newId, type: kind, position: pos, data: {} }];
+        return newId;
     }
 
     /** Patch one node's user input (reassigns the record so reactivity fires). */
@@ -270,7 +346,7 @@ class WorkflowGraph {
         this.seed();
     }
 
-    /** Open the detail/player drawer for a result clicked in a Results node. */
+    /** Play a clicked result in the Inspector. */
     selectHit(hit: Hit): void {
         this.selectedHit = hit;
     }
@@ -354,6 +430,125 @@ class WorkflowGraph {
         this.selectedEdgeIds = this.selectedEdgeIds.filter((x) => !goneEdges.has(x));
     }
 
+    // ── Persistence ───────────────────────────────────────────────────────────
+
+    /** JSON snapshot of the serialisable graph. Reads nodes/edges/config deeply,
+     *  so calling it inside a `$effect` tracks every change (drives autosave). */
+    snapshot(): string {
+        const nodes = this.nodes.map((n) => ({
+            id: n.id,
+            type: n.type as NodeKind,
+            position: { x: n.position.x, y: n.position.y },
+        }));
+        const edges = this.edges.map((e) => ({
+            id: e.id,
+            source: e.source,
+            target: e.target,
+            ...(typeof e.label === 'string' ? { label: e.label } : {}),
+            ...(e.animated ? { animated: true } : {}),
+        }));
+        const config: Record<string, PersistedConfig> = {};
+        for (const [id, c] of Object.entries(this.config)) {
+            config[id] = {
+                q: c.q,
+                imageName: c.imageName,
+                where: c.where,
+                language: c.language,
+                namn: c.namn,
+                mode: c.mode,
+                n: c.n,
+                rerank: c.rerank,
+                combineMode: c.combineMode,
+                label: c.label,
+                enabled: c.enabled,
+            };
+        }
+        return JSON.stringify({ nodes, edges, config } satisfies PersistedGraph);
+    }
+
+    /** Write a snapshot string to localStorage (no-op outside the browser). */
+    persist(json: string): void {
+        if (!browser) return;
+        try {
+            localStorage.setItem(STORAGE_KEY, json);
+        } catch {
+            // storage full / disabled — autosave is best-effort, never throw.
+        }
+    }
+
+    /** Rehydrate from localStorage; returns false (→ caller seeds) if absent/bad. */
+    private load(): boolean {
+        if (!browser) return false;
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) return false;
+            const data = JSON.parse(raw) as PersistedGraph;
+            if (!Array.isArray(data.nodes) || data.nodes.length === 0) return false;
+
+            // Validate every node up front — a structurally bad entry (schema
+            // drift, partial write, unknown kind) fails safe to seed() rather
+            // than crashing Svelte Flow's render on a missing position.
+            const nodes: Node[] = [];
+            for (const n of data.nodes) {
+                if (
+                    !n ||
+                    typeof n.id !== 'string' ||
+                    !(n.type in KIND_LABEL) ||
+                    !n.position ||
+                    typeof n.position.x !== 'number' ||
+                    typeof n.position.y !== 'number'
+                ) {
+                    return false;
+                }
+                nodes.push({
+                    id: n.id,
+                    type: n.type,
+                    position: { x: n.position.x, y: n.position.y },
+                    data: {},
+                });
+            }
+            const ids = new Set(nodes.map((n) => n.id));
+            const edges: Edge[] = [];
+            for (const e of data.edges ?? []) {
+                if (!e || typeof e.id !== 'string' || !ids.has(e.source) || !ids.has(e.target)) continue;
+                edges.push({
+                    id: e.id,
+                    source: e.source,
+                    target: e.target,
+                    ...(e.label ? { label: e.label } : {}),
+                    ...(e.animated ? { animated: true } : {}),
+                });
+            }
+            const config: Record<string, NodeConfig> = {};
+            const runtime: Record<string, NodeRuntime> = {};
+            for (const n of nodes) {
+                config[n.id] = sanitizeConfig(data.config?.[n.id]);
+                runtime[n.id] = blankRuntime();
+            }
+            // Assign only once everything validated — no half-applied bad state.
+            this.nodes = nodes;
+            this.edges = edges;
+            this.config = config;
+            this.runtime = runtime;
+            this.seq = this.maxSeq();
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /** Highest numeric suffix across node ids (so new ids never collide). */
+    private maxSeq(): number {
+        let max = 0;
+        for (const n of this.nodes) {
+            const m = /-(\d+)$/.exec(n.id);
+            if (m) max = Math.max(max, Number(m[1]));
+        }
+        return max;
+    }
+
+    // ── Execution ───────────────────────────────────────────────────────────
+
     /** Topologically order the node ids; returns null if the graph has a cycle. */
     private topoOrder(incoming: Map<string, string[]>): string[] | null {
         const ids = this.nodes.map((n) => n.id);
@@ -404,27 +599,32 @@ class WorkflowGraph {
             const kind = this.kindOf(id);
             const cfg = this.config[id] ?? defaultConfig();
 
-            // Merge every upstream output into this node's input. `spec` says
-            // WHAT to search for; `hits` is the upstream result set to refine in.
+            // Merge upstream outputs. `inSpec` = WHAT to search; `scope` = the
+            // union of upstream result sets (WHERE). Track per-source hit sets
+            // (for Combine·intersect) and same-field collisions (honesty badges).
             const inSpec: Partial<SearchSpec> = {};
-            // Accumulate every upstream result set (union, de-duped by chunk) so
-            // fanning two Searches into one scopes to BOTH, not just the last.
             const scopeHits: Hit[] = [];
+            const sourceHitSets: Hit[][] = [];
+            let qContrib = 0;
+            let imgContrib = 0;
             for (const src of incoming.get(id) ?? []) {
                 const o = outputs.get(src);
                 if (!o) continue;
+                if (o.spec.q) qContrib += 1;
+                if (o.spec.image) imgContrib += 1;
                 Object.assign(inSpec, o.spec);
-                if (o.hits) scopeHits.push(...o.hits);
+                if (o.hits && o.hits.length) {
+                    scopeHits.push(...o.hits);
+                    sourceHitSets.push(o.hits);
+                }
             }
-            let scope: Hit[] | null = null;
-            if (scopeHits.length) {
-                const seen = new Set<string>();
-                scope = scopeHits.filter((h) => {
-                    const k = hitKey(h);
-                    if (seen.has(k)) return false;
-                    seen.add(k);
-                    return true;
-                });
+            const scope: Hit[] | null = scopeHits.length ? dedupeHits(scopeHits) : null;
+
+            // Disabled node: bypass it — forward the scope, contribute nothing.
+            if (!cfg.enabled) {
+                outputs.set(id, { spec: {}, hits: scope });
+                this.patchRuntime(id, { status: 'idle', hits: scope, count: scope?.length ?? null });
+                continue;
             }
 
             try {
@@ -449,11 +649,36 @@ class WorkflowGraph {
                         this.patchRuntime(id, { status: Object.keys(spec).length ? 'done' : 'idle' });
                         break;
                     }
+                    case 'combine': {
+                        let combined: Hit[] = [];
+                        if (sourceHitSets.length) {
+                            if (cfg.combineMode === 'intersect') {
+                                const keySets = sourceHitSets.map((s) => new Set(s.map(hitKey)));
+                                combined = dedupeHits(
+                                    sourceHitSets[0]!.filter((h) => keySets.every((ks) => ks.has(hitKey(h)))),
+                                );
+                            } else {
+                                combined = scope ?? [];
+                            }
+                        }
+                        outputs.set(id, { spec: {}, hits: combined.length ? combined : null });
+                        this.patchRuntime(id, {
+                            status: sourceHitSets.length ? 'done' : 'idle',
+                            hits: combined,
+                            count: combined.length,
+                        });
+                        break;
+                    }
                     case 'search': {
                         // Query is a connected Query node if wired, else this
                         // Search node's own inline field.
                         const q = inSpec.q?.trim() || cfg.q.trim();
                         const image = inSpec.image ?? null;
+                        // Dropped wired inputs: extra duplicate upstreams, plus
+                        // the inline query when an upstream query also supplied one.
+                        const inlineQDropped = cfg.q.trim() && qContrib > 0 ? 1 : 0;
+                        const droppedInputs =
+                            Math.max(0, qContrib - 1) + Math.max(0, imgContrib - 1) + inlineQDropped;
                         if (!q && !image) {
                             // Nothing to search for — pass the scope through so a
                             // half-configured node never breaks the chain.
@@ -462,6 +687,7 @@ class WorkflowGraph {
                                 status: 'idle',
                                 hits: scope,
                                 count: scope?.length ?? null,
+                                droppedInputs,
                             });
                             break;
                         }
@@ -470,7 +696,7 @@ class WorkflowGraph {
                         const spec: SearchSpec = { q, n: cfg.n, mode: cfg.mode };
                         if (cfg.rerank) {
                             spec.rerank = true;
-                            spec.rerankN = 20;
+                            spec.rerankN = RERANK_TOP_N;
                         }
                         if (image) spec.image = image;
                         if (inSpec.language) spec.language = inSpec.language;
@@ -481,11 +707,14 @@ class WorkflowGraph {
                         const wheres: string[] = [];
                         if (inSpec.where) wheres.push(inSpec.where);
                         let scopedDocs: number | null = null;
+                        let scopeCapped = false;
                         if (scope?.length) {
-                            const docs = [...new Set(scope.map((h) => h.doc_id))].slice(0, MAX_SCOPE_DOCS);
+                            const allDocs = [...new Set(scope.map((h) => h.doc_id))];
+                            const docs = allDocs.slice(0, MAX_SCOPE_DOCS);
                             if (docs.length) {
                                 wheres.push(`doc_id IN (${docs.map(sqlQuote).join(', ')})`);
                                 scopedDocs = docs.length;
+                                scopeCapped = allDocs.length > docs.length;
                             }
                         }
                         if (wheres.length) spec.where = wheres.join(' AND ');
@@ -500,6 +729,8 @@ class WorkflowGraph {
                             count: hits.length,
                             ms,
                             scopedDocs,
+                            scopeCapped,
+                            droppedInputs,
                         });
                         break;
                     }

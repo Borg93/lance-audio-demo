@@ -22,6 +22,12 @@
     if (file) preview = URL.createObjectURL(file);
     graph.setConfig(id, { image: file, imageName: file?.name ?? '' });
   }
+
+  // Revoke the live preview URL when this node unmounts (delete / reset), so
+  // blob URLs don't leak across add → preview → delete cycles.
+  $effect(() => () => {
+    if (preview) URL.revokeObjectURL(preview);
+  });
 </script>
 
 {#if cfg && rt}
@@ -38,6 +44,10 @@
         alt={cfg.imageName || 'query image'}
         class="mt-2 h-24 w-full rounded border border-border bg-muted object-cover"
       />
+    {:else if cfg.imageName}
+      <p class="mt-2 text-[10px] text-amber-500">
+        Previously: {cfg.imageName} — re-upload (images aren't saved across reloads).
+      </p>
     {/if}
     <p class="mt-1 text-[10px] text-muted-foreground">
       Wire into Search, then set mode = <span class="text-foreground">Image</span> or
