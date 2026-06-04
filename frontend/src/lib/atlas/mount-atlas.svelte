@@ -23,11 +23,11 @@
   let selectionTotal = $state(0);
   let tableLoading = $state(false);
 
-  // Columns the user can show. `caption` is omitted — the chunks table carries
-  // no caption (frame captions live in a separate table), so it's never present.
-  const OFFERED_COLS = TABLE_COLUMNS.filter((c) => c.key !== 'caption');
-  const DEFAULT_COLS = ['thumbnail', 'namn', 'referenskod', 'language', 'start', 'duration', 'text'];
-  const COLS_KEY = 'raudio-atlas-cols';
+  // Columns the user can show. `caption` (the frame's Swedish caption) is joined
+  // from chunk_frames by the /chunks endpoint — it isn't a column on chunks.
+  const OFFERED_COLS = TABLE_COLUMNS;
+  const DEFAULT_COLS = ['thumbnail', 'namn', 'referenskod', 'language', 'start', 'text', 'caption'];
+  const COLS_KEY = 'raudio-atlas-cols-v2'; // bumped so the caption column shows by default
 
   let visibleCols = $state<string[]>([...DEFAULT_COLS]);
   let showColsPicker = $state(false);

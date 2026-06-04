@@ -226,6 +226,20 @@ def atlas_points(
     return JSONResponse(out, headers={"Cache-Control": "public, max-age=300"})
 
 
+def _attach_frame_captions(frames: Any, rows: list[dict[str, Any]]) -> None:
+    """Attach each chunk's representative-frame (``frame_idx=0``) caption from
+    ``chunk_frames`` — captions live there, not on ``chunks``. Batched so the key
+    filter never grows the deep ``OR`` that overflows the parser on a big
+    selection; a no-op when frames/captions are absent (captions are decorative).
+    """
+    from backend.search.service import _attach_captions
+
+    if frames is None or not rows:
+        return
+    for start in range(0, len(rows), 150):
+        _attach_captions(frames, rows[start : start + 150])
+
+
 @router.get("/chunk/{doc_id}/{speech_id}/{chunk_id}")
 def atlas_chunk(state: StateDep, doc_id: str, speech_id: int, chunk_id: int) -> dict[str, Any]:
     """Full hit for one chunk (detail pane + playback), looked up by key."""
@@ -241,6 +255,7 @@ def atlas_chunk(state: StateDep, doc_id: str, speech_id: int, chunk_id: int) -> 
 
     hit = rows[0]
     hit["alignments"] = parse_alignments_json(hit.pop("alignments_json", None))
+    _attach_frame_captions(state.chunk_frames_tbl, [hit])
     return hit
 
 
@@ -275,4 +290,5 @@ def atlas_chunks(state: StateDep, body: ChunkRowIds) -> list[dict[str, Any]]:
     rows = state.chunks_ds.to_table(columns=columns, filter=f"_rowid in ({csv})").to_pylist()
     for hit in rows:
         hit["alignments"] = parse_alignments_json(hit.pop("alignments_json", None))
+    _attach_frame_captions(state.chunk_frames_tbl, rows)
     return rows

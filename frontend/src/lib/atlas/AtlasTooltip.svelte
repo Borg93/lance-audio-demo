@@ -54,13 +54,14 @@
 
   // ── lazy text snippet (debounced fetch + LRU) ─────────────────────────────
   const LRU_MAX = 200;
-  const cache = new Map<number, string>();
-  let snippet = $state<string | null>(null);
-  let snippetFor = $state<number | null>(null);
+  type Snip = { text: string; caption: string };
+  const cache = new Map<number, Snip>();
+  let snip = $state<Snip | null>(null);
+  let snipFor = $state<number | null>(null);
 
-  function remember(i: number, text: string) {
+  function remember(i: number, s: Snip) {
     cache.delete(i);
-    cache.set(i, text);
+    cache.set(i, s);
     if (cache.size > LRU_MAX) {
       const oldest = cache.keys().next().value;
       if (oldest !== undefined) cache.delete(oldest);
@@ -70,32 +71,35 @@
   $effect(() => {
     const i = index;
     if (i == null) {
-      snippet = null;
-      snippetFor = null;
+      snip = null;
+      snipFor = null;
       return;
     }
     const cached = cache.get(i);
     if (cached !== undefined) {
-      snippet = cached;
-      snippetFor = i;
+      snip = cached;
+      snipFor = i;
       return;
     }
-    snippet = null;
-    snippetFor = null;
+    snip = null;
+    snipFor = null;
     const key = keyAt(i);
     if (!key) return;
     const timer = setTimeout(async () => {
       try {
         const hit = await getAtlasChunk(key[0], key[1], key[2]);
-        const text = (hit.text || hit.caption || '').slice(0, 240);
-        remember(i, text);
+        const s: Snip = {
+          text: (hit.text ?? '').slice(0, 240),
+          caption: (hit.caption ?? '').slice(0, 200),
+        };
+        remember(i, s);
         // Only apply if still hovering the same point.
         if (index === i) {
-          snippet = text;
-          snippetFor = i;
+          snip = s;
+          snipFor = i;
         }
       } catch {
-        /* snippet stays null — instant fields still show */
+        /* snip stays null — instant fields still show */
       }
     }, 150);
     return () => clearTimeout(timer);
@@ -123,10 +127,21 @@
     {#if namn}
       <div class="mb-1 truncate font-medium text-foreground" title={namn}>{namn}</div>
     {/if}
-    {#if snippet && snippetFor === index}
-      <div class="line-clamp-3 text-muted-foreground">{snippet}</div>
+    {#if snip && snipFor === index}
+      {#if snip.text}
+        <div class="line-clamp-2 text-muted-foreground">{snip.text}</div>
+      {/if}
+      {#if snip.caption}
+        <div class="mt-1 line-clamp-2 text-foreground/80 italic" title={snip.caption}>
+          <span class="text-muted-foreground/70">caption:</span>
+          {snip.caption}
+        </div>
+      {/if}
+      {#if !snip.text && !snip.caption}
+        <div class="text-muted-foreground/60 italic">no text</div>
+      {/if}
     {:else}
-      <div class="text-muted-foreground/60 italic">loading text…</div>
+      <div class="text-muted-foreground/60 italic">loading…</div>
     {/if}
     <div class="mt-1 text-[10px] text-muted-foreground/60">click to play</div>
   </div>
