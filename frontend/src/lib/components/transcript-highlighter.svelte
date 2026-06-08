@@ -7,8 +7,15 @@
     /** Live media element. We read `currentTime` and listen for `seeked`. */
     media: HTMLMediaElement | null;
     query?: string;
+    /**
+     * Render the standalone box chrome (border + surface background). Set to
+     * `false` when an outer wrapper already provides the frame/scroll (e.g. the
+     * unified player card or the fullscreen transcript overlay), so this doesn't
+     * draw a nested box and its opaque background doesn't defeat the scrim.
+     */
+    chrome?: boolean;
   };
-  let { alignments, media, query = '' }: Props = $props();
+  let { alignments, media, query = '', chrome = true }: Props = $props();
 
   const terms = $derived(new Set(queryTerms(query)));
 
@@ -115,7 +122,7 @@
 
 <div
   bind:this={scrollContainer}
-  class="max-h-[340px] overflow-y-auto rounded-md border border-border bg-surface2 p-3 text-sm leading-7"
+  class={chrome ? 'rounded-md border border-border bg-surface2 p-3 text-sm leading-7' : 'p-3'}
 >
   {#each alignments as a (a.start)}
     {@const sentEndsWithSpace = (a.text ?? '').endsWith(' ')}

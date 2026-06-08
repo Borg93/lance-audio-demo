@@ -270,6 +270,8 @@ export interface AtlasPoints {
     y: number[];
     docs: string[];
     doc: number[];
+    /** Readable filename stem per distinct doc (aligned with `docs`) — video labels. */
+    docFiles?: string[];
     speech_id: number[];
     chunk_id: number[];
     /** Stable Lance row address per point — sent back to /chunks for an
@@ -300,7 +302,7 @@ export async function getAtlasPoints(
     // added, which would silently break the selection table. Bump when the
     // points payload shape changes; the backend ignores the extra param.
     // v=3: added factorized `topic`/`doc_topic` colour channels.
-    const r = await fetcher(`/api/atlas/points?space=${space}&v=3`);
+    const r = await fetcher(`/api/atlas/points?space=${space}&v=4`);
     if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new ApiError(r.status, body?.detail ?? r.statusText);

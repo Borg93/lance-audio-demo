@@ -33,7 +33,7 @@
   import { indicesInPolygon, type Pt } from './atlas-geometry';
   import AtlasTooltip from './AtlasTooltip.svelte';
   import { Button, Select, type SelectOption } from '$lib/components/ui';
-  import { Loader2, Lasso, X, Eye, EyeOff, Hand } from 'lucide-svelte';
+  import { Loader2, Lasso, X, Eye, EyeOff, Hand, Settings2 } from 'lucide-svelte';
 
   let {
     active = $bindable(null),
@@ -187,7 +187,7 @@
       return { codes: p.doc_topic, labels: p.doc_topics };
     // `doc`/`docs` (the video ids) are always shipped, so colour-by-Video is
     // always available — one hue per source video.
-    if (mode === 'doc') return { codes: p.doc, labels: p.docs };
+    if (mode === 'doc') return { codes: p.doc, labels: p.docFiles ?? p.docs };
     return null;
   }
 
@@ -394,6 +394,32 @@
     if (isColorBy(colorByValue)) crossFilter.colorBy = colorByValue;
   });
 
+  // Toolbar: the size/opacity sliders live in a ⚙ popover to keep the bar clean.
+  let showSettings = $state(false);
+
+  // Space tabs (DRY the segmented toggle); each disabled until its map is built.
+  const spaceTabs = $derived.by(
+    (): { value: AtlasSpace; label: string; disabled: boolean; title: string }[] => [
+      { value: 'text', label: 'Text', disabled: false, title: 'Transcript-semantics map (text_embedding)' },
+      {
+        value: 'visual',
+        label: 'Visual',
+        disabled: !visualBuilt,
+        title: visualBuilt
+          ? 'Frame-image map (frame_embedding)'
+          : 'Not built yet — run `raudio feature atlas --space visual`',
+      },
+      {
+        value: 'caption',
+        label: 'Caption',
+        disabled: !captionBuilt,
+        title: captionBuilt
+          ? 'Frame-caption map (caption_embedding)'
+          : 'Not built yet — run `raudio feature atlas --space caption`',
+      },
+    ],
+  );
+
   // ── selection helpers (data-space) ────────────────────────────────────────
   function keyAt(i: number): [string, number, number] | null {
     const p = pts;
@@ -596,73 +622,95 @@
       <AtlasTooltip pts={pts} index={hoverIndex} x={hoverX} y={hoverY} />
 
       <!-- toolbar -->
-      <div class="absolute left-3 top-3 flex flex-wrap items-center gap-2 rounded-md bg-card/85 px-2 py-1 text-[11px] shadow-sm backdrop-blur">
-        <span class="text-muted-foreground">{(pts.count ?? 0).toLocaleString()} chunks</span>
-        <span class="text-border">·</span>
-        <!-- Text / Visual space toggle -->
-        <span class="text-muted-foreground">space</span>
-        <Button
-          variant={crossFilter.space === 'text' ? 'secondary' : 'ghost'}
-          size="sm"
-          onclick={() => switchSpace('text')}
-        >
-          Text
-        </Button>
-        <Button
-          variant={crossFilter.space === 'visual' ? 'secondary' : 'ghost'}
-          size="sm"
-          disabled={!visualBuilt}
-          title={visualBuilt ? 'Visual (frame embedding) map' : 'Not built yet — run `raudio feature atlas --space visual`'}
-          onclick={() => switchSpace('visual')}
-        >
-          Visual
-        </Button>
-        <Button
-          variant={crossFilter.space === 'caption' ? 'secondary' : 'ghost'}
-          size="sm"
-          disabled={!captionBuilt}
-          title={captionBuilt
-            ? 'Caption (frame-caption embedding) map'
-            : 'Not built yet — run `raudio feature atlas --space caption`'}
-          onclick={() => switchSpace('caption')}
-        >
-          Caption
-        </Button>
-        <span class="text-border">·</span>
-        <!-- lasso / pan mode -->
-        <Button
-          variant={mode === 'lasso' ? 'secondary' : 'ghost'}
-          size="sm"
-          onclick={() => (mode = 'lasso')}
-          title="Lasso: drag to select a region"
-        >
-          <Lasso class="size-3.5" /> Lasso
-        </Button>
-        <Button
-          variant={mode === 'pan' ? 'secondary' : 'ghost'}
-          size="sm"
-          onclick={() => (mode = 'pan')}
-          title="Pan: drag to move (shift+drag or middle-drag pans in any mode; scroll to zoom)"
-        >
-          <Hand class="size-3.5" /> Pan
-        </Button>
-        <span class="text-border">·</span>
-        <span class="text-muted-foreground">color</span>
-        <Select bind:value={colorByValue} options={colorOptions} class="h-7 w-28" ariaLabel="Color by" />
-        <span class="text-border">·</span>
-        <span class="text-muted-foreground">size</span>
-        <input type="range" min="0" max="8" step="0.5" bind:value={pointSize} class="w-16 accent-primary" />
-        <span class="text-border">·</span>
-        <span class="text-muted-foreground">filtered</span>
-        <input
-          type="range"
-          min="0"
-          max="30"
-          step="1"
-          bind:value={filterAlpha}
-          class="w-16 accent-primary"
-          title="Opacity of points filtered out by a search · drag left to hide, right to show more"
-        />
+      <div class="absolute left-3 top-3 flex flex-wrap items-center gap-1.5 rounded-md bg-card/85 px-2 py-1 text-[11px] shadow-sm backdrop-blur">
+        <span class="px-1 text-muted-foreground">{(pts.count ?? 0).toLocaleString()} pts</span>
+
+        <!-- projection space (segmented) -->
+        <div class="flex overflow-hidden rounded border border-border">
+          {#each spaceTabs as t (t.value)}
+            <button
+              type="button"
+              class="px-2 py-0.5 transition-colors disabled:opacity-40 {crossFilter.space === t.value
+                ? 'bg-secondary text-foreground'
+                : 'text-muted-foreground hover:bg-secondary/50'}"
+              disabled={t.disabled}
+              title={t.title}
+              onclick={() => switchSpace(t.value)}
+            >
+              {t.label}
+            </button>
+          {/each}
+        </div>
+
+        <!-- tool: lasso / pan (segmented, icon-only) -->
+        <div class="flex overflow-hidden rounded border border-border">
+          <button
+            type="button"
+            class="px-1.5 py-1 transition-colors {mode === 'lasso'
+              ? 'bg-secondary text-foreground'
+              : 'text-muted-foreground hover:bg-secondary/50'}"
+            title="Lasso — drag to select a region"
+            aria-label="Lasso select"
+            onclick={() => (mode = 'lasso')}
+          >
+            <Lasso class="size-3.5" />
+          </button>
+          <button
+            type="button"
+            class="px-1.5 py-1 transition-colors {mode === 'pan'
+              ? 'bg-secondary text-foreground'
+              : 'text-muted-foreground hover:bg-secondary/50'}"
+            title="Pan — drag to move (or shift / middle-drag in any mode; scroll to zoom)"
+            aria-label="Pan"
+            onclick={() => (mode = 'pan')}
+          >
+            <Hand class="size-3.5" />
+          </button>
+        </div>
+
+        <!-- colour by -->
+        <Select bind:value={colorByValue} options={colorOptions} class="h-7 w-32" ariaLabel="Colour points by" />
+
+        <!-- display settings (point size, filtered opacity) -->
+        <div class="relative">
+          <button
+            type="button"
+            class="flex items-center rounded p-1 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+            class:bg-secondary={showSettings}
+            title="Display settings"
+            aria-label="Display settings"
+            onclick={() => (showSettings = !showSettings)}
+          >
+            <Settings2 class="size-3.5" />
+          </button>
+          {#if showSettings}
+            <button
+              type="button"
+              aria-label="Close settings"
+              class="fixed inset-0 z-10 cursor-default"
+              onclick={() => (showSettings = false)}
+            ></button>
+            <div
+              class="absolute left-0 top-full z-20 mt-1 w-56 space-y-3 rounded-md border border-border bg-card p-3 text-[11px] shadow-md"
+            >
+              <label class="block">
+                <span class="mb-1 flex items-center justify-between text-muted-foreground">
+                  Point size <span class="font-mono">{pointSize === 0 ? 'auto' : pointSize}</span>
+                </span>
+                <input type="range" min="0" max="8" step="0.5" bind:value={pointSize} class="w-full accent-primary" />
+              </label>
+              <label class="block">
+                <span class="mb-1 flex items-center justify-between text-muted-foreground">
+                  Filtered opacity <span class="font-mono">{filterAlpha}</span>
+                </span>
+                <input type="range" min="0" max="30" step="1" bind:value={filterAlpha} class="w-full accent-primary" />
+                <span class="mt-0.5 block text-[10px] text-muted-foreground/70">
+                  How visible search-filtered points are (left = hidden).
+                </span>
+              </label>
+            </div>
+          {/if}
+        </div>
       </div>
 
       <!-- legend / distribution (clickable → select) -->
@@ -739,7 +787,7 @@
             </div>
           {/if}
         </div>
-      {:else if (legendMode === 'language' || legendMode === 'topic' || legendMode === 'doc_topic') && categoryLegend.length}
+      {:else if categoryLegend.length}
         <div class="absolute right-3 top-3 max-h-[60%] w-60 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur">
           <div class="mb-1 font-medium text-muted-foreground">{categoryTitle} · {categoryTotal.toLocaleString()}</div>
           {#each categoryLegend as c (c.code)}
@@ -768,8 +816,13 @@
           {#if selectionCount > 1000}
             <span class="text-muted-foreground/70">· table shows 1000</span>
           {/if}
-          <Button variant="ghost" size="sm" onclick={seedSearch} title="Use this selection as the search result set">
-            Use as filter
+          <Button
+            variant="ghost"
+            size="sm"
+            onclick={seedSearch}
+            title="Open this map selection as the full results list (paging, rerank, table/grid views)"
+          >
+            Show as results
           </Button>
           <Button variant="ghost" size="icon" onclick={clearSelection} title="Clear selection">
             <X class="size-3.5" />

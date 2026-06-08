@@ -39,7 +39,8 @@
   const videoId = $derived.by(() => {
     if (index == null) return null;
     const dc = pts.doc[index];
-    return dc !== undefined ? (pts.docs[dc] ?? null) : null;
+    if (dc === undefined) return null;
+    return (pts.docFiles?.[dc] ?? pts.docs[dc]) ?? null;
   });
   const topic = $derived.by(() => {
     if (index == null) return null;

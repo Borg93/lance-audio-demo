@@ -18,6 +18,7 @@ All are pure ``StateDep`` reads via the native-LanceDB scan idiom over the cache
 ``state.chunks_ds`` handle (the same dataset ``search/service.py`` reads from).
 """
 
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -132,7 +133,7 @@ def _build_points(state: StateDep, space: str) -> dict[str, Any]:
     cols = _space_cols(space)
     x_col, y_col, cluster_col = cols["x"], cols["y"], cols["cluster"]
     schema = set(state.chunks.schema.names)
-    columns = ["doc_id", "speech_id", "chunk_id", x_col, y_col]
+    columns = ["doc_id", "audio_path", "speech_id", "chunk_id", x_col, y_col]
     # The broadest topic layer (data-dependent — `topic_l{N-1}`, not always l2)
     # colours the map into named regions; `doc_topic` is the per-video roll-up.
     # Both are low-cardinality (~19) so they factorize into a small label list.
@@ -157,7 +158,15 @@ def _build_points(state: StateDep, space: str) -> dict[str, Any]:
     def ints(name: str) -> list[int]:
         return tbl.column(name).to_numpy(zero_copy_only=False).astype(int).tolist()
 
-    docs_codes, docs_labels = _factorize(tbl.column("doc_id").to_pylist())
+    doc_ids = tbl.column("doc_id").to_pylist()
+    docs_codes, docs_labels = _factorize(doc_ids)
+    # Readable per-video label: the audio filename stem (e.g. "T0000234_00001"),
+    # one per distinct doc and aligned with `docs`, so the UI can colour/label by
+    # video without exposing the hashed doc_id.
+    stem_by_doc: dict[str, str] = {}
+    for d, a in zip(doc_ids, tbl.column("audio_path").to_pylist(), strict=True):
+        if d not in stem_by_doc:
+            stem_by_doc[d] = Path(a).stem if a else d
     out: dict[str, Any] = {
         "count": tbl.num_rows,
         "space": space,
@@ -165,6 +174,7 @@ def _build_points(state: StateDep, space: str) -> dict[str, Any]:
         "y": floats(y_col),
         "docs": docs_labels,  # distinct doc ids
         "doc": docs_codes,  # per-point index into `docs`
+        "docFiles": [stem_by_doc.get(d, d) for d in docs_labels],  # filename stem per doc
         "speech_id": ints("speech_id"),
         "chunk_id": ints("chunk_id"),
         "rowid": ints("_rowid"),  # stable address for take-based selection fetch

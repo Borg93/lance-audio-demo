@@ -592,11 +592,11 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     style:width="{width}px"
     style:height="{height}px"
   ></canvas>
-  <!-- very subtle dot grid backing the embedding space (theme-neutral grey, low alpha) -->
+  <!-- subtle dot grid backing the embedding space (theme-neutral grey) -->
   <div
     class="pointer-events-none absolute inset-0"
-    style:background-image="radial-gradient(rgba(125,125,125,0.08) 1px, transparent 1.4px)"
-    style:background-size="24px 24px"
+    style:background-image="radial-gradient(rgba(130,130,130,0.22) 1.1px, transparent 1.6px)"
+    style:background-size="22px 22px"
   ></div>
   {#if markerScreen}
     <!-- highlight ring for the active hit (the point shown in the player / table) -->
