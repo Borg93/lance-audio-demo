@@ -13,6 +13,10 @@
 >   Its source has **not** arrived. Everything about its internals is *inferred* from the build
 >   plus the sibling proxy at `/home/blackwell/Desktop/lance-audio/demo`. Claims about it are
 >   flagged **[INFERRED]** throughout and must be re-verified when the real source lands.
+>
+> **Update 2026-06:** the local `lance-audio/demo` proxy was **deleted** (superseded by the real
+> `frontend/`). The Multimodal Lab sandbox below now depends entirely on the real
+> multimodal-webgpu-demo source arriving; the `[INFERRED via lance-audio/demo]` notes are historical.
 
 ---
 

@@ -115,7 +115,6 @@ lance-audio-demo/
 ├── frontend/                  SvelteKit + Svelte 5 + Tailwind v4 viewer (main UI)
 │   ├── src/                   routes + components + bits-ui (shadcn-style) ui/ kit
 │   └── server.ts              Bun static-file server + /api/* proxy
-├── demo/                      Secondary SvelteKit app (transformers.js audio demo)
 ├── src/raudio/                Python ingestion + search core
 │   ├── cli/                   typer CLI: ingest, feature, extract-chunk-frames, compact, serve, …
 │   ├── model/                 PyArrow schemas (schema.py) + Pydantic DTOs (datamodel.py)
