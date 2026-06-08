@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type Hit, type DocTranscriptChunk, getDocTranscript, mediaUrl } from '$lib/api';
   import { fmtTime } from '$lib/utils';
-  import { Captions, Maximize2, Minimize2 } from 'lucide-svelte';
+  import { Captions, ChevronRight, Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptWindow from './transcript-window.svelte';
   import ChunkTimeline from './chunk-timeline.svelte';
 
@@ -135,6 +135,10 @@
       document.removeEventListener('fullscreenchange', onChange);
     };
   });
+
+  // Archival metadata, collapsed by default into an accordion so it doesn't eat
+  // the height the transcript needs — expand on demand.
+  let showMeta = $state(false);
 
   // Archival metadata shown under the player — only fields that are present.
   const metaRows = $derived.by((): [string, string][] => {
@@ -324,14 +328,26 @@
     {/if}
 
     {#if metaRows.length}
-      <dl
-        class="grid shrink-0 grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-md border border-border bg-card/40 px-3 py-2 text-xs"
-      >
-        {#each metaRows as [label, value] (label)}
-          <dt class="text-muted-foreground">{label}</dt>
-          <dd class="truncate font-medium text-foreground" title={value}>{value}</dd>
-        {/each}
-      </dl>
+      <div class="shrink-0 overflow-hidden rounded-md border border-border bg-card/40 text-xs">
+        <button
+          type="button"
+          onclick={() => (showMeta = !showMeta)}
+          aria-expanded={showMeta}
+          class="flex w-full items-center gap-1.5 px-3 py-1.5 text-muted-foreground transition-colors hover:bg-secondary/40"
+        >
+          <ChevronRight class="size-3.5 transition-transform {showMeta ? 'rotate-90' : ''}" />
+          <span class="font-medium">Metadata</span>
+          <span class="ml-auto text-[10px] text-muted-foreground/70">{metaRows.length} fields</span>
+        </button>
+        {#if showMeta}
+          <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 border-t border-border px-3 py-2">
+            {#each metaRows as [label, value] (label)}
+              <dt class="text-muted-foreground">{label}</dt>
+              <dd class="truncate font-medium text-foreground" title={value}>{value}</dd>
+            {/each}
+          </dl>
+        {/if}
+      </div>
     {/if}
   {/if}
 </div>
