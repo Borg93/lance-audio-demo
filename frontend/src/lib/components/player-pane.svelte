@@ -1,8 +1,15 @@
 <script lang="ts">
-  import { type Hit, type Alignment, getDocTranscript, mediaUrl } from '$lib/api';
+  import {
+    type Hit,
+    type Alignment,
+    type DocTranscriptChunk,
+    getDocTranscript,
+    mediaUrl,
+  } from '$lib/api';
   import { fmtTime } from '$lib/utils';
   import { Captions, Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptHighlighter from './transcript-highlighter.svelte';
+  import ChunkTimeline from './chunk-timeline.svelte';
 
   type Props = {
     hit: Hit | null;
@@ -12,6 +19,13 @@
 
   let mediaEl = $state<HTMLVideoElement | null>(null);
   let mediaError = $state<string | null>(null);
+
+  // Whole-doc time + chunk envelope drive the timeline under the video. Svelte
+  // polls currentTime via its own rAF (only while playing) through the
+  // `bind:currentTime` on <video> — smooth, auto-cleaned, zero manual loop.
+  let currentTime = $state(0);
+  let duration = $state(0);
+  let docChunks = $state<DocTranscriptChunk[]>([]);
 
   // Search hits ship `alignments: []` (the per-word timing blob is ~80% of a
   // search payload and only the player needs it). On opening a hit we lazy-fetch
@@ -25,13 +39,18 @@
     const h = hit;
     if (!h) {
       alignments = [];
+      docChunks = [];
       return;
     }
     alignments = [];
+    docChunks = [];
     let cancelled = false; // supersede guard + leak guard
     getDocTranscript(h.doc_id)
       .then((doc) => {
-        if (!cancelled) alignments = doc.chunks.flatMap((c) => c.alignments);
+        if (!cancelled) {
+          alignments = doc.chunks.flatMap((c) => c.alignments);
+          docChunks = doc.chunks;
+        }
       })
       .catch(() => {
         /* leave empty — the video still plays, just no karaoke */
@@ -40,6 +59,21 @@
       cancelled = true;
     };
   });
+
+  // "<speech_id>:<chunk_id>" of the opened hit → highlights its segment.
+  const activeKey = $derived(hit ? `${hit.speech_id}:${hit.chunk_id}` : null);
+
+  // Timeline click → jump there and play. Mirrors the hit-seek $effect; here
+  // the doc is already loaded so we seek immediately.
+  const seekTo = (t: number) => {
+    if (!mediaEl) return;
+    try {
+      mediaEl.currentTime = t;
+    } catch {
+      // ignore — metadata may not be ready; the bound currentTime corrects it
+    }
+    mediaEl.play().catch(() => {});
+  };
 
   // The unified video+transcript card. We fullscreen THIS wrapper (not the bare
   // <video>) so the live transcript overlay survives — native video fullscreen
@@ -189,6 +223,8 @@
            the screen height instead. -->
       <video
         bind:this={mediaEl}
+        bind:currentTime
+        bind:duration
         controls
         controlslist="nofullscreen"
         preload="auto"
@@ -201,6 +237,13 @@
       </video>
 
       {#if !isFullscreen}
+        <ChunkTimeline
+          chunks={docChunks}
+          {duration}
+          {currentTime}
+          {activeKey}
+          onSeek={seekTo}
+        />
         <!-- Bridge bar: ties the video to its transcript and holds the
              fullscreen toggle (kept off the video so nothing covers it). -->
         <div
