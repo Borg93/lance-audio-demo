@@ -1,14 +1,8 @@
 <script lang="ts">
-  import {
-    type Hit,
-    type Alignment,
-    type DocTranscriptChunk,
-    getDocTranscript,
-    mediaUrl,
-  } from '$lib/api';
+  import { type Hit, type DocTranscriptChunk, getDocTranscript, mediaUrl } from '$lib/api';
   import { fmtTime } from '$lib/utils';
   import { Captions, Maximize2, Minimize2 } from 'lucide-svelte';
-  import TranscriptHighlighter from './transcript-highlighter.svelte';
+  import TranscriptWindow from './transcript-window.svelte';
   import ChunkTimeline from './chunk-timeline.svelte';
 
   type Props = {
@@ -16,6 +10,11 @@
     query?: string;
   };
   let { hit, query = '' }: Props = $props();
+
+  // Sliding transcript window: how many chunks of context to show on each side
+  // of the currently-playing chunk. Tunable; the window stays ≤ BEFORE+AFTER+1.
+  const WINDOW_BEFORE = 1;
+  const WINDOW_AFTER = 1;
 
   let mediaEl = $state<HTMLVideoElement | null>(null);
   let mediaError = $state<string | null>(null);
@@ -29,28 +28,23 @@
 
   // Search hits ship `alignments: []` (the per-word timing blob is ~80% of a
   // search payload and only the player needs it). On opening a hit we lazy-fetch
-  // the WHOLE document transcript (keyed on doc_id) so karaoke continues past the
-  // selected chunk; atlas/selection hits carry only the selected chunk so we
-  // can't rely on `hit.alignments`. The seek $effect below sets currentTime to
-  // hit.start, and TranscriptHighlighter's time loop scrolls to the sentence in
-  // the opened chunk once these absolute-time alignments populate.
-  let alignments = $state<Alignment[]>([]);
+  // the WHOLE document transcript (keyed on doc_id) so a sliding window of chunks
+  // around the playhead can render past the selected chunk; atlas/selection hits
+  // carry only the selected chunk so we can't rely on `hit.alignments`. The seek
+  // $effect below sets currentTime to hit.start, and the windowed transcript
+  // tracks it once these absolute-time chunks populate. `docChunks` is the single
+  // source — we no longer flatten into one giant alignments array.
   $effect(() => {
     const h = hit;
     if (!h) {
-      alignments = [];
       docChunks = [];
       return;
     }
-    alignments = [];
     docChunks = [];
     let cancelled = false; // supersede guard + leak guard
     getDocTranscript(h.doc_id)
       .then((doc) => {
-        if (!cancelled) {
-          alignments = doc.chunks.flatMap((c) => c.alignments);
-          docChunks = doc.chunks;
-        }
+        if (!cancelled) docChunks = doc.chunks;
       })
       .catch(() => {
         /* leave empty — the video still plays, just no karaoke */
@@ -58,6 +52,48 @@
     return () => {
       cancelled = true;
     };
+  });
+
+  // Which chunk the playhead is in. Reactive on currentTime + docChunks + hit.
+  // 1) time-based: the chunk whose [start,end) contains currentTime.
+  // 2) once playing but in an inter-chunk gap (silence between speech segments):
+  //    clamp to the nearest PRECEDING chunk so the window stays at the playhead.
+  //    This must beat the hit fallback — otherwise the window snaps back to the
+  //    opened hit's chunk on every silence gap after the user has played past it.
+  // 3) before playback (t === 0, pre-seek): fall back to the opened hit's segment
+  //    so the right chunk is shown the instant a hit opens; else 0.
+  const currentChunkIdx = $derived.by((): number => {
+    const cs = docChunks;
+    if (cs.length === 0) return 0;
+    const t = currentTime;
+    const i = cs.findIndex((c) => t >= c.start && t < c.end);
+    if (i !== -1) return i;
+    if (t > 0) {
+      let last = 0;
+      for (let k = 0; k < cs.length; k++) if (cs[k]!.start <= t) last = k;
+      return last;
+    }
+    const h = hit;
+    if (h) {
+      const j = cs.findIndex((c) => c.speech_id === h.speech_id && c.chunk_id === h.chunk_id);
+      if (j !== -1) return j;
+    }
+    return 0;
+  });
+
+  // The slice `lo` — the absolute index of the first windowed chunk. The window
+  // child uses it to flag the playing block without re-deriving the window.
+  const windowStartIdx = $derived(Math.max(0, currentChunkIdx - WINDOW_BEFORE));
+
+  // Window of chunks around the playhead. As currentTime crosses into the next
+  // chunk, currentChunkIdx increments → this slice shifts by one (prev drops,
+  // next appears): the recycle behaviour, with zero manual rotation.
+  const windowChunks = $derived.by((): DocTranscriptChunk[] => {
+    const cs = docChunks;
+    if (cs.length === 0) return [];
+    const lo = windowStartIdx;
+    const hi = Math.min(cs.length, currentChunkIdx + WINDOW_AFTER + 1);
+    return cs.slice(lo, hi);
   });
 
   // "<speech_id>:<chunk_id>" of the opened hit → highlights its segment.
@@ -231,7 +267,7 @@
         src={mediaUrl(hit.doc_id)}
         class={isFullscreen
           ? 'min-h-0 w-full flex-1 bg-black object-contain'
-          : 'aspect-video max-h-[55vh] w-full shrink-0 bg-black object-contain'}
+          : 'aspect-video max-h-[45vh] w-full shrink-0 bg-black object-contain'}
       >
         <track kind="captions" />
       </video>
@@ -242,6 +278,7 @@
           {duration}
           {currentTime}
           {activeKey}
+          {currentChunkIdx}
           onSeek={seekTo}
         />
         <!-- Bridge bar: ties the video to its transcript and holds the
@@ -257,15 +294,25 @@
         </div>
       {/if}
 
-      <!-- Transcript body. Normal: scrolls below the bar inside the card.
-           Fullscreen: a centred caption band lifted ABOVE the native control bar
-           (bottom-20) so it never covers the play button. -->
+      <!-- Transcript body. Normal: scrolls below the bar inside the card with a
+           guaranteed min-height floor so it never collapses to 0 in a short pane
+           (the map view's right column is wide-but-short, which used to squeeze
+           the flex-1 transcript to nothing). Fullscreen: a centred caption band
+           lifted ABOVE the native control bar (bottom-20) so it never covers the
+           play button — only the ≤3 windowed chunks render, so it stays small. -->
       <div
         class={isFullscreen
-          ? 'absolute inset-x-0 bottom-20 mx-auto max-h-[32%] w-[min(92%,60rem)] overflow-y-auto rounded-xl bg-black/55 px-6 py-4 text-center text-lg leading-8 text-white backdrop-blur-sm'
-          : 'min-h-0 flex-1 overflow-y-auto text-sm leading-7'}
+          ? 'absolute inset-x-0 bottom-20 mx-auto max-h-[32%] w-[min(92%,60rem)] overflow-y-auto rounded-xl bg-black/55 px-6 py-4 text-lg leading-8 text-white backdrop-blur-sm'
+          : 'min-h-[8rem] flex-1 overflow-y-auto text-sm leading-7'}
       >
-        <TranscriptHighlighter {alignments} media={mediaEl} {query} chrome={false} />
+        <TranscriptWindow
+          chunks={windowChunks}
+          {currentChunkIdx}
+          {windowStartIdx}
+          media={mediaEl}
+          {query}
+          variant={isFullscreen ? 'overlay' : 'panel'}
+        />
       </div>
     </div>
 
