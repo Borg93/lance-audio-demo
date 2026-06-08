@@ -36,8 +36,11 @@ _HIT_COLUMNS = [
     "referenskod",
     "bildid",
     "extraid",
-    "alignments_json",
 ]
+# `alignments_json` is intentionally NOT projected here: it's a multi-KB per-word
+# timing blob (~93% of a search response's bytes) that only the *player* renders,
+# for the ONE selected hit. Search hits ship `alignments: []`; the player
+# lazy-fetches the real array via GET /api/chunk-alignments/{doc}/{speech}/{chunk}.
 
 # Hit columns without the FTS-only BM25 `_score`. Vector and hybrid searches
 # surface `_distance` / `_relevance_score` instead, so selecting `_score` there

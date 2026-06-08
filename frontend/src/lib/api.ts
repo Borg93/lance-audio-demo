@@ -184,6 +184,25 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
     return asJson(r, HitsArraySchema);
 }
 
+const ChunkAlignmentsSchema = z.object({ alignments: z.array(AlignmentSchema) });
+
+/** Per-word alignments for one chunk, fetched on demand when a hit is opened in
+ *  the player. Search results ship `alignments: []` (the timing blob is ~80% of a
+ *  search payload and only the selected hit renders it); the player calls this for
+ *  the open hit. */
+export async function getChunkAlignments(
+    doc_id: string,
+    speech_id: number,
+    chunk_id: number,
+    fetcher: typeof fetch = fetch,
+): Promise<Alignment[]> {
+    const r = await fetcher(
+        `/api/chunk-alignments/${encodeURIComponent(doc_id)}/${speech_id}/${chunk_id}`,
+    );
+    const data = await asJson(r, ChunkAlignmentsSchema);
+    return data.alignments;
+}
+
 // ── Health ──────────────────────────────────────────────────────────────
 const PingSchema = z.object({ ok: z.boolean(), url: z.string(), error: z.string().optional() });
 export const HealthSchema = z.object({

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { type Hit, mediaUrl } from '$lib/api';
+  import { type Hit, type Alignment, getChunkAlignments, mediaUrl } from '$lib/api';
   import { fmtTime } from '$lib/utils';
   import { Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptHighlighter from './transcript-highlighter.svelte';
@@ -12,6 +12,34 @@
 
   let mediaEl = $state<HTMLVideoElement | null>(null);
   let mediaError = $state<string | null>(null);
+
+  // Search hits ship `alignments: []` (the per-word timing blob is ~80% of a
+  // search payload and only the player needs it). On opening a hit, use its
+  // alignments if present (atlas/selection hits carry them) or lazy-fetch them.
+  let alignments = $state<Alignment[]>([]);
+  $effect(() => {
+    const h = hit;
+    if (!h) {
+      alignments = [];
+      return;
+    }
+    if (h.alignments.length > 0) {
+      alignments = h.alignments;
+      return;
+    }
+    alignments = [];
+    let cancelled = false;
+    getChunkAlignments(h.doc_id, h.speech_id, h.chunk_id)
+      .then((a) => {
+        if (!cancelled) alignments = a;
+      })
+      .catch(() => {
+        /* leave empty — the video still plays, just no karaoke */
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
 
   // The unified video+transcript card. We fullscreen THIS wrapper (not the bare
   // <video>) so the live transcript overlay survives — native video fullscreen
@@ -171,7 +199,7 @@
           ? 'absolute inset-x-0 bottom-0 max-h-[36%] overflow-y-auto bg-gradient-to-t from-black/85 via-black/60 to-transparent px-6 pb-6 pt-10 text-lg leading-8 text-white'
           : 'min-h-0 flex-1 overflow-y-auto border-t border-border text-sm leading-7'}
       >
-        <TranscriptHighlighter alignments={hit.alignments} media={mediaEl} {query} chrome={false} />
+        <TranscriptHighlighter {alignments} media={mediaEl} {query} chrome={false} />
       </div>
     </div>
 

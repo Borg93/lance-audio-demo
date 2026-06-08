@@ -120,3 +120,19 @@ async def search_post(
         spec,
         image_bytes=image_bytes,
     )
+
+
+@router.get("/api/chunk-alignments/{doc_id}/{speech_id}/{chunk_id}")
+def chunk_alignments(state: StateDep, doc_id: str, speech_id: int, chunk_id: int) -> dict[str, Any]:
+    """Per-word alignments for one chunk — lazy-fetched by the player when a hit is
+    opened. Search results omit the multi-KB ``alignments_json`` blob (it was ~93%
+    of the payload and only the selected hit renders it), so the player fetches the
+    real array here on demand. Sync handler → threadpool (the Lance read is blocking).
+    """
+    from raudio.retrieval.search import parse_alignments_json
+
+    safe_doc = doc_id.replace("'", "''")
+    where = f"doc_id = '{safe_doc}' AND speech_id = {speech_id} AND chunk_id = {chunk_id}"
+    rows = state.chunks_ds.to_table(columns=["alignments_json"], filter=where).to_pylist()
+    alignments = parse_alignments_json(rows[0]["alignments_json"]) if rows else []
+    return {"alignments": alignments}
