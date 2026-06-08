@@ -6,6 +6,7 @@
  * bugs (the old plain-HTML frontend had several of those).
  */
 
+import { tableFromIPC, type Vector } from 'apache-arrow';
 import { z } from 'zod';
 
 // ─────────────────────────────────────────────────────────────────────
@@ -203,6 +204,33 @@ export async function getChunkAlignments(
   return data.alignments;
 }
 
+const DocTranscriptChunkSchema = z.object({
+  speech_id: z.number().int(),
+  chunk_id: z.number().int(),
+  start: z.number(),
+  end: z.number(),
+  text: z.string(),
+  alignments: z.array(AlignmentSchema),
+});
+export type DocTranscriptChunk = z.infer<typeof DocTranscriptChunkSchema>;
+
+const DocTranscriptSchema = z.object({
+  doc_id: z.string(),
+  chunks: z.array(DocTranscriptChunkSchema),
+});
+export type DocTranscript = z.infer<typeof DocTranscriptSchema>;
+
+/** Whole-document transcript, chunk-segmented + ordered. Lazy-fetched when a
+ *  hit opens so playback past the selected chunk still has karaoke. The player
+ *  flattens chunks[].alignments; a future timeline can use the chunk envelope. */
+export async function getDocTranscript(
+  doc_id: string,
+  fetcher: typeof fetch = fetch,
+): Promise<DocTranscript> {
+  const r = await fetcher(`/api/doc-transcript/${encodeURIComponent(doc_id)}`);
+  return asJson(r, DocTranscriptSchema);
+}
+
 // ── Health ──────────────────────────────────────────────────────────────
 const PingSchema = z.object({ ok: z.boolean(), url: z.string(), error: z.string().optional() });
 export const HealthSchema = z.object({
@@ -279,12 +307,18 @@ export async function getAtlasStatus(
 /** Compact arrays for the scatter map. `doc[i]` indexes into `docs` (the distinct
  *  doc ids); `(docs[doc[i]], speech_id[i], chunk_id[i])` is point i's chunk key.
  *  `cluster`/`language`/`namn` are per-space colour/label codes; `namn[i]`
- *  indexes into `namns` (the distinct archival names) for the hover popup. */
+ *  indexes into `namns` (the distinct archival names) for the hover popup.
+ *
+ *  The payload is an Apache Arrow IPC stream (see `getAtlasPoints`): `x`/`y` and
+ *  the keys arrive as typed arrays (kept typed — `ArrayLike<number>` — to avoid
+ *  a million-element copy), while the factorized colour *codes* are decoded to
+ *  plain `number[]` because they feed APIs typed `readonly number[]`. */
 export interface AtlasPoints {
   count: number;
   space?: AtlasSpace;
-  x: number[];
-  y: number[];
+  // Float32Array from Arrow — only ever consumed via `Float32Array.from(...)`.
+  x: ArrayLike<number>;
+  y: ArrayLike<number>;
   docs: string[];
   doc: number[];
   /** Readable filename stem per distinct doc (aligned with `docs`) — video labels. */
@@ -293,7 +327,7 @@ export interface AtlasPoints {
   chunk_id: number[];
   /** Stable Lance row address per point — sent back to /chunks for an
    *  O(selection) take when listing a lasso/legend selection. */
-  rowid?: number[];
+  rowid?: ArrayLike<number>;
   cluster?: number[];
   language?: number[];
   languages?: string[];
@@ -308,8 +342,51 @@ export interface AtlasPoints {
   doc_topics?: string[];
 }
 
-/** Fetch the point arrays for a space. Skips per-element zod (the payload is
- *  ~10⁶ numbers); a structural guard is enough here and keeps the map snappy. */
+/** A factorized (codes, labels) pair pulled from one Arrow DICTIONARY column.
+ *  `codes` are the per-point dictionary indices; `labels` the distinct values. */
+interface DictColumn {
+  codes: number[];
+  labels: string[];
+}
+
+/** Extract the integer indices (codes) + dictionary values (labels) of an Arrow
+ *  DICTIONARY vector.
+ *
+ *  WHY THIS API: a Dictionary `Vector.toArray()` returns the *decoded* values
+ *  (e.g. `['sv','en','sv']`), not the indices — useless for the per-point colour
+ *  codes. The indices live on the underlying `Data` as `.values` (an Int32Array,
+ *  since the backend ships `dictionary<int32, utf8>`), and the label list is the
+ *  attached `.dictionary` vector. A Vector may be chunked, so we concat the
+ *  per-chunk index arrays; the dictionary is shared across chunks, so the first
+ *  one wins. Verified against apache-arrow 21.x (`d.values` / `d.dictionary`). */
+function dictColumn(vec: Vector | null): DictColumn | null {
+  if (!vec) return null;
+  const codes: number[] = [];
+  let labels: string[] = [];
+  for (const d of vec.data) {
+    for (const code of d.values) codes.push(code);
+    if (d.dictionary && labels.length === 0) labels = d.dictionary.toArray() as string[];
+  }
+  return { codes, labels };
+}
+
+/** A typed numeric column, kept as the underlying typed array (no copy). */
+function typedColumn(vec: Vector | null): ArrayLike<number> {
+  return (vec?.toArray() ?? []) as ArrayLike<number>;
+}
+
+/** A numeric key column decoded to a plain `number[]` (Arrow int64 columns come
+ *  back as BigInt64Array, and several consumers want `readonly number[]`). */
+function numberColumn(vec: Vector | null): number[] {
+  if (!vec) return [];
+  const out: number[] = [];
+  for (const v of vec) out.push(Number(v));
+  return out;
+}
+
+/** Fetch the point arrays for a space as a single Apache Arrow IPC stream
+ *  (binary, parse-free — replaces a ~10 MB JSON body). A structural guard is
+ *  enough here (no per-element zod) and keeps the map snappy. */
 export async function getAtlasPoints(
   space: AtlasSpace = 'text',
   fetcher: typeof fetch = fetch,
@@ -318,14 +395,67 @@ export async function getAtlasPoints(
   // whose payload shape differed — notably entries from before `rowid` was
   // added, which would silently break the selection table. Bump when the
   // points payload shape changes; the backend ignores the extra param.
-  // v=3: added factorized `topic`/`doc_topic` colour channels.
-  const r = await fetcher(`/api/atlas/points?space=${space}&v=4`);
+  // v=5: switched the wire format from JSON to an Arrow IPC stream.
+  const r = await fetcher(`/api/atlas/points?space=${space}&v=5`);
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
     throw new ApiError(r.status, body?.detail ?? r.statusText);
   }
-  const data = (await r.json()) as AtlasPoints;
-  if (typeof data?.count !== 'number' || !Array.isArray(data.x) || data.x.length !== data.count) {
+
+  const buf = await r.arrayBuffer();
+  const table = tableFromIPC(new Uint8Array(buf));
+  const md = table.schema.metadata;
+
+  const count = Number(md.get('count') ?? table.numRows);
+  const spaceMeta = md.get('space');
+  const docFilesMeta = md.get('docFiles');
+
+  const doc = dictColumn(table.getChild('doc'));
+  if (!doc) throw new ApiError(500, 'malformed /api/atlas/points payload (no doc column)');
+
+  const data: AtlasPoints = {
+    count,
+    docs: doc.labels,
+    doc: doc.codes,
+    speech_id: numberColumn(table.getChild('speech_id')),
+    chunk_id: numberColumn(table.getChild('chunk_id')),
+    x: typedColumn(table.getChild('x')),
+    y: typedColumn(table.getChild('y')),
+  };
+
+  if (spaceMeta === 'text' || spaceMeta === 'visual' || spaceMeta === 'caption')
+    data.space = spaceMeta;
+  // `docFiles` rides in metadata (one entry per distinct doc, not per point), so
+  // it can't be a table column; it's JSON, aligned with the `doc` dictionary.
+  if (docFilesMeta) data.docFiles = JSON.parse(docFilesMeta) as string[];
+
+  const rowid = table.getChild('rowid');
+  if (rowid) data.rowid = numberColumn(rowid); // int64 → number[] (BigInt otherwise)
+  const cluster = table.getChild('cluster');
+  if (cluster) data.cluster = numberColumn(cluster); // iterated + fed to readonly number[]
+
+  const language = dictColumn(table.getChild('language'));
+  if (language) {
+    data.language = language.codes;
+    data.languages = language.labels;
+  }
+  const namn = dictColumn(table.getChild('namn'));
+  if (namn) {
+    data.namn = namn.codes;
+    data.namns = namn.labels;
+  }
+  const topic = dictColumn(table.getChild('topic'));
+  if (topic) {
+    data.topic = topic.codes;
+    data.topics = topic.labels;
+  }
+  const docTopic = dictColumn(table.getChild('doc_topic'));
+  if (docTopic) {
+    data.doc_topic = docTopic.codes;
+    data.doc_topics = docTopic.labels;
+  }
+
+  if (typeof data.count !== 'number' || data.x.length !== data.count) {
     throw new ApiError(500, 'malformed /api/atlas/points payload');
   }
   return data;

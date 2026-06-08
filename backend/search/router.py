@@ -12,6 +12,7 @@ signatures at runtime, so the annotations stay real objects.
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from backend.deps import EmbedderFactoryDep, RerankerFactoryDep, StateDep
@@ -19,6 +20,20 @@ from backend.search.service import run_search
 from backend.search.spec import SearchMode, SearchSpec
 
 router = APIRouter(tags=["search"])
+
+
+class DocTranscriptChunk(BaseModel):
+    speech_id: int
+    chunk_id: int
+    start: float
+    end: float
+    text: str
+    alignments: list[dict[str, Any]]
+
+
+class DocTranscriptResponse(BaseModel):
+    doc_id: str
+    chunks: list[DocTranscriptChunk]
 
 
 @router.get("/api/search")
@@ -136,3 +151,40 @@ def chunk_alignments(state: StateDep, doc_id: str, speech_id: int, chunk_id: int
     rows = state.chunks_ds.to_table(columns=["alignments_json"], filter=where).to_pylist()
     alignments = parse_alignments_json(rows[0]["alignments_json"]) if rows else []
     return {"alignments": alignments}
+
+
+@router.get("/api/doc-transcript/{doc_id}")
+def doc_transcript(state: StateDep, doc_id: str) -> DocTranscriptResponse:
+    """Whole-document, chunk-segmented transcript — ordered by start time. One lazy
+    fetch drives both a clickable chunk timeline and (flattened) the player's
+    karaoke track. Reuses ``parse_alignments_json`` so the per-chunk ``alignments``
+    mirror the per-word shape the player already renders; chunks with no timing keep
+    ``alignments == []`` (video still plays, no karaoke). Sync handler → threadpool
+    (the Lance read is blocking). No vector/_score column is projected, so the plain
+    dataset scan can't hit the FTS/vector _score restriction.
+    """
+    from raudio.retrieval.search import parse_alignments_json
+
+    safe_doc = doc_id.replace("'", "''")
+    where = f"doc_id = '{safe_doc}'"
+    rows = state.chunks_ds.to_table(
+        columns=["speech_id", "chunk_id", "start", "end", "text", "alignments_json"],
+        filter=where,
+    ).to_pylist()
+    # Order by the contract field (start time) directly — `speech_id` is the
+    # source-assigned id, not a sequential index, so (speech_id, chunk_id) is only
+    # a proxy for time order. `start` is non-null in CHUNK_SCHEMA; (speech_id,
+    # chunk_id) is a stable tiebreaker for any chunks that share a start.
+    rows.sort(key=lambda r: (r["start"], r["speech_id"], r["chunk_id"]))
+    chunks = [
+        DocTranscriptChunk(
+            speech_id=r["speech_id"],
+            chunk_id=r["chunk_id"],
+            start=r["start"],
+            end=r["end"],
+            text=r["text"],
+            alignments=parse_alignments_json(r["alignments_json"]),
+        )
+        for r in rows
+    ]
+    return DocTranscriptResponse(doc_id=doc_id, chunks=chunks)

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { type Hit, type Alignment, getChunkAlignments, mediaUrl } from '$lib/api';
+  import { type Hit, type Alignment, getDocTranscript, mediaUrl } from '$lib/api';
   import { fmtTime } from '$lib/utils';
   import { Captions, Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptHighlighter from './transcript-highlighter.svelte';
@@ -14,8 +14,12 @@
   let mediaError = $state<string | null>(null);
 
   // Search hits ship `alignments: []` (the per-word timing blob is ~80% of a
-  // search payload and only the player needs it). On opening a hit, use its
-  // alignments if present (atlas/selection hits carry them) or lazy-fetch them.
+  // search payload and only the player needs it). On opening a hit we lazy-fetch
+  // the WHOLE document transcript (keyed on doc_id) so karaoke continues past the
+  // selected chunk; atlas/selection hits carry only the selected chunk so we
+  // can't rely on `hit.alignments`. The seek $effect below sets currentTime to
+  // hit.start, and TranscriptHighlighter's time loop scrolls to the sentence in
+  // the opened chunk once these absolute-time alignments populate.
   let alignments = $state<Alignment[]>([]);
   $effect(() => {
     const h = hit;
@@ -23,15 +27,11 @@
       alignments = [];
       return;
     }
-    if (h.alignments.length > 0) {
-      alignments = h.alignments;
-      return;
-    }
     alignments = [];
-    let cancelled = false;
-    getChunkAlignments(h.doc_id, h.speech_id, h.chunk_id)
-      .then((a) => {
-        if (!cancelled) alignments = a;
+    let cancelled = false; // supersede guard + leak guard
+    getDocTranscript(h.doc_id)
+      .then((doc) => {
+        if (!cancelled) alignments = doc.chunks.flatMap((c) => c.alignments);
       })
       .catch(() => {
         /* leave empty — the video still plays, just no karaoke */
