@@ -42,12 +42,6 @@
     if (dc === undefined) return null;
     return (pts.docFiles?.[dc] ?? pts.docs[dc]) ?? null;
   });
-  const topic = $derived.by(() => {
-    if (index == null) return null;
-    const code = pts.topic?.[index];
-    const label = code != null ? (pts.topics?.[code] ?? null) : null;
-    return label || null; // '' (unclustered) → null
-  });
 
   function keyAt(i: number): [string, number, number] | null {
     const dc = pts.doc[i];

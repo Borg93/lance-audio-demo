@@ -573,7 +573,6 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     {gpuError} — the embedding map needs WebGPU.
   </div>
 {:else}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <canvas
     bind:this={gpuCanvas}
     class="absolute inset-0 block touch-none"
