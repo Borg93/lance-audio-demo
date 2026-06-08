@@ -619,7 +619,7 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
   <!-- subtle dot grid backing the embedding space (theme-neutral grey) -->
   <div
     class="pointer-events-none absolute inset-0"
-    style:background-image="radial-gradient(rgba(130,130,130,0.22) 1.1px, transparent 1.6px)"
+    style:background-image="radial-gradient(rgba(130,130,130,0.1) 1px, transparent 1.5px)"
     style:background-size="22px 22px"
   ></div>
   {#if markerScreen}

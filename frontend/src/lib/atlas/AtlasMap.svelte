@@ -63,7 +63,7 @@
   let captionBuilt = $state(false); // whether atlas_cap_* exists (gates the toggle)
 
   let pointSize = $state(0); // 0 = auto
-  let filterAlpha = $state(8); // 0..30 — opacity of search-filtered-out points (toolbar "filtered" slider)
+  let filterAlpha = $state(8); // 0..120 — opacity of search-filtered-out points (toolbar "filtered" slider)
   let selectionCount = $state(0);
   let tableLoading = $state(false);
   let mode = $state<'lasso' | 'pan'>('lasso');
@@ -287,7 +287,7 @@
     return buf;
   });
 
-  const autoPointSize = $derived(pointSize > 0 ? pointSize : 3);
+  const autoPointSize = $derived(pointSize > 0 ? pointSize : 5);
 
   // Data-space coords of the active hit's point (the one in the player / table)
   // so <GpuScatter> can ring it — resolves via the shared key→index map.
@@ -303,22 +303,61 @@
     return mx !== undefined && my !== undefined ? [mx, my] : null;
   });
 
+  // ── filter-aware legend counts ────────────────────────────────────────────
+  // The legends summarise WHAT'S IN VIEW, not the whole corpus: with a search
+  // filter and/or a lasso selection active, counts + bars are tallied over the
+  // intersection of those index sets (null ⇒ nothing active ⇒ every point).
+  const visibleIds = $derived.by((): Set<number> | null => {
+    const f = crossFilter.filteredIds;
+    const s = crossFilter.hasSelection ? crossFilter.selectedIds : null;
+    if (f && s) {
+      const [small, big] = f.size <= s.size ? [f, s] : [s, f];
+      const both = new Set<number>();
+      for (const i of small) if (big.has(i)) both.add(i);
+      return both;
+    }
+    return f ?? s ?? null;
+  });
+  const legendFiltered = $derived(visibleIds !== null);
+
+  /** Tally code[i] over the visible indices (or every point when null). */
+  function tally(codes: readonly number[], visible: Set<number> | null): Map<number, number> {
+    const counts = new Map<number, number>();
+    if (visible) {
+      for (const i of visible) {
+        const code = codes[i];
+        if (code !== undefined) counts.set(code, (counts.get(code) ?? 0) + 1);
+      }
+    } else {
+      for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  /** Largest value (≥1) — normalises the distribution bars. */
+  function maxCount(values: Iterable<number>): number {
+    let max = 1;
+    for (const v of values) if (v > max) max = v;
+    return max;
+  }
+
   // ── legends (clickable → selectCluster / language facet) ──────────────────
   // Legend swatches read the SAME hslToRgb hues the map uses, so a swatch can
-  // never disagree with its points.
-  const clusterLegend = $derived.by((): { id: number; color: string; count: number }[] => {
+  // never disagree with its points. Counts + bars reflect `visibleIds`.
+  type ClusterLegendRow = { id: number; color: string; count: number; frac: number };
+  const clusterLegend = $derived.by((): ClusterLegendRow[] => {
     const p = pts;
     const r = clusterRanking;
     if (!p?.cluster || !r) return [];
     const { slotOf, distinct } = r;
-    const counts = new Map<number, number>();
-    for (const c of p.cluster) if (c >= 0) counts.set(c, (counts.get(c) ?? 0) + 1);
-    return [...counts.entries()]
+    const rows = [...tally(p.cluster, visibleIds).entries()].filter(([id]) => id >= 0);
+    const max = maxCount(rows.map(([, count]) => count));
+    return rows
       .map(([id, count]) => {
         const rank = slotOf.get(id) ?? -1;
         const color =
           rank < 0 ? (isDark ? '#71717a' : '#a1a1aa') : hueCss(rank + 1, distinct + 1, isDark);
-        return { id, color, count };
+        return { id, color, count, frac: count / max };
       })
       .sort((a, b) => b.count - a.count);
   });
@@ -328,13 +367,13 @@
   const clusterStats = $derived.by((): { total: number; noise: number } => {
     const cl = pts?.cluster;
     if (!cl) return { total: 0, noise: 0 };
-    const ids = new Set<number>();
+    let total = 0;
     let noise = 0;
-    for (const c of cl) {
-      if (c < 0) noise++;
-      else ids.add(c);
+    for (const [id, count] of tally(cl, visibleIds)) {
+      if (id < 0) noise += count;
+      else total++;
     }
-    return { total: ids.size, noise };
+    return { total, noise };
   });
 
   type CategoryLegendRow = {
@@ -342,6 +381,7 @@
     label: string;
     color: string;
     count: number;
+    frac: number;
     empty: boolean;
   };
   /** Legend rows for the active categorical colour mode (language / topic /
@@ -353,8 +393,8 @@
     const distinct = Math.min(MAX_DISTINCT, labels.length);
     const grey = isDark ? '#71717a' : '#a1a1aa';
     const noiseCss = isDark ? '#52525b' : '#cccccc';
-    const counts = new Map<number, number>();
-    for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
+    const counts = tally(codes, visibleIds);
+    const max = maxCount(counts.values());
     return [...counts.entries()]
       .map(([code, count]) => {
         const raw = labels[code] ?? '';
@@ -363,6 +403,7 @@
           code,
           count,
           empty,
+          frac: count / max,
           label: empty ? '(ej klustrad)' : raw,
           color: empty ? noiseCss : code < distinct ? hueCss(code + 1, distinct + 1, isDark) : grey,
         };
@@ -721,7 +762,7 @@
                 <input
                   type="range"
                   min="0"
-                  max="8"
+                  max="20"
                   step="0.5"
                   bind:value={pointSize}
                   class="w-full accent-primary"
@@ -734,7 +775,7 @@
                 <input
                   type="range"
                   min="0"
-                  max="30"
+                  max="120"
                   step="1"
                   bind:value={filterAlpha}
                   class="w-full accent-primary"
@@ -771,12 +812,18 @@
           {#each clusterLegend as c (c.id)}
             {@const hidden = crossFilter.hiddenClusters.has(c.id)}
             <div
-              class="flex w-full items-center gap-1 rounded px-1 py-0.5 hover:bg-secondary/50"
+              class="relative flex w-full items-center gap-1 overflow-hidden rounded px-1 py-0.5 hover:bg-secondary/50"
               class:opacity-40={hidden}
             >
+              <span
+                class="pointer-events-none absolute inset-y-0 left-0 rounded-sm"
+                style:width="{(c.frac * 100).toFixed(1)}%"
+                style:background={c.color}
+                style:opacity="0.16"
+              ></span>
               <button
                 type="button"
-                class="flex flex-1 items-center gap-2 text-left"
+                class="relative flex flex-1 items-center gap-2 text-left"
                 onclick={() => pickCluster(c.id)}
                 title="Select cluster #{c.id}"
               >
@@ -839,21 +886,29 @@
           class="absolute right-3 top-3 max-h-[60%] w-60 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur"
         >
           <div class="mb-1 font-medium text-muted-foreground">
-            {categoryTitle} · {categoryTotal.toLocaleString()}
+            {categoryTitle} · {legendFiltered
+              ? `${categoryLegend.length} of ${categoryTotal.toLocaleString()}`
+              : categoryTotal.toLocaleString()}
           </div>
           {#each categoryLegend as c (c.code)}
             <button
               type="button"
-              class="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-secondary/50"
+              class="relative flex w-full items-center gap-2 overflow-hidden rounded px-1 py-0.5 text-left hover:bg-secondary/50"
               class:opacity-60={c.empty}
               onclick={() => pickCategory(c.code)}
               title="Select {c.label}"
             >
-              <span class="size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
-              <span class="truncate text-foreground" class:uppercase={legendMode === 'language'}
+              <span
+                class="pointer-events-none absolute inset-y-0 left-0 rounded-sm"
+                style:width="{(c.frac * 100).toFixed(1)}%"
+                style:background={c.color}
+                style:opacity="0.16"
+              ></span>
+              <span class="relative size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
+              <span class="relative truncate text-foreground" class:uppercase={legendMode === 'language'}
                 >{c.label}</span
               >
-              <span class="ml-auto shrink-0 font-mono text-muted-foreground"
+              <span class="relative ml-auto shrink-0 font-mono text-muted-foreground"
                 >{c.count.toLocaleString()}</span
               >
             </button>
