@@ -25,7 +25,9 @@
   }
 </script>
 
-<div class="flex flex-col gap-2 rounded-lg border border-border bg-card/95 p-2 shadow-md backdrop-blur">
+<div
+  class="flex flex-col gap-2 rounded-lg border border-border bg-card/95 p-2 shadow-md backdrop-blur"
+>
   <div class="flex items-center gap-1.5">
     <Button size="sm" onclick={() => graph.run()} disabled={graph.running}>
       {#if graph.running}
@@ -69,16 +71,16 @@
   {/if}
   <div class="max-w-[19rem] space-y-0.5 text-[10px] text-muted-foreground/80">
     <div>
-      <span class="text-foreground">Connect</span> — drag a node's right ● onto another's left ●. A
-      Search accepts several inputs at once (a query/image + a refine).
+      <span class="text-foreground">Connect</span> — drag a node's right ● onto another's left ●. A Search
+      accepts several inputs at once (a query/image + a refine).
     </div>
     <div>
-      <span class="text-foreground">Delete</span> — hover a node and click ✕, or select a node/edge
-      and press ⌫ (or the Delete button).
+      <span class="text-foreground">Delete</span> — hover a node and click ✕, or select a node/edge and
+      press ⌫ (or the Delete button).
     </div>
     <div>
-      <span class="text-foreground">Refine</span> — Search → Search scopes the second to the first's
-      videos. Click any node to inspect it on the right.
+      <span class="text-foreground">Refine</span> — Search → Search scopes the second to the first's videos.
+      Click any node to inspect it on the right.
     </div>
   </div>
 </div>

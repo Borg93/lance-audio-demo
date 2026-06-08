@@ -111,7 +111,15 @@
   }
   // Which result columns the table view shows (persisted). Defaults to a
   // readable subset; the chooser bar toggles any of TABLE_COLUMNS.
-  let tableCols = $state<string[]>(['thumbnail', 'namn', 'start', 'end', 'duration', 'text', 'caption']);
+  let tableCols = $state<string[]>([
+    'thumbnail',
+    'namn',
+    'start',
+    'end',
+    'duration',
+    'text',
+    'caption',
+  ]);
 
   // Columns shown in the browse-mode (pre-search) documents table. Documents
   // carry fewer fields than search hits, so this is its own small set.
@@ -136,9 +144,7 @@
     }
   });
   function toggleCol(key: string) {
-    tableCols = tableCols.includes(key)
-      ? tableCols.filter((k) => k !== key)
-      : [...tableCols, key];
+    tableCols = tableCols.includes(key) ? tableCols.filter((k) => k !== key) : [...tableCols, key];
     try {
       localStorage.setItem('raudio-table-cols-v3', JSON.stringify(tableCols));
     } catch {
@@ -154,7 +160,9 @@
   });
   function setGridCols(n: number) {
     gridCols = n;
-    try { localStorage.setItem('raudio-gridcols', String(n)); } catch {}
+    try {
+      localStorage.setItem('raudio-gridcols', String(n));
+    } catch {}
   }
 
   /** Selected document in browse mode (so the grid can highlight it). */
@@ -186,8 +194,7 @@
       if (hits.length < requested) allLoaded = true;
     } catch (e) {
       hits = [];
-      error =
-        e instanceof ApiError ? e.detail : e instanceof Error ? e.message : 'unknown error';
+      error = e instanceof ApiError ? e.detail : e instanceof Error ? e.message : 'unknown error';
     } finally {
       loadingHits = false;
     }
@@ -289,342 +296,352 @@
 
   <ResizableSplit minLeft={420} minRight={360} initial={0.6}>
     {#snippet left()}
-    <!-- ── Left: results ── -->
-    <div class="flex h-full min-h-0 flex-col">
-      <!-- Results header: count + view-mode toggle -->
-      <div class="flex items-center gap-3 border-b border-border bg-card/30 px-4 py-2 text-xs">
-        <span class="text-muted-foreground">
-          {#if isBrowsing}
-            Browsing {docsTotal} document{docsTotal === 1 ? '' : 's'}
-          {:else if loadingHits}
-            Searching…
-          {:else if error}
-            <span class="text-destructive">Error: {error}</span>
-          {:else if hits.length === 0}
-            No hits.
-          {:else}
-            <strong class="text-foreground">{hits.length}</strong>
-            {hits.length === 1 ? 'chunk' : 'chunks'}
-            across
-            <strong class="text-foreground">{docCount}</strong>
-            {docCount === 1 ? 'document' : 'documents'}
-            {#if allLoaded}<span class="text-muted-foreground/70">· all results shown</span>{/if}
-          {/if}
-        </span>
+      <!-- ── Left: results ── -->
+      <div class="flex h-full min-h-0 flex-col">
+        <!-- Results header: count + view-mode toggle -->
+        <div class="flex items-center gap-3 border-b border-border bg-card/30 px-4 py-2 text-xs">
+          <span class="text-muted-foreground">
+            {#if isBrowsing}
+              Browsing {docsTotal} document{docsTotal === 1 ? '' : 's'}
+            {:else if loadingHits}
+              Searching…
+            {:else if error}
+              <span class="text-destructive">Error: {error}</span>
+            {:else if hits.length === 0}
+              No hits.
+            {:else}
+              <strong class="text-foreground">{hits.length}</strong>
+              {hits.length === 1 ? 'chunk' : 'chunks'}
+              across
+              <strong class="text-foreground">{docCount}</strong>
+              {docCount === 1 ? 'document' : 'documents'}
+              {#if allLoaded}<span class="text-muted-foreground/70">· all results shown</span>{/if}
+            {/if}
+          </span>
 
-        <div class="ml-auto flex items-center gap-2">
-          {#if view === 'grid'}
-            <div class="flex items-center gap-1 border-r border-border pr-2 mr-1">
-              <span class="text-muted-foreground/70 mr-1">cols</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                disabled={gridCols <= 2}
-                title="Fewer columns"
-                onclick={() => setGridCols(Math.max(2, gridCols - 1))}
-              >
-                <Minus class="size-3.5" />
-              </Button>
-              <span class="w-4 text-center font-mono text-[11px]">{gridCols}</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                disabled={gridCols >= 6}
-                title="More columns"
-                onclick={() => setGridCols(Math.min(6, gridCols + 1))}
-              >
-                <Plus class="size-3.5" />
-              </Button>
-            </div>
-          {/if}
-          <Button
-            variant={view === 'list' ? 'secondary' : 'ghost'}
-            size="icon"
-            title="List view"
-            onclick={() => (view = 'list')}
-          >
-            <ListIcon class="size-4" />
-          </Button>
-          <Button
-            variant={view === 'grid' ? 'secondary' : 'ghost'}
-            size="icon"
-            title="Grid view"
-            onclick={() => (view = 'grid')}
-          >
-            <LayoutGrid class="size-4" />
-          </Button>
-          <Button
-            variant={view === 'table' ? 'secondary' : 'ghost'}
-            size="icon"
-            title="Table view — see column values per row"
-            onclick={() => (view = 'table')}
-          >
-            <TableIcon class="size-4" />
-          </Button>
-          <Button
-            variant={view === 'map' ? 'secondary' : 'ghost'}
-            size="icon"
-            title="Map view — the EVōC embedding atlas (cross-filters with search)"
-            onclick={() => (view = 'map')}
-          >
-            <MapIcon class="size-4" />
-          </Button>
-        </div>
-      </div>
-
-      {#if view === 'map'}
-        <!-- ── Map view: the embedding atlas + a draggable selection/results table ── -->
-        <div class="min-h-0 flex-1">
-          <ResizableSplit
-            orientation="vertical"
-            storageKey="raudio-search-map-vsplit"
-            minLeft={220}
-            minRight={120}
-            initial={0.66}
-          >
-            {#snippet left()}
-              <AtlasMap
-                bind:active
-                onSeedSearch={seedSearchFromSelection}
-                onSelectionHits={onMapSelectionHits}
-              />
-            {/snippet}
-            {#snippet right()}
-              <div class="flex h-full min-h-0 flex-col border-t border-border bg-card/30">
-                <div class="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs">
-                  {#if mapSelectionTotal > 0}
-                    <span class="font-medium text-foreground">Map selection</span>
-                    <span class="text-muted-foreground">
-                      {mapSelectionTotal.toLocaleString()} chunks
-                      {#if mapSelectionTotal > mapHits.length}
-                        <span class="text-muted-foreground/70">· showing {mapHits.length}</span>
-                      {/if}
-                    </span>
-                  {:else if hits.length > 0}
-                    <span class="font-medium text-foreground">Search results</span>
-                    <span class="text-muted-foreground">
-                      {hits.length.toLocaleString()} hits · highlighted on the map
-                    </span>
-                  {:else}
-                    <span class="font-medium text-foreground">Selection</span>
-                    <span class="text-muted-foreground">lasso a region, click a legend, or search to list chunks</span>
-                  {/if}
-                </div>
-                <div class="min-h-0 flex-1 overflow-auto">
-                  {#if mapTableHits.length}
-                    <HitTable
-                      hits={mapTableHits}
-                      {active}
-                      visible={MAP_TABLE_COLS}
-                      query={mapSelectionTotal > 0 ? '' : spec.q}
-                      onselect={(h) => (active = h)}
-                    />
-                  {/if}
-                </div>
-              </div>
-            {/snippet}
-          </ResizableSplit>
-        </div>
-      {:else}
-      <div class="relative min-h-0 flex-1 overflow-y-auto">
-        {#if isBrowsing}
-          <!-- ── Browse mode: documents ── -->
-          {#if loadingDocs && docs.length === 0}
-            <div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-              <Loader2 class="size-4 animate-spin mr-2" /> Loading documents…
-            </div>
-          {:else if view === 'grid'}
-            <div
-              class="grid gap-4 p-4"
-              style:grid-template-columns="repeat({gridCols}, minmax(0, 1fr))"
-            >
-              {#each docs as doc (doc.doc_id)}
-                <DocTile
-                  {doc}
-                  active={activeDocId === doc.doc_id}
-                  onclick={() => openDoc(doc)}
-                />
-              {/each}
-            </div>
-          {:else if view === 'table'}
-            {@const docCols = DOC_COLUMNS.filter((c) => tableCols.includes(c.key))}
-            <div class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-3 py-2 text-[11px]">
-              <span class="mr-1 text-muted-foreground">Columns:</span>
-              {#each DOC_COLUMNS as c (c.key)}
-                <button
-                  type="button"
-                  onclick={() => toggleCol(c.key)}
-                  class={'rounded border px-1.5 py-0.5 transition-colors ' +
-                    (tableCols.includes(c.key)
-                      ? 'border-primary bg-primary/10 text-foreground'
-                      : 'border-border text-muted-foreground hover:text-foreground')}
+          <div class="ml-auto flex items-center gap-2">
+            {#if view === 'grid'}
+              <div class="flex items-center gap-1 border-r border-border pr-2 mr-1">
+                <span class="text-muted-foreground/70 mr-1">cols</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={gridCols <= 2}
+                  title="Fewer columns"
+                  onclick={() => setGridCols(Math.max(2, gridCols - 1))}
                 >
-                  {c.label}
-                </button>
-              {/each}
-            </div>
-            <div class="overflow-x-auto">
-              <table class="w-full border-collapse text-xs">
-                <thead>
-                  <tr class="sticky top-0 z-10 border-b border-border bg-card text-left text-muted-foreground">
-                    {#each docCols as c (c.key)}
-                      <th class="px-3 py-2 font-medium whitespace-nowrap">{c.label}</th>
-                    {/each}
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each docs as doc (doc.doc_id)}
-                    <tr
-                      class={'cursor-pointer border-b border-border/60 hover:bg-secondary/40 ' +
-                        (activeDocId === doc.doc_id
-                          ? 'bg-primary/15 font-medium [box-shadow:inset_3px_0_0_0_var(--color-primary)]'
-                          : '')}
-                      onclick={() => openDoc(doc)}
-                    >
-                      {#each docCols as c (c.key)}
-                        {#if c.key === 'thumbnail'}
-                          <td class="px-3 py-1.5 align-top">
-                            <img
-                              src={thumbnailUrl(doc.doc_id)}
-                              loading="lazy"
-                              alt=""
-                              class="h-9 w-16 rounded bg-muted object-cover"
-                              onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
-                            />
-                          </td>
-                        {:else}
-                          <td
-                            class="max-w-[28rem] truncate px-3 py-1.5 align-top whitespace-nowrap text-muted-foreground"
-                            title={c.get(doc)}
-                          >
-                            {c.get(doc)}
-                          </td>
-                        {/if}
-                      {/each}
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          {:else}
-            <ul class="divide-y divide-border">
-              {#each docs as doc (doc.doc_id)}
-                <li>
-                  <button
-                    type="button"
-                    onclick={() => openDoc(doc)}
-                    class="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-secondary/40"
-                  >
-                    <span class="flex-1 truncate text-sm">{doc.namn ?? doc.audio_path}</span>
-                    <span class="font-mono text-[11px] text-muted-foreground">
-                      {doc.referenskod ?? ''}
-                    </span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-
-          {#if docsTotalPages > 1}
-            <div class="sticky bottom-0 flex items-center justify-end gap-1 border-t border-border bg-card/80 px-4 py-2 text-xs backdrop-blur">
-              <span class="mr-2 text-muted-foreground">page {docsPage} / {docsTotalPages}</span>
-              <Button
-                variant="outline"
-                size="icon"
-                disabled={docsPage <= 1}
-                onclick={() => (docsPage = Math.max(1, docsPage - 1))}
-              >
-                <ChevronLeft class="size-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                disabled={docsPage >= docsTotalPages}
-                onclick={() => (docsPage = Math.min(docsTotalPages, docsPage + 1))}
-              >
-                <ChevronRight class="size-4" />
-              </Button>
-            </div>
-          {/if}
-        {:else if loadingHits}
-          <div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2 class="size-4 animate-spin mr-2" /> Searching…
-          </div>
-        {:else if hits.length === 0}
-          <div class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
-            <SearchX class="size-6 text-muted-foreground/60" />
-            <div>No hits.</div>
-            <div class="text-xs">
-              Try toggling <strong>Match by</strong> to <em>Semantic</em> or
-              switching <strong>Style</strong> to <em>Fuzzy</em>.
-            </div>
-          </div>
-        {:else if view === 'grid'}
-          <div
-            class="grid gap-3 p-3"
-            style:grid-template-columns="repeat({gridCols}, minmax(0, 1fr))"
-          >
-            {#each hits as hit (hitKey(hit))}
-              <HitCard
-                {hit}
-                query={spec.q}
-                active={activeKey === hitKey(hit)}
-                layout="tile"
-                onclick={() => (active = hit)}
-              />
-            {/each}
-          </div>
-        {:else if view === 'table'}
-          <!-- Column chooser: click a column to show/hide it in the table. -->
-          <div class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-3 py-2 text-[11px]">
-            <span class="mr-1 text-muted-foreground">Columns:</span>
-            {#each TABLE_COLUMNS as c (c.key)}
-              <button
-                type="button"
-                onclick={() => toggleCol(c.key)}
-                class={'rounded border px-1.5 py-0.5 transition-colors ' +
-                  (tableCols.includes(c.key)
-                    ? 'border-primary bg-primary/10 text-foreground'
-                    : 'border-border text-muted-foreground hover:text-foreground')}
-              >
-                {c.label}
-              </button>
-            {/each}
-          </div>
-          <HitTable {hits} {active} visible={tableCols} query={spec.q} onselect={(h) => (active = h)} />
-        {:else}
-          <HitList
-            {hits}
-            query={spec.q}
-            {active}
-            onselect={(h) => (active = h)}
-          />
-        {/if}
-
-        <!-- Pagination: only when we have hits and aren't already exhausted. -->
-        {#if !isBrowsing && hits.length > 0 && !allLoaded}
-          <div class="flex justify-center border-t border-border bg-card/40 px-4 py-3">
+                  <Minus class="size-3.5" />
+                </Button>
+                <span class="w-4 text-center font-mono text-[11px]">{gridCols}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={gridCols >= 6}
+                  title="More columns"
+                  onclick={() => setGridCols(Math.min(6, gridCols + 1))}
+                >
+                  <Plus class="size-3.5" />
+                </Button>
+              </div>
+            {/if}
             <Button
-              variant="outline"
-              size="sm"
-              disabled={loadingMore}
-              onclick={loadMore}
+              variant={view === 'list' ? 'secondary' : 'ghost'}
+              size="icon"
+              title="List view"
+              onclick={() => (view = 'list')}
             >
-              {loadingMore ? 'Loading…' : `Show ${PAGE_STEP} more`}
+              <ListIcon class="size-4" />
+            </Button>
+            <Button
+              variant={view === 'grid' ? 'secondary' : 'ghost'}
+              size="icon"
+              title="Grid view"
+              onclick={() => (view = 'grid')}
+            >
+              <LayoutGrid class="size-4" />
+            </Button>
+            <Button
+              variant={view === 'table' ? 'secondary' : 'ghost'}
+              size="icon"
+              title="Table view — see column values per row"
+              onclick={() => (view = 'table')}
+            >
+              <TableIcon class="size-4" />
+            </Button>
+            <Button
+              variant={view === 'map' ? 'secondary' : 'ghost'}
+              size="icon"
+              title="Map view — the EVōC embedding atlas (cross-filters with search)"
+              onclick={() => (view = 'map')}
+            >
+              <MapIcon class="size-4" />
             </Button>
           </div>
+        </div>
+
+        {#if view === 'map'}
+          <!-- ── Map view: the embedding atlas + a draggable selection/results table ── -->
+          <div class="min-h-0 flex-1">
+            <ResizableSplit
+              orientation="vertical"
+              storageKey="raudio-search-map-vsplit"
+              minLeft={220}
+              minRight={120}
+              initial={0.66}
+            >
+              {#snippet left()}
+                <AtlasMap
+                  bind:active
+                  onSeedSearch={seedSearchFromSelection}
+                  onSelectionHits={onMapSelectionHits}
+                />
+              {/snippet}
+              {#snippet right()}
+                <div class="flex h-full min-h-0 flex-col border-t border-border bg-card/30">
+                  <div class="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs">
+                    {#if mapSelectionTotal > 0}
+                      <span class="font-medium text-foreground">Map selection</span>
+                      <span class="text-muted-foreground">
+                        {mapSelectionTotal.toLocaleString()} chunks
+                        {#if mapSelectionTotal > mapHits.length}
+                          <span class="text-muted-foreground/70">· showing {mapHits.length}</span>
+                        {/if}
+                      </span>
+                    {:else if hits.length > 0}
+                      <span class="font-medium text-foreground">Search results</span>
+                      <span class="text-muted-foreground">
+                        {hits.length.toLocaleString()} hits · highlighted on the map
+                      </span>
+                    {:else}
+                      <span class="font-medium text-foreground">Selection</span>
+                      <span class="text-muted-foreground"
+                        >lasso a region, click a legend, or search to list chunks</span
+                      >
+                    {/if}
+                  </div>
+                  <div class="min-h-0 flex-1 overflow-auto">
+                    {#if mapTableHits.length}
+                      <HitTable
+                        hits={mapTableHits}
+                        {active}
+                        visible={MAP_TABLE_COLS}
+                        query={mapSelectionTotal > 0 ? '' : spec.q}
+                        onselect={(h) => (active = h)}
+                      />
+                    {/if}
+                  </div>
+                </div>
+              {/snippet}
+            </ResizableSplit>
+          </div>
+        {:else}
+          <div class="relative min-h-0 flex-1 overflow-y-auto">
+            {#if isBrowsing}
+              <!-- ── Browse mode: documents ── -->
+              {#if loadingDocs && docs.length === 0}
+                <div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  <Loader2 class="size-4 animate-spin mr-2" /> Loading documents…
+                </div>
+              {:else if view === 'grid'}
+                <div
+                  class="grid gap-4 p-4"
+                  style:grid-template-columns="repeat({gridCols}, minmax(0, 1fr))"
+                >
+                  {#each docs as doc (doc.doc_id)}
+                    <DocTile
+                      {doc}
+                      active={activeDocId === doc.doc_id}
+                      onclick={() => openDoc(doc)}
+                    />
+                  {/each}
+                </div>
+              {:else if view === 'table'}
+                {@const docCols = DOC_COLUMNS.filter((c) => tableCols.includes(c.key))}
+                <div
+                  class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-3 py-2 text-[11px]"
+                >
+                  <span class="mr-1 text-muted-foreground">Columns:</span>
+                  {#each DOC_COLUMNS as c (c.key)}
+                    <button
+                      type="button"
+                      onclick={() => toggleCol(c.key)}
+                      class={'rounded border px-1.5 py-0.5 transition-colors ' +
+                        (tableCols.includes(c.key)
+                          ? 'border-primary bg-primary/10 text-foreground'
+                          : 'border-border text-muted-foreground hover:text-foreground')}
+                    >
+                      {c.label}
+                    </button>
+                  {/each}
+                </div>
+                <div class="overflow-x-auto">
+                  <table class="w-full border-collapse text-xs">
+                    <thead>
+                      <tr
+                        class="sticky top-0 z-10 border-b border-border bg-card text-left text-muted-foreground"
+                      >
+                        {#each docCols as c (c.key)}
+                          <th class="px-3 py-2 font-medium whitespace-nowrap">{c.label}</th>
+                        {/each}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each docs as doc (doc.doc_id)}
+                        <tr
+                          class={'cursor-pointer border-b border-border/60 hover:bg-secondary/40 ' +
+                            (activeDocId === doc.doc_id
+                              ? 'bg-primary/15 font-medium [box-shadow:inset_3px_0_0_0_var(--color-primary)]'
+                              : '')}
+                          onclick={() => openDoc(doc)}
+                        >
+                          {#each docCols as c (c.key)}
+                            {#if c.key === 'thumbnail'}
+                              <td class="px-3 py-1.5 align-top">
+                                <img
+                                  src={thumbnailUrl(doc.doc_id)}
+                                  loading="lazy"
+                                  alt=""
+                                  class="h-9 w-16 rounded bg-muted object-cover"
+                                  onerror={(e) =>
+                                    ((e.currentTarget as HTMLImageElement).style.visibility =
+                                      'hidden')}
+                                />
+                              </td>
+                            {:else}
+                              <td
+                                class="max-w-[28rem] truncate px-3 py-1.5 align-top whitespace-nowrap text-muted-foreground"
+                                title={c.get(doc)}
+                              >
+                                {c.get(doc)}
+                              </td>
+                            {/if}
+                          {/each}
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {:else}
+                <ul class="divide-y divide-border">
+                  {#each docs as doc (doc.doc_id)}
+                    <li>
+                      <button
+                        type="button"
+                        onclick={() => openDoc(doc)}
+                        class="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-secondary/40"
+                      >
+                        <span class="flex-1 truncate text-sm">{doc.namn ?? doc.audio_path}</span>
+                        <span class="font-mono text-[11px] text-muted-foreground">
+                          {doc.referenskod ?? ''}
+                        </span>
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+
+              {#if docsTotalPages > 1}
+                <div
+                  class="sticky bottom-0 flex items-center justify-end gap-1 border-t border-border bg-card/80 px-4 py-2 text-xs backdrop-blur"
+                >
+                  <span class="mr-2 text-muted-foreground">page {docsPage} / {docsTotalPages}</span>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    disabled={docsPage <= 1}
+                    onclick={() => (docsPage = Math.max(1, docsPage - 1))}
+                  >
+                    <ChevronLeft class="size-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    disabled={docsPage >= docsTotalPages}
+                    onclick={() => (docsPage = Math.min(docsTotalPages, docsPage + 1))}
+                  >
+                    <ChevronRight class="size-4" />
+                  </Button>
+                </div>
+              {/if}
+            {:else if loadingHits}
+              <div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+                <Loader2 class="size-4 animate-spin mr-2" /> Searching…
+              </div>
+            {:else if hits.length === 0}
+              <div
+                class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground"
+              >
+                <SearchX class="size-6 text-muted-foreground/60" />
+                <div>No hits.</div>
+                <div class="text-xs">
+                  Try toggling <strong>Match by</strong> to <em>Semantic</em> or switching
+                  <strong>Style</strong>
+                  to <em>Fuzzy</em>.
+                </div>
+              </div>
+            {:else if view === 'grid'}
+              <div
+                class="grid gap-3 p-3"
+                style:grid-template-columns="repeat({gridCols}, minmax(0, 1fr))"
+              >
+                {#each hits as hit (hitKey(hit))}
+                  <HitCard
+                    {hit}
+                    query={spec.q}
+                    active={activeKey === hitKey(hit)}
+                    layout="tile"
+                    onclick={() => (active = hit)}
+                  />
+                {/each}
+              </div>
+            {:else if view === 'table'}
+              <!-- Column chooser: click a column to show/hide it in the table. -->
+              <div
+                class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-3 py-2 text-[11px]"
+              >
+                <span class="mr-1 text-muted-foreground">Columns:</span>
+                {#each TABLE_COLUMNS as c (c.key)}
+                  <button
+                    type="button"
+                    onclick={() => toggleCol(c.key)}
+                    class={'rounded border px-1.5 py-0.5 transition-colors ' +
+                      (tableCols.includes(c.key)
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-border text-muted-foreground hover:text-foreground')}
+                  >
+                    {c.label}
+                  </button>
+                {/each}
+              </div>
+              <HitTable
+                {hits}
+                {active}
+                visible={tableCols}
+                query={spec.q}
+                onselect={(h) => (active = h)}
+              />
+            {:else}
+              <HitList {hits} query={spec.q} {active} onselect={(h) => (active = h)} />
+            {/if}
+
+            <!-- Pagination: only when we have hits and aren't already exhausted. -->
+            {#if !isBrowsing && hits.length > 0 && !allLoaded}
+              <div class="flex justify-center border-t border-border bg-card/40 px-4 py-3">
+                <Button variant="outline" size="sm" disabled={loadingMore} onclick={loadMore}>
+                  {loadingMore ? 'Loading…' : `Show ${PAGE_STEP} more`}
+                </Button>
+              </div>
+            {/if}
+          </div>
         {/if}
       </div>
-      {/if}
-    </div>
-
     {/snippet}
 
     {#snippet right()}
-    <!-- ── Right: player pane ── -->
-    <div class="h-full min-h-0 bg-muted/30">
-      <PlayerPane hit={active} query={spec.q} />
-    </div>
+      <!-- ── Right: player pane ── -->
+      <div class="h-full min-h-0 bg-muted/30">
+        <PlayerPane hit={active} query={spec.q} />
+      </div>
     {/snippet}
   </ResizableSplit>
 </div>

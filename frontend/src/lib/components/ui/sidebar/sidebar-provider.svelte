@@ -46,11 +46,9 @@
 <div
   bind:this={ref}
   data-slot="sidebar-wrapper"
-  style="--sidebar-width: {SIDEBAR_WIDTH}; --sidebar-width-icon: {SIDEBAR_WIDTH_ICON}; {style ?? ''}"
-  class={cn(
-    'group/sidebar-wrapper text-sidebar-foreground flex min-h-svh w-full',
-    className,
-  )}
+  style="--sidebar-width: {SIDEBAR_WIDTH}; --sidebar-width-icon: {SIDEBAR_WIDTH_ICON}; {style ??
+    ''}"
+  class={cn('group/sidebar-wrapper text-sidebar-foreground flex min-h-svh w-full', className)}
   {...restProps}
 >
   {@render children?.()}

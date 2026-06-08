@@ -56,8 +56,8 @@
       <div>
         <p class="mb-1 font-medium text-foreground">No topics yet</p>
         <p>
-          Run <code class="rounded bg-muted px-1 py-0.5">raudio feature topics</code> to cluster the
-          chunks into a topic hierarchy.
+          Run <code class="rounded bg-muted px-1 py-0.5">raudio feature topics</code> to cluster the chunks
+          into a topic hierarchy.
         </p>
       </div>
     </div>

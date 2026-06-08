@@ -15,7 +15,9 @@
 
 <RadioGroup.Root bind:value data-slot="radio-group" class={cn('grid gap-1', className)}>
   {#each options as opt (opt.value)}
-    <label class="flex cursor-pointer items-start gap-2 rounded p-1.5 transition-colors hover:bg-secondary/40">
+    <label
+      class="flex cursor-pointer items-start gap-2 rounded p-1.5 transition-colors hover:bg-secondary/40"
+    >
       <RadioGroup.Item
         value={opt.value}
         class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border border-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=checked]:border-primary"

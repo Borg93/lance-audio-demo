@@ -127,7 +127,9 @@
     <Filter class="size-3.5" />
     <span>Filters</span>
     {#if activeCount > 0}
-      <span class="ml-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+      <span
+        class="ml-1 rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground"
+      >
         {activeCount}
       </span>
     {/if}
@@ -190,7 +192,12 @@
               }
             }}
           />
-          <Button type="button" size="default" disabled={!colName || !val.trim()} onclick={addFilter}>
+          <Button
+            type="button"
+            size="default"
+            disabled={!colName || !val.trim()}
+            onclick={addFilter}
+          >
             <Plus class="size-4" /> Add
           </Button>
         </div>

@@ -11,11 +11,26 @@
   let { children }: { children: Snippet } = $props();
 
   const NAV: { href: string; label: string; icon: ComponentType; hint: string }[] = [
-    { href: '/', label: 'Search', icon: Search, hint: 'Find moments across transcripts, video & scenes' },
+    {
+      href: '/',
+      label: 'Search',
+      icon: Search,
+      hint: 'Find moments across transcripts, video & scenes',
+    },
     { href: '/atlas', label: 'Atlas', icon: Map, hint: 'Explore the embedding map of every chunk' },
     { href: '/tree', label: 'Tree', icon: FolderTree, hint: 'Browse topics as a zoomable treemap' },
-    { href: '/workflow', label: 'Workflow', icon: Workflow, hint: 'Build & run a retrieval pipeline as a node graph' },
-    { href: '/guide', label: 'Guide', icon: BookOpen, hint: 'How search works — signals, fusion & rerank' },
+    {
+      href: '/workflow',
+      label: 'Workflow',
+      icon: Workflow,
+      hint: 'Build & run a retrieval pipeline as a node graph',
+    },
+    {
+      href: '/guide',
+      label: 'Guide',
+      icon: BookOpen,
+      hint: 'How search works — signals, fusion & rerank',
+    },
   ];
 
   // '/' must match exactly; deeper routes match on prefix so nested pages stay active.
@@ -100,7 +115,8 @@
         {@const Icon = current.icon}
         <Icon class="text-muted-foreground size-4" />
         <span class="text-foreground text-sm font-medium">{current.label}</span>
-        <span class="text-muted-foreground hidden truncate text-xs sm:inline">— {current.hint}</span>
+        <span class="text-muted-foreground hidden truncate text-xs sm:inline">— {current.hint}</span
+        >
       {/if}
     </header>
     <div class="min-h-0 flex-1 overflow-hidden">

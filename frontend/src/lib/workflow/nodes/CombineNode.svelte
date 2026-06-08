@@ -42,7 +42,9 @@
 
     <div class="mt-2 border-t border-border pt-1.5 text-[10px]">
       {#if rt.status === 'done'}
-        <span class="text-muted-foreground"><span class="text-foreground">{rt.count}</span> combined</span>
+        <span class="text-muted-foreground"
+          ><span class="text-foreground">{rt.count}</span> combined</span
+        >
       {:else}
         <span class="text-muted-foreground/70">idle — wire 2+ result sets in, then Run</span>
       {/if}

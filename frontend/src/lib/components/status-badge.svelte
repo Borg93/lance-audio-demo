@@ -30,11 +30,7 @@
   });
 
   const dotClass = (ok: boolean | undefined) =>
-    ok === undefined
-      ? 'bg-muted-foreground/40'
-      : ok
-        ? 'bg-emerald-500'
-        : 'bg-red-500';
+    ok === undefined ? 'bg-muted-foreground/40' : ok ? 'bg-emerald-500' : 'bg-red-500';
 </script>
 
 <Popover.Root>
@@ -50,7 +46,9 @@
           : 'bg-red-500'}"
     ></span>
     <Activity class="size-3.5 text-muted-foreground" />
-    <span class="hidden text-muted-foreground sm:inline group-data-[collapsible=icon]:!hidden">services</span>
+    <span class="hidden text-muted-foreground sm:inline group-data-[collapsible=icon]:!hidden"
+      >services</span
+    >
   </Popover.Trigger>
   <Popover.Portal>
     <Popover.Content
@@ -98,7 +96,9 @@
 
           <div class="border-t border-border pt-2">
             <div class="mb-1 font-semibold text-foreground">Lance dataset</div>
-            <div class="font-mono text-[10px] text-muted-foreground break-all">{health.db.path}</div>
+            <div class="font-mono text-[10px] text-muted-foreground break-all">
+              {health.db.path}
+            </div>
             <div class="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
               <span class="text-muted-foreground">tables</span>
               <span class="font-mono text-foreground">{health.db.tables.join(', ')}</span>

@@ -2,7 +2,13 @@
   /** Persistent right panel. Click a node → see its inputs + intermediate
    *  results; click a result → play it here (reuses PlayerPane). */
   import { ArrowLeft, Copy, Eye, EyeOff } from 'lucide-svelte';
-  import { graph, modeLabel, nodeLabel, RERANK_TOP_N, STATUS_DOT } from '$lib/workflow/graph.svelte';
+  import {
+    graph,
+    modeLabel,
+    nodeLabel,
+    RERANK_TOP_N,
+    STATUS_DOT,
+  } from '$lib/workflow/graph.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import HitList from '$lib/workflow/HitList.svelte';
 

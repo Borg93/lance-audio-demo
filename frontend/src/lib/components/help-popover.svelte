@@ -58,7 +58,9 @@
         class="mt-2 flex items-start gap-1.5 rounded border border-dashed border-border bg-muted/40 p-2 text-muted-foreground"
       >
         <ImageIcon class="mt-0.5 size-3.5 shrink-0" />
-        <span><strong class="text-foreground">Attach an image</strong> (📎 or drag in) to add a visual pass.</span>
+        <span
+          ><strong class="text-foreground">Attach an image</strong> (📎 or drag in) to add a visual pass.</span
+        >
       </div>
 
       <a

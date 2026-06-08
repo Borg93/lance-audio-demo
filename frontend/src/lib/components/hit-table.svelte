@@ -19,7 +19,11 @@
     { key: 'chunk_id', label: 'Chunk', render: (h) => String(h.chunk_id) },
     { key: 'start', label: 'Start', render: (h) => fmtTime(h.start) },
     { key: 'end', label: 'End', render: (h) => fmtTime(h.end) },
-    { key: 'duration', label: 'Dur', render: (h) => (h.duration != null ? fmtTime(h.duration) : '') },
+    {
+      key: 'duration',
+      label: 'Dur',
+      render: (h) => (h.duration != null ? fmtTime(h.duration) : ''),
+    },
     { key: 'doc_id', label: 'Doc', render: (h) => h.doc_id },
     { key: 'audio_path', label: 'File', render: (h) => h.audio_path },
     { key: 'text', label: 'Text', render: (h) => h.text },
@@ -77,11 +81,15 @@
                   loading="lazy"
                   alt=""
                   class="h-9 w-16 rounded bg-muted object-cover"
-                  onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
+                  onerror={(e) =>
+                    ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
                 />
               </td>
             {:else if c.key === 'text'}
-              <td class="max-w-[32rem] px-3 py-1.5 align-top text-foreground [overflow-wrap:anywhere]" title={hit.text}>
+              <td
+                class="max-w-[32rem] px-3 py-1.5 align-top text-foreground [overflow-wrap:anywhere]"
+                title={hit.text}
+              >
                 <!-- highlight() escapes then wraps matches — safe to inject -->
                 <div class="line-clamp-2">{@html highlight(hit.text)}</div>
               </td>

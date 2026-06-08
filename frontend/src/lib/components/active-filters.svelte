@@ -48,7 +48,9 @@
   <div class="flex flex-wrap items-center gap-1.5 px-6 pb-3 text-[11px]">
     <span class="text-muted-foreground">Active filters:</span>
     {#each pills as p (p.key)}
-      <span class="flex items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 font-medium">
+      <span
+        class="flex items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 font-medium"
+      >
         <span class="text-muted-foreground">{p.label}:</span>
         <span class="max-w-[280px] truncate">{p.value}</span>
         <button

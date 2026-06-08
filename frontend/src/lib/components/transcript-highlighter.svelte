@@ -159,8 +159,8 @@
           class:underline={terms.has(stripped)}
           class:decoration-highlight={terms.has(stripped)}
           class:decoration-2={terms.has(stripped)}
-          class:underline-offset-2={terms.has(stripped)}
-        >{w.text}</span>
+          class:underline-offset-2={terms.has(stripped)}>{w.text}</span
+        >
       {/each}
     </span>
     {#if !sentEndsWithSpace}<br />{/if}

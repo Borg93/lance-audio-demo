@@ -164,24 +164,27 @@
    * (0..distinct-1, or -1 for the small-cluster tail beyond MAX_DISTINCT).
    * `distinct` is how many distinct cluster hues we emit.
    */
-  const clusterRanking = $derived.by((): { slotOf: Map<number, number>; distinct: number } | null => {
-    const cl = pts?.cluster;
-    if (!cl) return null;
-    const counts = new Map<number, number>();
-    for (const c of cl) if (c >= 0) counts.set(c, (counts.get(c) ?? 0) + 1);
-    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    const distinct = Math.min(ranked.length, MAX_DISTINCT);
-    const slotOf = new Map<number, number>();
-    ranked.forEach(([id], rank) => slotOf.set(id, rank < MAX_DISTINCT ? rank : -1));
-    return { slotOf, distinct };
-  });
+  const clusterRanking = $derived.by(
+    (): { slotOf: Map<number, number>; distinct: number } | null => {
+      const cl = pts?.cluster;
+      if (!cl) return null;
+      const counts = new Map<number, number>();
+      for (const c of cl) if (c >= 0) counts.set(c, (counts.get(c) ?? 0) + 1);
+      const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      const distinct = Math.min(ranked.length, MAX_DISTINCT);
+      const slotOf = new Map<number, number>();
+      ranked.forEach(([id], rank) => slotOf.set(id, rank < MAX_DISTINCT ? rank : -1));
+      return { slotOf, distinct };
+    },
+  );
 
   type CategoryChannel = { codes: readonly number[]; labels: readonly string[] };
   /** The factorized (codes, labels) pair backing a categorical colour mode.
    *  `cluster` is NOT here — it has its own noise/#id/hide semantics. */
   function channelFor(p: AtlasPoints | null, mode: ColorBy): CategoryChannel | null {
     if (!p) return null;
-    if (mode === 'language' && p.language && p.languages) return { codes: p.language, labels: p.languages };
+    if (mode === 'language' && p.language && p.languages)
+      return { codes: p.language, labels: p.languages };
     if (mode === 'topic' && p.topic && p.topics) return { codes: p.topic, labels: p.topics };
     if (mode === 'doc_topic' && p.doc_topic && p.doc_topics)
       return { codes: p.doc_topic, labels: p.doc_topics };
@@ -334,7 +337,13 @@
     return { total: ids.size, noise };
   });
 
-  type CategoryLegendRow = { code: number; label: string; color: string; count: number; empty: boolean };
+  type CategoryLegendRow = {
+    code: number;
+    label: string;
+    color: string;
+    count: number;
+    empty: boolean;
+  };
   /** Legend rows for the active categorical colour mode (language / topic /
    *  doc_topic) — same hues the map uses, clickable to select that category. */
   const categoryLegend = $derived.by((): CategoryLegendRow[] => {
@@ -400,7 +409,12 @@
   // Space tabs (DRY the segmented toggle); each disabled until its map is built.
   const spaceTabs = $derived.by(
     (): { value: AtlasSpace; label: string; disabled: boolean; title: string }[] => [
-      { value: 'text', label: 'Text', disabled: false, title: 'Transcript-semantics map (text_embedding)' },
+      {
+        value: 'text',
+        label: 'Text',
+        disabled: false,
+        title: 'Transcript-semantics map (text_embedding)',
+      },
       {
         value: 'visual',
         label: 'Visual',
@@ -618,10 +632,12 @@
         />
       {/if}
 
-      <AtlasTooltip pts={pts} index={hoverIndex} x={hoverX} y={hoverY} />
+      <AtlasTooltip {pts} index={hoverIndex} x={hoverX} y={hoverY} />
 
       <!-- toolbar -->
-      <div class="absolute left-3 top-3 flex flex-wrap items-center gap-1.5 rounded-md bg-card/85 px-2 py-1 text-[11px] shadow-sm backdrop-blur">
+      <div
+        class="absolute left-3 top-3 flex flex-wrap items-center gap-1.5 rounded-md bg-card/85 px-2 py-1 text-[11px] shadow-sm backdrop-blur"
+      >
         <span class="px-1 text-muted-foreground">{(pts.count ?? 0).toLocaleString()} pts</span>
 
         <!-- projection space (segmented) -->
@@ -629,7 +645,8 @@
           {#each spaceTabs as t (t.value)}
             <button
               type="button"
-              class="px-2 py-0.5 transition-colors disabled:opacity-40 {crossFilter.space === t.value
+              class="px-2 py-0.5 transition-colors disabled:opacity-40 {crossFilter.space ===
+              t.value
                 ? 'bg-secondary text-foreground'
                 : 'text-muted-foreground hover:bg-secondary/50'}"
               disabled={t.disabled}
@@ -668,7 +685,12 @@
         </div>
 
         <!-- colour by -->
-        <Select bind:value={colorByValue} options={colorOptions} class="h-7 w-32" ariaLabel="Colour points by" />
+        <Select
+          bind:value={colorByValue}
+          options={colorOptions}
+          class="h-7 w-32"
+          ariaLabel="Colour points by"
+        />
 
         <!-- display settings (point size, filtered opacity) -->
         <div class="relative">
@@ -696,13 +718,27 @@
                 <span class="mb-1 flex items-center justify-between text-muted-foreground">
                   Point size <span class="font-mono">{pointSize === 0 ? 'auto' : pointSize}</span>
                 </span>
-                <input type="range" min="0" max="8" step="0.5" bind:value={pointSize} class="w-full accent-primary" />
+                <input
+                  type="range"
+                  min="0"
+                  max="8"
+                  step="0.5"
+                  bind:value={pointSize}
+                  class="w-full accent-primary"
+                />
               </label>
               <label class="block">
                 <span class="mb-1 flex items-center justify-between text-muted-foreground">
                   Filtered opacity <span class="font-mono">{filterAlpha}</span>
                 </span>
-                <input type="range" min="0" max="30" step="1" bind:value={filterAlpha} class="w-full accent-primary" />
+                <input
+                  type="range"
+                  min="0"
+                  max="30"
+                  step="1"
+                  bind:value={filterAlpha}
+                  class="w-full accent-primary"
+                />
                 <span class="mt-0.5 block text-[10px] text-muted-foreground/70">
                   How visible search-filtered points are (left = hidden).
                 </span>
@@ -714,9 +750,13 @@
 
       <!-- legend / distribution (clickable → select) -->
       {#if legendMode === 'cluster' && clusterLegend.length}
-        <div class="absolute right-3 top-3 max-h-[60%] w-52 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur">
+        <div
+          class="absolute right-3 top-3 max-h-[60%] w-52 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur"
+        >
           <div class="mb-1 flex items-center gap-2">
-            <span class="font-medium text-muted-foreground">Clusters · {clusterStats.total.toLocaleString()}</span>
+            <span class="font-medium text-muted-foreground"
+              >Clusters · {clusterStats.total.toLocaleString()}</span
+            >
             {#if crossFilter.hiddenClusters.size > 0}
               <button
                 type="button"
@@ -730,7 +770,10 @@
           </div>
           {#each clusterLegend as c (c.id)}
             {@const hidden = crossFilter.hiddenClusters.has(c.id)}
-            <div class="flex w-full items-center gap-1 rounded px-1 py-0.5 hover:bg-secondary/50" class:opacity-40={hidden}>
+            <div
+              class="flex w-full items-center gap-1 rounded px-1 py-0.5 hover:bg-secondary/50"
+              class:opacity-40={hidden}
+            >
               <button
                 type="button"
                 class="flex flex-1 items-center gap-2 text-left"
@@ -739,7 +782,9 @@
               >
                 <span class="size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
                 <span class="text-foreground">#{c.id}</span>
-                <span class="ml-auto font-mono text-muted-foreground">{c.count.toLocaleString()}</span>
+                <span class="ml-auto font-mono text-muted-foreground"
+                  >{c.count.toLocaleString()}</span
+                >
               </button>
               <button
                 type="button"
@@ -767,7 +812,10 @@
                 onclick={() => pickCluster(-1)}
                 title="Select the unclustered (noise) points"
               >
-                <span class="size-2.5 shrink-0 rounded-full" style:background={isDark ? '#52525b' : '#cccccc'}></span>
+                <span
+                  class="size-2.5 shrink-0 rounded-full"
+                  style:background={isDark ? '#52525b' : '#cccccc'}
+                ></span>
                 <span>noise (unclustered)</span>
                 <span class="ml-auto font-mono">{clusterStats.noise.toLocaleString()}</span>
               </button>
@@ -787,8 +835,12 @@
           {/if}
         </div>
       {:else if categoryLegend.length}
-        <div class="absolute right-3 top-3 max-h-[60%] w-60 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur">
-          <div class="mb-1 font-medium text-muted-foreground">{categoryTitle} · {categoryTotal.toLocaleString()}</div>
+        <div
+          class="absolute right-3 top-3 max-h-[60%] w-60 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur"
+        >
+          <div class="mb-1 font-medium text-muted-foreground">
+            {categoryTitle} · {categoryTotal.toLocaleString()}
+          </div>
           {#each categoryLegend as c (c.code)}
             <button
               type="button"
@@ -798,15 +850,21 @@
               title="Select {c.label}"
             >
               <span class="size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
-              <span class="truncate text-foreground" class:uppercase={legendMode === 'language'}>{c.label}</span>
-              <span class="ml-auto shrink-0 font-mono text-muted-foreground">{c.count.toLocaleString()}</span>
+              <span class="truncate text-foreground" class:uppercase={legendMode === 'language'}
+                >{c.label}</span
+              >
+              <span class="ml-auto shrink-0 font-mono text-muted-foreground"
+                >{c.count.toLocaleString()}</span
+              >
             </button>
           {/each}
         </div>
       {/if}
 
       <!-- selection status + actions -->
-      <div class="absolute bottom-3 left-3 flex items-center gap-2 rounded-md bg-card/85 px-2 py-1 text-[11px] shadow-sm backdrop-blur">
+      <div
+        class="absolute bottom-3 left-3 flex items-center gap-2 rounded-md bg-card/85 px-2 py-1 text-[11px] shadow-sm backdrop-blur"
+      >
         {#if tableLoading}
           <Loader2 class="size-3.5 animate-spin text-muted-foreground" />
         {/if}
@@ -828,7 +886,9 @@
           </Button>
         {:else}
           <Lasso class="size-3.5 text-muted-foreground" />
-          <span class="text-muted-foreground">drag to lasso · click a legend to select · click a point to play · scroll to zoom</span>
+          <span class="text-muted-foreground"
+            >drag to lasso · click a legend to select · click a point to play · scroll to zoom</span
+          >
         {/if}
       </div>
     {/if}

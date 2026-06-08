@@ -225,7 +225,13 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       size: byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    dev.queue.writeBuffer(buf, 0, interleaved.buffer, interleaved.byteOffset, interleaved.byteLength);
+    dev.queue.writeBuffer(
+      buf,
+      0,
+      interleaved.buffer,
+      interleaved.byteOffset,
+      interleaved.byteLength,
+    );
     posBuffer = buf;
   }
 
@@ -578,7 +584,7 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     class="absolute inset-0 block touch-none"
     style:width="{width}px"
     style:height="{height}px"
-    style:cursor={cursor}
+    style:cursor
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}

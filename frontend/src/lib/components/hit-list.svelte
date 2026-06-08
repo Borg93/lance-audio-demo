@@ -27,12 +27,7 @@
     <div class="px-4 py-6 text-sm text-muted-foreground">{emptyMessage}</div>
   {:else}
     {#each hits as hit (hitKey(hit))}
-      <HitCard
-        {hit}
-        {query}
-        active={activeKey === hitKey(hit)}
-        onclick={() => onselect?.(hit)}
-      />
+      <HitCard {hit} {query} active={activeKey === hitKey(hit)} onclick={() => onselect?.(hit)} />
     {/each}
   {/if}
 </div>

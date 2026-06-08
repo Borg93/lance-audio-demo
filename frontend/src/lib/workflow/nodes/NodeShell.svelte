@@ -38,12 +38,14 @@
 >
   <div class="flex items-center gap-1.5 border-b border-border px-3 py-1.5">
     <span class="size-2 shrink-0 rounded-full {STATUS_DOT[status]}"></span>
-    <span
-      class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground"
-      title={displayTitle}>{displayTitle}</span
+    <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground" title={displayTitle}
+      >{displayTitle}</span
     >
     {#if !enabled}
-      <span class="shrink-0 rounded bg-muted px-1 text-[9px] tracking-wide text-muted-foreground uppercase">off</span>
+      <span
+        class="shrink-0 rounded bg-muted px-1 text-[9px] tracking-wide text-muted-foreground uppercase"
+        >off</span
+      >
     {/if}
     <button
       class={btn}

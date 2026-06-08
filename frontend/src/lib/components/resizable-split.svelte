@@ -134,9 +134,11 @@
       <span class="size-0.5 rounded-full bg-current"></span>
     </span>
     <!-- Hover tooltip that confirms the affordance -->
-    <span class="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-6 whitespace-nowrap
+    <span
+      class="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-6 whitespace-nowrap
                  rounded border border-border bg-card px-2 py-0.5 text-[10px] text-muted-foreground opacity-0
-                 transition-opacity group-hover:opacity-100">
+                 transition-opacity group-hover:opacity-100"
+    >
       drag to resize
     </span>
   </button>

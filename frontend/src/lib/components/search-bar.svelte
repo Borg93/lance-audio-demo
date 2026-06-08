@@ -120,18 +120,46 @@
 
   // Help popover examples — also reused as plain-language summary copy.
   const examples = {
-    keyword: { label: 'Keyword',  example: 'betänkandet',  explain: 'Match transcripts that CONTAIN your words (in any order). Swedish stemmer also accepts inflections — "betänkandet" finds "betänkande" / "betänkanden" / "betänkandet".' },
-    phrase:  { label: 'Phrase',   example: 'alkoholmonopolets framtid', explain: 'Words must appear in this EXACT order, side by side.' },
-    fuzzy:   { label: 'Fuzzy',    example: 'betänkadet',   explain: 'Like Keyword but allows up to 2 letter typos per word — useful when unsure of spelling.' },
-    meaning: { label: 'Vector',   example: 'klimatkris',   explain: 'Vector search — finds chunks that DISCUSS the topic, even if those exact words aren\'t there. "klimat" can find "miljö" / "ekosystem".' },
-    both:    { label: 'Hybrid',   example: 'regeringens beslut', explain: 'Run Keyword (FTS) AND Vector together, fuse the rankings. Recommended default.' },
-    scene:   { label: 'Scene',    example: 'demonstranter med plakat', explain: 'Searches the AI-written Swedish caption of each video FRAME — finds clips by what is visible on screen, described in words. Complements Image search (which matches raw visuals).' },
+    keyword: {
+      label: 'Keyword',
+      example: 'betänkandet',
+      explain:
+        'Match transcripts that CONTAIN your words (in any order). Swedish stemmer also accepts inflections — "betänkandet" finds "betänkande" / "betänkanden" / "betänkandet".',
+    },
+    phrase: {
+      label: 'Phrase',
+      example: 'alkoholmonopolets framtid',
+      explain: 'Words must appear in this EXACT order, side by side.',
+    },
+    fuzzy: {
+      label: 'Fuzzy',
+      example: 'betänkadet',
+      explain:
+        'Like Keyword but allows up to 2 letter typos per word — useful when unsure of spelling.',
+    },
+    meaning: {
+      label: 'Vector',
+      example: 'klimatkris',
+      explain:
+        'Vector search — finds chunks that DISCUSS the topic, even if those exact words aren\'t there. "klimat" can find "miljö" / "ekosystem".',
+    },
+    both: {
+      label: 'Hybrid',
+      example: 'regeringens beslut',
+      explain: 'Run Keyword (FTS) AND Vector together, fuse the rankings. Recommended default.',
+    },
+    scene: {
+      label: 'Scene',
+      example: 'demonstranter med plakat',
+      explain:
+        'Searches the AI-written Swedish caption of each video FRAME — finds clips by what is visible on screen, described in words. Complements Image search (which matches raw visuals).',
+    },
   } satisfies Record<string, { label: string; example: string; explain: string }>;
 
   /** Placeholder for the single query box (non-hybrid modes). */
   const singlePlaceholder = $derived(
     kind === 'scene'
-      ? 'Describe what\'s on screen…'
+      ? "Describe what's on screen…"
       : kind === 'meaning'
         ? 'Search by meaning…'
         : 'Search transcripts…',
@@ -146,7 +174,8 @@
     }
     if (kind === 'scene') return examples.scene.explain;
     if (kind === 'meaning') return examples.meaning.explain;
-    if (kind === 'both') return `Hybrid — ${examples.keyword.explain} PLUS ${examples.meaning.explain}`;
+    if (kind === 'both')
+      return `Hybrid — ${examples.keyword.explain} PLUS ${examples.meaning.explain}`;
     if (style === 'phrase') return examples.phrase.explain;
     if (style === 'fuzzy') return examples.fuzzy.explain;
     return examples.keyword.explain;
@@ -154,7 +183,13 @@
 </script>
 
 <div class="px-6 py-3" {@attach dropZone}>
-  <form class="flex flex-col gap-2.5" onsubmit={(e) => { e.preventDefault(); submit(); }}>
+  <form
+    class="flex flex-col gap-2.5"
+    onsubmit={(e) => {
+      e.preventDefault();
+      submit();
+    }}
+  >
     <!-- ── Row A: mode + actions ── -->
     <div class="flex flex-wrap items-center gap-2">
       <Select bind:value={kind} options={kindOptions} ariaLabel="Search mode" class="w-32" />
@@ -183,16 +218,31 @@
             (e.currentTarget as HTMLInputElement).value = '';
           }}
         />
-        <SearchSettings bind:resultN bind:rerank bind:rerankN bind:weightPct bind:style bind:sceneMethod {kind} />
+        <SearchSettings
+          bind:resultN
+          bind:rerank
+          bind:rerankN
+          bind:weightPct
+          bind:style
+          bind:sceneMethod
+          {kind}
+        />
         <FilterPopover bind:spec onchange={submit} />
         <HelpPopover
           {examples}
           onpick={(key, ex) => {
-            if (key === 'phrase' || key === 'fuzzy') { kind = 'keyword'; style = key; }
-            else if (key === 'meaning') kind = 'meaning';
+            if (key === 'phrase' || key === 'fuzzy') {
+              kind = 'keyword';
+              style = key;
+            } else if (key === 'meaning') kind = 'meaning';
             else if (key === 'scene') kind = 'scene';
-            else if (key === 'both') { kind = 'both'; style = 'loose'; }
-            else { kind = 'keyword'; style = 'loose'; }
+            else if (key === 'both') {
+              kind = 'both';
+              style = 'loose';
+            } else {
+              kind = 'keyword';
+              style = 'loose';
+            }
             q = ex;
           }}
         />
@@ -234,7 +284,9 @@
     {/if}
 
     {#if imagePreview && imageFile}
-      <div class="flex w-fit items-center gap-2 rounded-md border border-primary bg-primary/10 py-1 pl-1 pr-2">
+      <div
+        class="flex w-fit items-center gap-2 rounded-md border border-primary bg-primary/10 py-1 pl-1 pr-2"
+      >
         <img src={imagePreview} alt="" class="h-12 w-auto rounded-sm object-cover" />
         <span class="max-w-[12rem] truncate text-xs text-foreground" title={imageFile.name}>
           {imageFile.name}

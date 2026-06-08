@@ -53,7 +53,9 @@
   }
 
   function toggleCol(key: string): void {
-    setCols(visibleCols.includes(key) ? visibleCols.filter((k) => k !== key) : [...visibleCols, key]);
+    setCols(
+      visibleCols.includes(key) ? visibleCols.filter((k) => k !== key) : [...visibleCols, key],
+    );
   }
 
   function onSelectionHits(hits: Hit[], total: number): void {
@@ -75,7 +77,7 @@
       <!-- top: map | player -->
       <ResizableSplit storageKey="raudio-atlas-split" minLeft={420} minRight={320} initial={0.66}>
         {#snippet left()}
-          <AtlasMap bind:active onSelectionHits={onSelectionHits} />
+          <AtlasMap bind:active {onSelectionHits} />
         {/snippet}
         {#snippet right()}
           <div class="h-full min-h-0 bg-muted/30">
@@ -100,7 +102,9 @@
               {/if}
             </span>
           {:else}
-            <span class="text-muted-foreground">lasso a region, or click a legend, to list its chunks</span>
+            <span class="text-muted-foreground"
+              >lasso a region, or click a legend, to list its chunks</span
+            >
           {/if}
 
           <!-- column picker -->
@@ -149,7 +153,13 @@
 
         <div class="min-h-0 flex-1 overflow-auto">
           {#if tableHits.length}
-            <HitTable hits={tableHits} {active} visible={visibleCols} query="" onselect={(h) => (active = h)} />
+            <HitTable
+              hits={tableHits}
+              {active}
+              visible={visibleCols}
+              query=""
+              onselect={(h) => (active = h)}
+            />
           {/if}
         </div>
       </div>

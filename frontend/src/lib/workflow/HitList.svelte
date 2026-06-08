@@ -40,7 +40,8 @@
             const img = e.currentTarget as HTMLImageElement;
             if (img.dataset.fallback) return;
             img.dataset.fallback = '1';
-            img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+            img.src =
+              'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
           }}
         />
         <span
@@ -51,7 +52,9 @@
       </div>
       <div class="min-w-0">
         {#if h.namn}
-          <div class="truncate text-[10px] font-medium text-foreground" title={h.namn}>{h.namn}</div>
+          <div class="truncate text-[10px] font-medium text-foreground" title={h.namn}>
+            {h.namn}
+          </div>
         {/if}
         <div class="line-clamp-2 text-[10px] text-muted-foreground">{h.text}</div>
       </div>

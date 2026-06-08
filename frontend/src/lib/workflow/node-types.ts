@@ -8,10 +8,10 @@ import CombineNode from './nodes/CombineNode.svelte';
 import ResultsNode from './nodes/ResultsNode.svelte';
 
 export const nodeTypes: NodeTypes = {
-    query: QueryNode,
-    image: ImageNode,
-    filter: FilterNode,
-    search: SearchNode,
-    combine: CombineNode,
-    results: ResultsNode,
+  query: QueryNode,
+  image: ImageNode,
+  filter: FilterNode,
+  search: SearchNode,
+  combine: CombineNode,
+  results: ResultsNode,
 };

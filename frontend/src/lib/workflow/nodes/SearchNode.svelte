@@ -51,7 +51,9 @@
         class="{FIELD_CLASS} w-16"
         value={cfg.n}
         oninput={(e) =>
-          graph.setConfig(id, { n: Math.max(1, Math.min(100, Number(e.currentTarget.value) || 24)) })}
+          graph.setConfig(id, {
+            n: Math.max(1, Math.min(100, Number(e.currentTarget.value) || 24)),
+          })}
       />
       <label class="nodrag ml-auto flex items-center gap-1.5 text-[10px] text-muted-foreground">
         <input type="checkbox" bind:checked={cfg.rerank} />

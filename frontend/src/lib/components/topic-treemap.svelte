@@ -45,7 +45,10 @@
   /** Drop the noise bucket (recursively) so real topics fill the canvas. */
   function pruneNoise(node: TopicNode): TopicNode {
     if (!node.children) return node;
-    return { ...node, children: node.children.filter((c) => c.name !== noiseLabel).map(pruneNoise) };
+    return {
+      ...node,
+      children: node.children.filter((c) => c.name !== noiseLabel).map(pruneNoise),
+    };
   }
 
   const displayData = $derived(showNoise ? current : pruneNoise(current));
@@ -108,7 +111,9 @@
 
 <div class="flex h-full w-full flex-col">
   <!-- Breadcrumb + view/noise controls -->
-  <div class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-4 py-2 text-xs">
+  <div
+    class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-4 py-2 text-xs"
+  >
     {#each path as node, i (i)}
       {#if i > 0}<ChevronRight class="size-3 text-muted-foreground/50" />{/if}
       <button
@@ -123,7 +128,8 @@
       </button>
     {/each}
     <span class="ml-1 text-muted-foreground/70">
-      · {fmt(root.value ?? 0)} chunks{#if hiddenCount > 0} · noise hidden: {fmt(hiddenCount)}{/if}
+      · {fmt(root.value ?? 0)} chunks{#if hiddenCount > 0}
+        · noise hidden: {fmt(hiddenCount)}{/if}
     </span>
 
     <div class="ml-auto flex items-center gap-2">
@@ -182,7 +188,9 @@
         <Treemap hierarchy={root} {...pad}>
           {#snippet children({ nodes }: { nodes: HierarchyRectangularNode<TopicNode>[] })}
             {@const visible =
-              view === 'nested' ? nodes.filter((n) => n.depth >= 1) : nodes.filter((n) => n.depth === 1)}
+              view === 'nested'
+                ? nodes.filter((n) => n.depth >= 1)
+                : nodes.filter((n) => n.depth === 1)}
             {#each visible as node, i (i)}
               {@const w = node.x1 - node.x0}
               {@const h = node.y1 - node.y0}

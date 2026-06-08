@@ -16,10 +16,17 @@
     <div class="flex flex-col gap-2">
       <div>
         <label class="mb-1 block text-[10px] text-muted-foreground" for="lang-{id}">Language</label>
-        <input id="lang-{id}" class="{FIELD_CLASS} w-full" placeholder="e.g. sv" bind:value={cfg.language} />
+        <input
+          id="lang-{id}"
+          class="{FIELD_CLASS} w-full"
+          placeholder="e.g. sv"
+          bind:value={cfg.language}
+        />
       </div>
       <div>
-        <label class="mb-1 block text-[10px] text-muted-foreground" for="namn-{id}">Name (namn)</label>
+        <label class="mb-1 block text-[10px] text-muted-foreground" for="namn-{id}"
+          >Name (namn)</label
+        >
         <input
           id="namn-{id}"
           class="{FIELD_CLASS} w-full"
@@ -28,7 +35,9 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-[10px] text-muted-foreground" for="where-{id}">SQL where</label>
+        <label class="mb-1 block text-[10px] text-muted-foreground" for="where-{id}"
+          >SQL where</label
+        >
         <input
           id="where-{id}"
           class="{FIELD_CLASS} w-full font-mono"

@@ -22,7 +22,10 @@
   <div
     bind:this={ref}
     data-slot="sidebar"
-    class={cn('bg-sidebar text-sidebar-foreground flex h-full w-(--sidebar-width) flex-col', className)}
+    class={cn(
+      'bg-sidebar text-sidebar-foreground flex h-full w-(--sidebar-width) flex-col',
+      className,
+    )}
     {...restProps}
   >
     {@render children?.()}

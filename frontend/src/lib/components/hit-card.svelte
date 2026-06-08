@@ -51,7 +51,9 @@
           }}
         />
       {/if}
-      <span class="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-white">
+      <span
+        class="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-white"
+      >
         {fmtTime(hit.start)}
       </span>
     </div>
@@ -110,7 +112,9 @@
     </div>
 
     <div class="min-w-0 flex-1 space-y-0.5">
-      <div class="line-clamp-2 text-sm font-semibold leading-snug [overflow-wrap:anywhere]">{title}</div>
+      <div class="line-clamp-2 text-sm font-semibold leading-snug [overflow-wrap:anywhere]">
+        {title}
+      </div>
       <div class="font-mono text-[11px] text-muted-foreground">
         {fmtTime(hit.start)} → {fmtTime(hit.end)}
         {#if hit.language}· {hit.language}{/if}

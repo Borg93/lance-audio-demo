@@ -52,8 +52,16 @@
   ];
   // How the Scene kind searches the frame caption: by meaning (vector) or words (BM25).
   const sceneOptions: RadioOption[] = [
-    { value: 'vector', label: 'Meaning', description: 'Vector search over the caption — semantically similar scenes.' },
-    { value: 'fts', label: 'Keyword', description: 'BM25 over the caption text — exact Swedish words in the scene description.' },
+    {
+      value: 'vector',
+      label: 'Meaning',
+      description: 'Vector search over the caption — semantically similar scenes.',
+    },
+    {
+      value: 'fts',
+      label: 'Keyword',
+      description: 'BM25 over the caption text — exact Swedish words in the scene description.',
+    },
   ];
 
   // Balance is stored as weightPct ∈ [0,100] | null (null = parameter-free RRF).
@@ -92,7 +100,12 @@
       class="z-50 flex w-[320px] flex-col gap-3 rounded-md border border-border bg-card p-4 text-xs shadow-md"
     >
       <Field label="Results to return" inline>
-        <Select bind:value={resultN} options={resultOptions} ariaLabel="Results to return" class="w-24" />
+        <Select
+          bind:value={resultN}
+          options={resultOptions}
+          ariaLabel="Results to return"
+          class="w-24"
+        />
       </Field>
 
       <Field label="Rerank results" inline>
@@ -104,7 +117,12 @@
           description="Cross-encoder re-scores this many top results (the rest keep their order). Smaller = faster, more precise head."
           inline
         >
-          <Select bind:value={rerankN} options={rerankOptions} ariaLabel="Rerank candidates" class="w-24" />
+          <Select
+            bind:value={rerankN}
+            options={rerankOptions}
+            ariaLabel="Rerank candidates"
+            class="w-24"
+          />
         </Field>
       {/if}
 
