@@ -37,6 +37,11 @@
    */
   $effect(() => {
     if (!scrollContainer || !media) return;
+    // Snapshot the element for this run. `media` is a prop (a live getter), so
+    // reading it in cleanup could see a newer/null value and detach from the
+    // wrong element (or null-deref). Capture once → add, remove, and the RAF
+    // tick all act on the same element. Mirrors player-pane's `const el`.
+    const el = media;
 
     type Ref = { el: HTMLElement; start: number; end: number };
     const wordMap: Ref[] = [];
@@ -80,8 +85,7 @@
     let prevSent: HTMLElement | null = null;
 
     function refresh() {
-      if (!media) return;
-      const t = media.currentTime;
+      const t = el.currentTime;
       const w = find(wordMap, t);
       if (w !== null && w.el !== prevWord) {
         prevWord?.classList.remove('cursor-word');
@@ -105,15 +109,15 @@
       rafId = requestAnimationFrame(tick);
     }
 
-    media.addEventListener('seeked', refresh);
-    media.addEventListener('timeupdate', refresh);
+    el.addEventListener('seeked', refresh);
+    el.addEventListener('timeupdate', refresh);
     rafId = requestAnimationFrame(tick);
     refresh();
 
     return () => {
       cancelAnimationFrame(rafId);
-      media.removeEventListener('seeked', refresh);
-      media.removeEventListener('timeupdate', refresh);
+      el.removeEventListener('seeked', refresh);
+      el.removeEventListener('timeupdate', refresh);
       prevWord?.classList.remove('cursor-word');
       prevSent?.classList.remove('cursor-sentence');
     };

@@ -125,10 +125,22 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
 }
 `;
 
-  async function initGpu(canvas: HTMLCanvasElement): Promise<boolean> {
+  type GpuHandles = {
+    device: GPUDevice;
+    ctx: GPUCanvasContext;
+    pipeline: GPURenderPipeline;
+    uniformBuffer: GPUBuffer;
+    uniformBindGroup: GPUBindGroup;
+  };
+
+  // Returns the freshly-created handles WITHOUT writing the shared refs. The
+  // caller assigns them only if its effect wasn't torn down mid-await; otherwise
+  // it destroys the device — so an unmount during requestAdapter/requestDevice
+  // can't orphan a live GPUDevice that nothing destroys.
+  async function initGpu(canvas: HTMLCanvasElement): Promise<GpuHandles | null> {
     if (!navigator.gpu) {
       gpuError = 'WebGPU is required (not available in this browser)';
-      return false;
+      return null;
     }
     let adapter: GPUAdapter | null = null;
     try {
@@ -138,19 +150,19 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     }
     if (!adapter) {
       gpuError = 'WebGPU is required (not available in this browser)';
-      return false;
+      return null;
     }
     let dev: GPUDevice;
     try {
       dev = await adapter.requestDevice();
     } catch {
       gpuError = 'WebGPU is required (not available in this browser)';
-      return false;
+      return null;
     }
     const context = canvas.getContext('webgpu');
     if (!context) {
       gpuError = 'WebGPU is required (not available in this browser)';
-      return false;
+      return null;
     }
     const fmt = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device: dev, format: fmt, alphaMode: 'premultiplied' });
@@ -199,13 +211,7 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       entries: [{ binding: 0, resource: { buffer: ubo } }],
     });
 
-    device = dev;
-    ctx = context;
-    pipeline = pl;
-    uniformBuffer = ubo;
-    uniformBindGroup = bindGroup;
-    ready = true;
-    return true;
+    return { device: dev, ctx: context, pipeline: pl, uniformBuffer: ubo, uniformBindGroup: bindGroup };
   }
 
   // ── data → GPU buffers ────────────────────────────────────────────────────
@@ -347,8 +353,21 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     if (!canvas) return;
     let cancelled = false;
     (async () => {
-      const ok = await initGpu(canvas);
-      if (cancelled || !ok) return;
+      const h = await initGpu(canvas);
+      if (!h) return; // init failed — gpuError is set, nothing to clean up
+      if (cancelled) {
+        // Torn down while requestAdapter/requestDevice was still pending:
+        // destroy the just-created device rather than orphaning it (the
+        // cleanup below already ran with the refs still null).
+        h.device.destroy();
+        return;
+      }
+      device = h.device;
+      ctx = h.ctx;
+      pipeline = h.pipeline;
+      uniformBuffer = h.uniformBuffer;
+      uniformBindGroup = h.uniformBindGroup;
+      ready = true;
       uploadPositions();
       uploadColors();
       lastXY = x;
