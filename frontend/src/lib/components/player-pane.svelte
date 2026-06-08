@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type Hit, type Alignment, getChunkAlignments, mediaUrl } from '$lib/api';
   import { fmtTime } from '$lib/utils';
-  import { Maximize2, Minimize2 } from 'lucide-svelte';
+  import { Captions, Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptHighlighter from './transcript-highlighter.svelte';
 
   type Props = {
@@ -151,24 +151,18 @@
   {#if !hit}
     <div class="m-auto text-sm text-muted-foreground">Click a hit to play.</div>
   {:else}
-    <!-- ONE unified "player with transcript" card. The wrapper's overflow-hidden
-         clips the flush video at the top; the transcript sits directly below,
-         separated by a divider. In fullscreen we fullscreen THIS wrapper so the
-         transcript can overlay the video as a bottom strip. -->
-    <div
-      bind:this={fsWrap}
-      class={isFullscreen
-        ? 'relative flex min-h-0 flex-col bg-black'
-        : 'relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card'}
-    >
-      <!-- Custom fullscreen toggle (top-right). Native video fullscreen still
-           works via the controls; this one keeps the transcript overlaid. -->
+    <!-- ONE media component: the video and its synced transcript live in a
+         single card, bridged by a slim "Transcript" bar that also carries the
+         fullscreen toggle (off the video, so nothing covers it). In fullscreen
+         we fullscreen THIS wrapper so the transcript can overlay the video as a
+         centred caption band. -->
+    {#snippet fsToggle(cls: string)}
       <button
         type="button"
         onclick={toggleFullscreen}
-        title="Fullscreen with transcript"
-        aria-label="Fullscreen with transcript"
-        class="absolute right-2 top-2 z-10 rounded-md bg-black/50 p-1.5 text-white/90 backdrop-blur transition-colors hover:bg-black/70 hover:text-white"
+        title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen with transcript'}
+        aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen with transcript'}
+        class={cls}
       >
         {#if isFullscreen}
           <Minimize2 class="size-4" />
@@ -176,6 +170,19 @@
           <Maximize2 class="size-4" />
         {/if}
       </button>
+    {/snippet}
+
+    <div
+      bind:this={fsWrap}
+      class={isFullscreen
+        ? 'relative flex min-h-0 flex-col bg-black'
+        : 'relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm'}
+    >
+      {#if isFullscreen}
+        {@render fsToggle(
+          'absolute right-2 top-2 z-10 rounded-md bg-black/50 p-1.5 text-white/90 backdrop-blur transition-colors hover:bg-black/70 hover:text-white',
+        )}
+      {/if}
 
       <!-- 16:9 box sized from the pane WIDTH (not height) so the video stays
            visible even when the pane is dragged short. In fullscreen it fills
@@ -183,6 +190,7 @@
       <video
         bind:this={mediaEl}
         controls
+        controlslist="nofullscreen"
         preload="auto"
         src={mediaUrl(hit.doc_id)}
         class={isFullscreen
@@ -192,12 +200,27 @@
         <track kind="captions" />
       </video>
 
-      <!-- Transcript. Normal: flows below the video inside the card, scrolls.
-           Fullscreen: absolute bottom overlay strip with a readable scrim. -->
+      {#if !isFullscreen}
+        <!-- Bridge bar: ties the video to its transcript and holds the
+             fullscreen toggle (kept off the video so nothing covers it). -->
+        <div
+          class="flex items-center gap-1.5 border-t border-border/70 px-3 py-1.5 text-xs font-medium text-muted-foreground"
+        >
+          <Captions class="size-3.5" />
+          <span>Transcript</span>
+          {@render fsToggle(
+            'ml-auto rounded p-1 transition-colors hover:bg-secondary hover:text-foreground',
+          )}
+        </div>
+      {/if}
+
+      <!-- Transcript body. Normal: scrolls below the bar inside the card.
+           Fullscreen: a centred caption band lifted ABOVE the native control bar
+           (bottom-20) so it never covers the play button. -->
       <div
         class={isFullscreen
-          ? 'absolute inset-x-0 bottom-0 max-h-[36%] overflow-y-auto bg-gradient-to-t from-black/85 via-black/60 to-transparent px-6 pb-6 pt-10 text-lg leading-8 text-white'
-          : 'min-h-0 flex-1 overflow-y-auto border-t border-border text-sm leading-7'}
+          ? 'absolute inset-x-0 bottom-20 mx-auto max-h-[32%] w-[min(92%,60rem)] overflow-y-auto rounded-xl bg-black/55 px-6 py-4 text-center text-lg leading-8 text-white backdrop-blur-sm'
+          : 'min-h-0 flex-1 overflow-y-auto text-sm leading-7'}
       >
         <TranscriptHighlighter {alignments} media={mediaEl} {query} chrome={false} />
       </div>
