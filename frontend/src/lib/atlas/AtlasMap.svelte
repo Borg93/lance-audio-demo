@@ -29,11 +29,21 @@
   } from '$lib/api';
   import { crossFilter, buildKeyIndex, hitKey, type ColorBy } from './cross-filter.svelte';
   import { buildGrid, nearestIndex, type SpatialGrid } from './atlas-grid';
-  import { hexToRgb, hueRgb, hueCss, buildHuePalette, type Rgb } from './atlas-colors';
+  import { hexToRgb, hueRgb, buildHuePalette, type Rgb } from './atlas-colors';
   import { indicesInPolygon, type Pt } from './atlas-geometry';
   import AtlasTooltip from './AtlasTooltip.svelte';
+  import AtlasLegend from './AtlasLegend.svelte';
+  import {
+    visibleIds,
+    buildClusterLegend,
+    clusterStats as buildClusterStats,
+    buildCategoryLegend,
+    categoryTitle as deriveCategoryTitle,
+    type CategoryChannel,
+    type ClusterRanking,
+  } from './atlas-legend';
   import { Button, Select, type SelectOption } from '$lib/components/ui';
-  import { Loader2, Lasso, X, Eye, EyeOff, Hand, Settings2 } from 'lucide-svelte';
+  import { Loader2, Lasso, X, Hand, Settings2 } from 'lucide-svelte';
 
   let {
     active = $bindable(null),
@@ -63,7 +73,7 @@
   let captionBuilt = $state(false); // whether atlas_cap_* exists (gates the toggle)
 
   let pointSize = $state(0); // 0 = auto
-  let filterAlpha = $state(8); // 0..120 — opacity of search-filtered-out points (toolbar "filtered" slider)
+  let filterAlpha = $state(8); // 0..120 — opacity of EXCLUDED points (search-filtered OR lasso-not-selected)
   let selectionCount = $state(0);
   let tableLoading = $state(false);
   let mode = $state<'lasso' | 'pan'>('lasso');
@@ -156,7 +166,6 @@
   const ACCENT_RGB = $derived(hueRgb(1, 4, isDark));
   const BG_COLOR = $derived(isDark ? '#0a0a0a' : '#ffffff');
 
-  const DIM_ALPHA = 30; // selection-dimmed (lasso context): faint but present
   const NOISE_ALPHA = 70; // HDBSCAN noise: muted so coloured clusters dominate
 
   /**
@@ -164,21 +173,18 @@
    * (0..distinct-1, or -1 for the small-cluster tail beyond MAX_DISTINCT).
    * `distinct` is how many distinct cluster hues we emit.
    */
-  const clusterRanking = $derived.by(
-    (): { slotOf: Map<number, number>; distinct: number } | null => {
-      const cl = pts?.cluster;
-      if (!cl) return null;
-      const counts = new Map<number, number>();
-      for (const c of cl) if (c >= 0) counts.set(c, (counts.get(c) ?? 0) + 1);
-      const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-      const distinct = Math.min(ranked.length, MAX_DISTINCT);
-      const slotOf = new Map<number, number>();
-      ranked.forEach(([id], rank) => slotOf.set(id, rank < MAX_DISTINCT ? rank : -1));
-      return { slotOf, distinct };
-    },
-  );
+  const clusterRanking = $derived.by((): ClusterRanking | null => {
+    const cl = pts?.cluster;
+    if (!cl) return null;
+    const counts = new Map<number, number>();
+    for (const c of cl) if (c >= 0) counts.set(c, (counts.get(c) ?? 0) + 1);
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    const distinct = Math.min(ranked.length, MAX_DISTINCT);
+    const slotOf = new Map<number, number>();
+    ranked.forEach(([id], rank) => slotOf.set(id, rank < MAX_DISTINCT ? rank : -1));
+    return { slotOf, distinct };
+  });
 
-  type CategoryChannel = { codes: readonly number[]; labels: readonly string[] };
   /** The factorized (codes, labels) pair backing a categorical colour mode.
    *  `cluster` is NOT here — it has its own noise/#id/hide semantics. */
   function channelFor(p: AtlasPoints | null, mode: ColorBy): CategoryChannel | null {
@@ -209,14 +215,15 @@
     const buf = new Uint8Array(n * 4);
 
     // Read both cross-filter Sets once (tracks them as deps + avoids 145k method
-    // calls). A search miss ghosts a point harder than a selection miss, so a
-    // handful of search hits stand out against the whole corpus.
+    // calls). A point EXCLUDED by either the search filter or the lasso/cluster
+    // selection fades to the slider-controlled `filterAlpha`, so the "Dimmed
+    // opacity" slider governs how visible excluded points are in BOTH contexts.
     const fIds = crossFilter.filteredIds;
     const sel = crossFilter.selectedIds;
     const alphaFor = (i: number, base: number): number => {
-      if (fIds !== null && !fIds.has(i)) return filterAlpha;
-      if (sel.size > 0 && !sel.has(i)) return DIM_ALPHA;
-      return base;
+      const filteredOut = fIds !== null && !fIds.has(i);
+      const notSelected = sel.size > 0 && !sel.has(i);
+      return filteredOut || notSelected ? filterAlpha : base;
     };
 
     if (colorBy === 'cluster' && p.cluster) {
@@ -304,125 +311,24 @@
   });
 
   // ── filter-aware legend counts ────────────────────────────────────────────
-  // The legends summarise WHAT'S IN VIEW, not the whole corpus: with a search
-  // filter and/or a lasso selection active, counts + bars are tallied over the
-  // intersection of those index sets (null ⇒ nothing active ⇒ every point).
-  const visibleIds = $derived.by((): Set<number> | null => {
-    const f = crossFilter.filteredIds;
-    const s = crossFilter.hasSelection ? crossFilter.selectedIds : null;
-    if (f && s) {
-      const [small, big] = f.size <= s.size ? [f, s] : [s, f];
-      const both = new Set<number>();
-      for (const i of small) if (big.has(i)) both.add(i);
-      return both;
-    }
-    return f ?? s ?? null;
-  });
-  const legendFiltered = $derived(visibleIds !== null);
-
-  /** Tally code[i] over the visible indices (or every point when null). */
-  function tally(codes: readonly number[], visible: Set<number> | null): Map<number, number> {
-    const counts = new Map<number, number>();
-    if (visible) {
-      for (const i of visible) {
-        const code = codes[i];
-        if (code !== undefined) counts.set(code, (counts.get(code) ?? 0) + 1);
-      }
-    } else {
-      for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
-    }
-    return counts;
-  }
-
-  /** Largest value (≥1) — normalises the distribution bars. */
-  function maxCount(values: Iterable<number>): number {
-    let max = 1;
-    for (const v of values) if (v > max) max = v;
-    return max;
-  }
-
-  // ── legends (clickable → selectCluster / language facet) ──────────────────
-  // Legend swatches read the SAME hslToRgb hues the map uses, so a swatch can
-  // never disagree with its points. Counts + bars reflect `visibleIds`.
-  type ClusterLegendRow = { id: number; color: string; count: number; frac: number };
-  const clusterLegend = $derived.by((): ClusterLegendRow[] => {
-    const p = pts;
-    const r = clusterRanking;
-    if (!p?.cluster || !r) return [];
-    const { slotOf, distinct } = r;
-    const rows = [...tally(p.cluster, visibleIds).entries()].filter(([id]) => id >= 0);
-    const max = maxCount(rows.map(([, count]) => count));
-    return rows
-      .map(([id, count]) => {
-        const rank = slotOf.get(id) ?? -1;
-        const color =
-          rank < 0 ? (isDark ? '#71717a' : '#a1a1aa') : hueCss(rank + 1, distinct + 1, isDark);
-        return { id, color, count, frac: count / max };
-      })
-      .sort((a, b) => b.count - a.count);
-  });
-
-  /** Distinct non-noise cluster count + noise (unclustered) point count — for
-   *  the legend's "showing X of Y" line and the noise summary row. */
-  const clusterStats = $derived.by((): { total: number; noise: number } => {
-    const cl = pts?.cluster;
-    if (!cl) return { total: 0, noise: 0 };
-    let total = 0;
-    let noise = 0;
-    for (const [id, count] of tally(cl, visibleIds)) {
-      if (id < 0) noise += count;
-      else total++;
-    }
-    return { total, noise };
-  });
-
-  type CategoryLegendRow = {
-    code: number;
-    label: string;
-    color: string;
-    count: number;
-    frac: number;
-    empty: boolean;
-  };
-  /** Legend rows for the active categorical colour mode (language / topic /
-   *  doc_topic) — same hues the map uses, clickable to select that category. */
-  const categoryLegend = $derived.by((): CategoryLegendRow[] => {
-    const ch = channelFor(pts, crossFilter.colorBy);
-    if (!ch) return [];
-    const { codes, labels } = ch;
-    const distinct = Math.min(MAX_DISTINCT, labels.length);
-    const grey = isDark ? '#71717a' : '#a1a1aa';
-    const noiseCss = isDark ? '#52525b' : '#cccccc';
-    const counts = tally(codes, visibleIds);
-    const max = maxCount(counts.values());
-    return [...counts.entries()]
-      .map(([code, count]) => {
-        const raw = labels[code] ?? '';
-        const empty = raw === '';
-        return {
-          code,
-          count,
-          empty,
-          frac: count / max,
-          label: empty ? '(ej klustrad)' : raw,
-          color: empty ? noiseCss : code < distinct ? hueCss(code + 1, distinct + 1, isDark) : grey,
-        };
-      })
-      .sort((a, b) => b.count - a.count);
-  });
-
-  const categoryTotal = $derived(channelFor(pts, crossFilter.colorBy)?.labels.length ?? 0);
-  const categoryTitle = $derived(
-    crossFilter.colorBy === 'language'
-      ? 'Languages'
-      : crossFilter.colorBy === 'topic'
-        ? 'Topics'
-        : crossFilter.colorBy === 'doc_topic'
-          ? 'Video topics'
-          : crossFilter.colorBy === 'doc'
-            ? 'Videos'
-            : '',
+  // The legend math is PURE (./atlas-legend, unit-testable): these thin deriveds
+  // resolve the reactive store reads (filtered/selected sets, colorBy, theme),
+  // the channel + ranking, and hand them to the builders. The presentational
+  // <AtlasLegend/> renders the rows — it computes nothing.
+  const visible = $derived(
+    visibleIds(crossFilter.filteredIds, crossFilter.hasSelection ? crossFilter.selectedIds : null),
   );
+  const legendFiltered = $derived(visible !== null);
+  const clusterRows = $derived(
+    pts?.cluster && clusterRanking
+      ? buildClusterLegend(pts.cluster, clusterRanking, visible, isDark)
+      : [],
+  );
+  const clusterStatsValue = $derived(buildClusterStats(pts?.cluster, visible));
+  const categoryChannel = $derived(channelFor(pts, crossFilter.colorBy));
+  const categoryRows = $derived(buildCategoryLegend(categoryChannel, visible, isDark, MAX_DISTINCT));
+  const categoryTotal = $derived(categoryChannel?.labels.length ?? 0);
+  const categoryTitleValue = $derived(deriveCategoryTitle(crossFilter.colorBy));
 
   // Topic modes appear only once the columns are built (factorized into the
   // points payload); cluster + none are always available.
@@ -770,7 +676,7 @@
               </label>
               <label class="block">
                 <span class="mb-1 flex items-center justify-between text-muted-foreground">
-                  Filtered opacity <span class="font-mono">{filterAlpha}</span>
+                  Dimmed opacity <span class="font-mono">{filterAlpha}</span>
                 </span>
                 <input
                   type="range"
@@ -781,7 +687,8 @@
                   class="w-full accent-primary"
                 />
                 <span class="mt-0.5 block text-[10px] text-muted-foreground/70">
-                  How visible search-filtered points are (left = hidden).
+                  How visible excluded points are — search-filtered or not in the
+                  lasso/cluster selection (left = hidden).
                 </span>
               </label>
             </div>
@@ -790,131 +697,21 @@
       </div>
 
       <!-- legend / distribution (clickable → select) -->
-      {#if legendMode === 'cluster' && clusterLegend.length}
-        <div
-          class="absolute right-3 top-3 max-h-[60%] w-52 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur"
-        >
-          <div class="mb-1 flex items-center gap-2">
-            <span class="font-medium text-muted-foreground"
-              >Clusters · {clusterStats.total.toLocaleString()}</span
-            >
-            {#if crossFilter.hiddenClusters.size > 0}
-              <button
-                type="button"
-                class="ml-auto rounded px-1 py-0.5 text-primary hover:bg-secondary/50"
-                onclick={() => crossFilter.showAllClusters()}
-                title="Show all hidden clusters"
-              >
-                Show all
-              </button>
-            {/if}
-          </div>
-          {#each clusterLegend as c (c.id)}
-            {@const hidden = crossFilter.hiddenClusters.has(c.id)}
-            <div
-              class="relative flex w-full items-center gap-1 overflow-hidden rounded px-1 py-0.5 hover:bg-secondary/50"
-              class:opacity-40={hidden}
-            >
-              <span
-                class="pointer-events-none absolute inset-y-0 left-0 rounded-sm"
-                style:width="{(c.frac * 100).toFixed(1)}%"
-                style:background={c.color}
-                style:opacity="0.16"
-              ></span>
-              <button
-                type="button"
-                class="relative flex flex-1 items-center gap-2 text-left"
-                onclick={() => pickCluster(c.id)}
-                title="Select cluster #{c.id}"
-              >
-                <span class="size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
-                <span class="text-foreground">#{c.id}</span>
-                <span class="ml-auto font-mono text-muted-foreground"
-                  >{c.count.toLocaleString()}</span
-                >
-              </button>
-              <button
-                type="button"
-                class="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
-                onclick={() => crossFilter.toggleClusterHidden(c.id)}
-                title={hidden ? 'Show cluster on map' : 'Hide cluster on map'}
-              >
-                {#if hidden}
-                  <EyeOff class="size-3.5" />
-                {:else}
-                  <Eye class="size-3.5" />
-                {/if}
-              </button>
-            </div>
-          {/each}
-          {#if clusterStats.noise > 0}
-            {@const noiseHidden = crossFilter.hiddenClusters.has(-1)}
-            <div
-              class="mt-1 flex w-full items-center gap-1 rounded border-t border-border/60 px-1 pt-1 hover:bg-secondary/50"
-              class:opacity-40={noiseHidden}
-            >
-              <button
-                type="button"
-                class="flex flex-1 items-center gap-2 text-left text-muted-foreground"
-                onclick={() => pickCluster(-1)}
-                title="Select the unclustered (noise) points"
-              >
-                <span
-                  class="size-2.5 shrink-0 rounded-full"
-                  style:background={isDark ? '#52525b' : '#cccccc'}
-                ></span>
-                <span>noise (unclustered)</span>
-                <span class="ml-auto font-mono">{clusterStats.noise.toLocaleString()}</span>
-              </button>
-              <button
-                type="button"
-                class="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
-                onclick={() => crossFilter.toggleClusterHidden(-1)}
-                title={noiseHidden ? 'Show noise on map' : 'Hide noise on map'}
-              >
-                {#if noiseHidden}
-                  <EyeOff class="size-3.5" />
-                {:else}
-                  <Eye class="size-3.5" />
-                {/if}
-              </button>
-            </div>
-          {/if}
-        </div>
-      {:else if categoryLegend.length}
-        <div
-          class="absolute right-3 top-3 max-h-[60%] w-60 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur"
-        >
-          <div class="mb-1 font-medium text-muted-foreground">
-            {categoryTitle} · {legendFiltered
-              ? `${categoryLegend.length} of ${categoryTotal.toLocaleString()}`
-              : categoryTotal.toLocaleString()}
-          </div>
-          {#each categoryLegend as c (c.code)}
-            <button
-              type="button"
-              class="relative flex w-full items-center gap-2 overflow-hidden rounded px-1 py-0.5 text-left hover:bg-secondary/50"
-              class:opacity-60={c.empty}
-              onclick={() => pickCategory(c.code)}
-              title="Select {c.label}"
-            >
-              <span
-                class="pointer-events-none absolute inset-y-0 left-0 rounded-sm"
-                style:width="{(c.frac * 100).toFixed(1)}%"
-                style:background={c.color}
-                style:opacity="0.16"
-              ></span>
-              <span class="relative size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
-              <span class="relative truncate text-foreground" class:uppercase={legendMode === 'language'}
-                >{c.label}</span
-              >
-              <span class="relative ml-auto shrink-0 font-mono text-muted-foreground"
-                >{c.count.toLocaleString()}</span
-              >
-            </button>
-          {/each}
-        </div>
-      {/if}
+      <AtlasLegend
+        {legendMode}
+        {clusterRows}
+        {categoryRows}
+        clusterStats={clusterStatsValue}
+        categoryTitle={categoryTitleValue}
+        {categoryTotal}
+        {legendFiltered}
+        hiddenClusters={crossFilter.hiddenClusters}
+        {isDark}
+        onPickCluster={pickCluster}
+        onPickCategory={pickCategory}
+        onToggleClusterHidden={(id) => crossFilter.toggleClusterHidden(id)}
+        onShowAllClusters={() => crossFilter.showAllClusters()}
+      />
 
       <!-- selection status + actions -->
       <div
