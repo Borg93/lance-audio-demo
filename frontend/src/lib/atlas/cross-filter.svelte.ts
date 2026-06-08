@@ -51,6 +51,11 @@ export function buildKeyIndex(
 // shape must stay in lock-step with `buildKeyIndex` above.
 export { hitKey };
 
+/** Shared sentinel for colour modes with nothing hidden. The store always
+ *  reassigns the Map (never this Set), so a plain frozen-by-contract empty Set
+ *  is safe to hand out — callers only ever read `.size` / `.has`. */
+const EMPTY: ReadonlySet<number> = new Set<number>();
+
 class CrossFilter {
   /** Point indices the user picked on the map (untruncated — drives dimming). */
   selectedIds = $state<Set<number>>(new Set());
@@ -60,8 +65,9 @@ class CrossFilter {
   space = $state<AtlasSpace>('text');
   /** Colour channel for the scatter. */
   colorBy = $state<ColorBy>('cluster');
-  /** Cluster ids the user has hidden via the legend (recoloured to background). */
-  hiddenClusters = $state<Set<number>>(new Set());
+  /** Per-colour-mode hidden codes (a code only means something within its own
+   *  colour channel). Keyed by ColorBy; recoloured to background on the map. */
+  hiddenByMode = $state<Map<ColorBy, Set<number>>>(new Map());
   /** Hovered point index (for the analysis popover); null ⇒ nothing hovered. */
   hovered = $state<number | null>(null);
 
@@ -73,6 +79,10 @@ class CrossFilter {
   }
   get hasFilter(): boolean {
     return this.filteredIds !== null;
+  }
+  /** Hidden codes for the CURRENT colour mode (shared EMPTY set if none). */
+  get hidden(): ReadonlySet<number> {
+    return this.hiddenByMode.get(this.colorBy) ?? EMPTY;
   }
 
   // ── setters ──────────────────────────────────────────────────────────────
@@ -115,17 +125,27 @@ class CrossFilter {
     this.space = s;
   }
 
-  /** Toggle a cluster's visibility on the map (reassigns the Set so reactivity fires). */
-  toggleClusterHidden(id: number): void {
-    const next = new Set(this.hiddenClusters);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    this.hiddenClusters = next;
+  /** Toggle a code's visibility on the map for the CURRENT colour mode
+   *  (reassigns Set + Map so reactivity fires). */
+  toggleHidden(code: number): void {
+    const mode = this.colorBy;
+    const cur = this.hiddenByMode.get(mode) ?? EMPTY;
+    const next = new Set(cur);
+    if (next.has(code)) next.delete(code);
+    else next.add(code);
+    const nextMap = new Map(this.hiddenByMode);
+    if (next.size > 0) nextMap.set(mode, next);
+    else nextMap.delete(mode); // keep the map clean → getter falls back to EMPTY
+    this.hiddenByMode = nextMap;
   }
 
-  /** Un-hide every cluster. */
-  showAllClusters(): void {
-    if (this.hiddenClusters.size > 0) this.hiddenClusters = new Set();
+  /** Un-hide every code in the CURRENT colour mode. */
+  showAll(): void {
+    const mode = this.colorBy;
+    if (!this.hiddenByMode.has(mode)) return;
+    const nextMap = new Map(this.hiddenByMode);
+    nextMap.delete(mode);
+    this.hiddenByMode = nextMap;
   }
 
   /** Reset everything tied to the loaded universe (called on a space swap). */
@@ -133,7 +153,7 @@ class CrossFilter {
     this.keyToIndex = keyToIndex;
     this.selectedIds = new Set();
     this.filteredIds = null;
-    this.hiddenClusters = new Set();
+    this.hiddenByMode = new Map();
     this.hovered = null;
   }
 }

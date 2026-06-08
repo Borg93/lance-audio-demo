@@ -205,7 +205,7 @@
    * categoryColors pair — the shader reads true per-point alpha so dimming is
    * just a low alpha byte, removing the 256-slot palette limit entirely.
    * Recomputed when colorBy / space / filteredIds / selectedIds /
-   * hiddenClusters / theme change — NOT on hover.
+   * hidden codes / theme change — NOT on hover.
    */
   const rgba = $derived.by((): Uint8Array | null => {
     const p = pts;
@@ -232,7 +232,7 @@
       const { slotOf, distinct } = r;
       const palette = buildHuePalette(distinct, isDark); // distinct hues once, not per point
       const cl = p.cluster;
-      const hidden = crossFilter.hiddenClusters;
+      const hidden = crossFilter.hidden;
       const noise = NOISE_RGB;
       const other = OTHER_RGB;
       for (let i = 0; i < n; i++) {
@@ -269,9 +269,14 @@
       const palette = buildHuePalette(distinct, isDark); // distinct hues once, not per point
       const other = OTHER_RGB;
       const noise = NOISE_RGB;
+      const hidden = crossFilter.hidden;
       for (let i = 0; i < n; i++) {
         const o = i * 4;
         const code = codes[i] ?? 0;
+        if (hidden.has(code)) {
+          buf[o + 3] = 0; // hidden for this colour mode → background
+          continue;
+        }
         const empty = (labels[code] ?? '') === ''; // unclustered/noise → muted grey
         const col = empty ? noise : code < distinct ? palette[code]! : other;
         buf[o] = col.r;
@@ -705,12 +710,12 @@
         categoryTitle={categoryTitleValue}
         {categoryTotal}
         {legendFiltered}
-        hiddenClusters={crossFilter.hiddenClusters}
+        hidden={crossFilter.hidden}
         {isDark}
         onPickCluster={pickCluster}
         onPickCategory={pickCategory}
-        onToggleClusterHidden={(id) => crossFilter.toggleClusterHidden(id)}
-        onShowAllClusters={() => crossFilter.showAllClusters()}
+        onToggleHidden={(code) => crossFilter.toggleHidden(code)}
+        onShowAll={() => crossFilter.showAll()}
       />
 
       <!-- selection status + actions -->

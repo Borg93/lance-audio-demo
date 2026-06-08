@@ -20,12 +20,12 @@
     categoryTitle,
     categoryTotal,
     legendFiltered,
-    hiddenClusters,
+    hidden,
     isDark,
     onPickCluster,
     onPickCategory,
-    onToggleClusterHidden,
-    onShowAllClusters,
+    onToggleHidden,
+    onShowAll,
   }: {
     legendMode: ColorBy;
     clusterRows: ClusterLegendRow[];
@@ -34,12 +34,12 @@
     categoryTitle: string;
     categoryTotal: number;
     legendFiltered: boolean;
-    hiddenClusters: Set<number>;
+    hidden: ReadonlySet<number>;
     isDark: boolean;
     onPickCluster: (id: number) => void | Promise<void>;
     onPickCategory: (code: number) => void | Promise<void>;
-    onToggleClusterHidden: (id: number) => void;
-    onShowAllClusters: () => void;
+    onToggleHidden: (code: number) => void;
+    onShowAll: () => void;
   } = $props();
 </script>
 
@@ -52,11 +52,11 @@
       <span class="font-medium text-muted-foreground"
         >Clusters · {clusterStats.total.toLocaleString()}</span
       >
-      {#if hiddenClusters.size > 0}
+      {#if hidden.size > 0}
         <button
           type="button"
           class="ml-auto rounded px-1 py-0.5 text-primary hover:bg-secondary/50"
-          onclick={() => onShowAllClusters()}
+          onclick={() => onShowAll()}
           title="Show all hidden clusters"
         >
           Show all
@@ -64,10 +64,10 @@
       {/if}
     </div>
     {#each clusterRows as c (c.id)}
-      {@const hidden = hiddenClusters.has(c.id)}
+      {@const isHidden = hidden.has(c.id)}
       <div
         class="relative flex w-full items-center gap-1 overflow-hidden rounded px-1 py-0.5 hover:bg-secondary/50"
-        class:opacity-40={hidden}
+        class:opacity-40={isHidden}
       >
         <span
           class="pointer-events-none absolute inset-y-0 left-0 rounded-sm"
@@ -88,10 +88,10 @@
         <button
           type="button"
           class="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
-          onclick={() => onToggleClusterHidden(c.id)}
-          title={hidden ? 'Show cluster on map' : 'Hide cluster on map'}
+          onclick={() => onToggleHidden(c.id)}
+          title={isHidden ? 'Show cluster on map' : 'Hide cluster on map'}
         >
-          {#if hidden}
+          {#if isHidden}
             <EyeOff class="size-3.5" />
           {:else}
             <Eye class="size-3.5" />
@@ -100,7 +100,7 @@
       </div>
     {/each}
     {#if clusterStats.noise > 0}
-      {@const noiseHidden = hiddenClusters.has(-1)}
+      {@const noiseHidden = hidden.has(-1)}
       <div
         class="mt-1 flex w-full items-center gap-1 rounded border-t border-border/60 px-1 pt-1 hover:bg-secondary/50"
         class:opacity-40={noiseHidden}
@@ -121,7 +121,7 @@
         <button
           type="button"
           class="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
-          onclick={() => onToggleClusterHidden(-1)}
+          onclick={() => onToggleHidden(-1)}
           title={noiseHidden ? 'Show noise on map' : 'Hide noise on map'}
         >
           {#if noiseHidden}
@@ -137,18 +137,29 @@
   <div
     class="absolute right-3 top-3 max-h-[60%] w-60 overflow-y-auto rounded-md bg-card/85 p-2 text-[11px] shadow-sm backdrop-blur"
   >
-    <div class="mb-1 font-medium text-muted-foreground">
-      {categoryTitle} · {legendFiltered
-        ? `${categoryRows.length} of ${categoryTotal.toLocaleString()}`
-        : categoryTotal.toLocaleString()}
+    <div class="mb-1 flex items-center gap-2">
+      <span class="font-medium text-muted-foreground">
+        {categoryTitle} · {legendFiltered
+          ? `${categoryRows.length} of ${categoryTotal.toLocaleString()}`
+          : categoryTotal.toLocaleString()}
+      </span>
+      {#if hidden.size > 0}
+        <button
+          type="button"
+          class="ml-auto rounded px-1 py-0.5 text-primary hover:bg-secondary/50"
+          onclick={() => onShowAll()}
+          title="Show all hidden"
+        >
+          Show all
+        </button>
+      {/if}
     </div>
     {#each categoryRows as c (c.code)}
-      <button
-        type="button"
-        class="relative flex w-full items-center gap-2 overflow-hidden rounded px-1 py-0.5 text-left hover:bg-secondary/50"
+      {@const isHidden = hidden.has(c.code)}
+      <div
+        class="relative flex w-full items-center gap-1 overflow-hidden rounded px-1 py-0.5 hover:bg-secondary/50"
         class:opacity-60={c.empty}
-        onclick={() => onPickCategory(c.code)}
-        title="Select {c.label}"
+        class:opacity-40={isHidden}
       >
         <span
           class="pointer-events-none absolute inset-y-0 left-0 rounded-sm"
@@ -156,14 +167,33 @@
           style:background={c.color}
           style:opacity="0.16"
         ></span>
-        <span class="relative size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
-        <span class="relative truncate text-foreground" class:uppercase={legendMode === 'language'}
-          >{c.label}</span
+        <button
+          type="button"
+          class="relative flex flex-1 items-center gap-2 text-left"
+          onclick={() => onPickCategory(c.code)}
+          title="Select {c.label}"
         >
-        <span class="relative ml-auto shrink-0 font-mono text-muted-foreground"
-          >{c.count.toLocaleString()}</span
+          <span class="size-2.5 shrink-0 rounded-full" style:background={c.color}></span>
+          <span class="truncate text-foreground" class:uppercase={legendMode === 'language'}
+            >{c.label}</span
+          >
+          <span class="ml-auto shrink-0 font-mono text-muted-foreground"
+            >{c.count.toLocaleString()}</span
+          >
+        </button>
+        <button
+          type="button"
+          class="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+          onclick={() => onToggleHidden(c.code)}
+          title={isHidden ? 'Show on map' : 'Hide on map'}
         >
-      </button>
+          {#if isHidden}
+            <EyeOff class="size-3.5" />
+          {:else}
+            <Eye class="size-3.5" />
+          {/if}
+        </button>
+      </div>
     {/each}
   </div>
 {/if}
