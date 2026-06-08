@@ -1,6 +1,7 @@
 <script lang="ts">
   import HitCard from './hit-card.svelte';
   import type { Hit } from '$lib/api';
+  import { hitKey } from '$lib/utils';
 
   type Props = {
     hits: Hit[];
@@ -18,19 +19,18 @@
     emptyMessage = 'Enter a query above.',
   }: Props = $props();
 
-  const isActive = (h: Hit) =>
-    !!active && active.doc_id === h.doc_id && active.chunk_id === h.chunk_id;
+  const activeKey = $derived(active ? hitKey(active) : null);
 </script>
 
 <div>
   {#if hits.length === 0}
     <div class="px-4 py-6 text-sm text-muted-foreground">{emptyMessage}</div>
   {:else}
-    {#each hits as hit (hit.doc_id + ':' + hit.speech_id + ':' + hit.chunk_id)}
+    {#each hits as hit (hitKey(hit))}
       <HitCard
         {hit}
         {query}
-        active={isActive(hit)}
+        active={activeKey === hitKey(hit)}
         onclick={() => onselect?.(hit)}
       />
     {/each}

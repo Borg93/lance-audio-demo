@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import type { Hit } from '$lib/api';
 
 /** shadcn-svelte's standard `cn` helper: clsx for conditionals, twMerge for conflicts. */
 export function cn(...inputs: ClassValue[]): string {
@@ -36,4 +37,21 @@ export function queryTerms(q: string): string[] {
     const stop = new Set(['and', 'or', 'not', 'near']);
     // `\w` excludes Unicode letters (ö/å/ä) even with /u — must use \p{L}.
     return (q.match(/[\p{L}\p{N}_]+/gu) ?? []).map((t) => t.toLowerCase()).filter((t) => !stop.has(t));
+}
+
+/** Stable identity key for a hit (doc + speech + chunk). */
+export const hitKey = (h: Pick<Hit, 'doc_id' | 'speech_id' | 'chunk_id'>): string =>
+    `${h.doc_id}|${h.speech_id}|${h.chunk_id}`;
+
+/**
+ * Build a highlighter that wraps `terms` in <mark>…</mark> inside HTML-escaped
+ * text. The match regex is compiled once here, so the returned function is cheap
+ * to call per row/cell; its output is safe to inject with `{@html}`.
+ */
+export function makeHighlighter(terms: string[]): (text: string) => string {
+    if (terms.length === 0) return escapeHtml;
+    const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const re = new RegExp(`(${pattern})`, 'giu');
+    return (text) =>
+        escapeHtml(text).replace(re, '<mark class="bg-highlight/30 text-foreground rounded-sm">$1</mark>');
 }

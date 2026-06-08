@@ -5,10 +5,10 @@
   import { Play } from 'lucide-svelte';
   import { chunkFrameUrl, type Hit } from '$lib/api';
   import { graph } from '$lib/workflow/graph.svelte';
+  import { hitKey } from '$lib/utils';
 
   let { hits, maxHeight = 'max-h-72' }: { hits: Hit[]; maxHeight?: string } = $props();
 
-  const hitKey = (h: Hit): string => `${h.doc_id}|${h.speech_id}|${h.chunk_id}`;
   const selectedKey = $derived(graph.selectedHit ? hitKey(graph.selectedHit) : null);
 </script>
 

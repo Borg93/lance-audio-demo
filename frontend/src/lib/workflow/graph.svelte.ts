@@ -27,6 +27,7 @@ import type { Edge, Node } from '@xyflow/svelte';
 import { z } from 'zod';
 import { browser } from '$app/environment';
 import { search, SearchModeSchema, type Hit, type SearchMode, type SearchSpec } from '$lib/api';
+import { hitKey } from '$lib/utils';
 
 /** The pipeline stages, as a runtime list (drives the persistence schema). */
 export const NODE_KINDS = ['query', 'image', 'filter', 'search', 'combine', 'results'] as const;
@@ -177,9 +178,6 @@ export const STATUS_DOT: Record<RunStatus, string> = {
     done: 'bg-emerald-500',
     error: 'bg-destructive',
 };
-
-/** Identity key for a hit (doc/speech/chunk), used to de-dupe result sets. */
-const hitKey = (h: Hit): string => `${h.doc_id}|${h.speech_id}|${h.chunk_id}`;
 
 /** De-duplicate hits by identity, preserving first-seen (rank) order. */
 function dedupeHits(hits: Hit[]): Hit[] {

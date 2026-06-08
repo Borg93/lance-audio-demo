@@ -10,7 +10,7 @@
     type SearchSpec,
     type Document,
   } from '$lib/api';
-  import { fmtTime } from '$lib/utils';
+  import { fmtTime, hitKey } from '$lib/utils';
   import SearchBar from '$lib/components/search-bar.svelte';
   import ActiveFilters from '$lib/components/active-filters.svelte';
   import HitList from '$lib/components/hit-list.svelte';
@@ -43,6 +43,7 @@
   // ── Search results (when there's a query or image) ──
   let hits = $state<Hit[]>([]);
   let active = $state<Hit | null>(null);
+  const activeKey = $derived(active ? hitKey(active) : null);
   let loadingHits = $state(false);
   let loadingMore = $state(false);
   let error = $state<string | null>(null);
@@ -563,11 +564,11 @@
             class="grid gap-3 p-3"
             style:grid-template-columns="repeat({gridCols}, minmax(0, 1fr))"
           >
-            {#each hits as hit (hit.doc_id + ':' + hit.speech_id + ':' + hit.chunk_id)}
+            {#each hits as hit (hitKey(hit))}
               <HitCard
                 {hit}
                 query={spec.q}
-                active={active === hit}
+                active={activeKey === hitKey(hit)}
                 layout="tile"
                 onclick={() => (active = hit)}
               />

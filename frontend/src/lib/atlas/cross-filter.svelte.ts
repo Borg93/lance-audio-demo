@@ -21,6 +21,7 @@
  */
 
 import type { Hit, AtlasSpace } from '$lib/api';
+import { hitKey } from '$lib/utils';
 
 /** Colour channel for the scatter (legend + per-point recolour). `topic` =
  *  chunk broad topic (topic_l2); `doc_topic` = per-video topic. */
@@ -45,9 +46,10 @@ export function buildKeyIndex(
     return map;
 }
 
-/** The string key for a Hit, matching `buildKeyIndex`'s key shape. */
-export const hitKey = (h: Pick<Hit, 'doc_id' | 'speech_id' | 'chunk_id'>): string =>
-    `${h.doc_id}|${h.speech_id}|${h.chunk_id}`;
+// `hitKey` lives in `$lib/utils` (single source); re-exported here so atlas
+// consumers keep importing it alongside `buildKeyIndex`. Its `doc|speech|chunk`
+// shape must stay in lock-step with `buildKeyIndex` above.
+export { hitKey };
 
 class CrossFilter {
     /** Point indices the user picked on the map (untruncated — drives dimming). */

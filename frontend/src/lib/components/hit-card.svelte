@@ -1,8 +1,7 @@
 <script lang="ts">
   import { type Hit, thumbnailUrl, chunkFrameUrl } from '$lib/api';
   import { features } from '$lib/feature-flags.svelte';
-  import { fmtTime, queryTerms, escapeHtml } from '$lib/utils';
-  import { cn } from '$lib/utils';
+  import { fmtTime, queryTerms, makeHighlighter, cn } from '$lib/utils';
 
   type Props = {
     hit: Hit;
@@ -16,18 +15,7 @@
 
   const title = $derived(hit.namn ?? hit.audio_path ?? hit.doc_id);
   const terms = $derived(queryTerms(query));
-
-  /** Wrap matching terms in a highlight span. Output is HTML-safe. */
-  const highlighted = $derived.by(() => {
-    const text = hit.text ?? '';
-    if (!terms.length) return escapeHtml(text);
-    const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const re = new RegExp(`(${escaped.join('|')})`, 'giu');
-    return escapeHtml(text).replace(
-      re,
-      '<mark class="bg-highlight/30 text-foreground rounded-sm">$1</mark>',
-    );
-  });
+  const highlight = $derived(makeHighlighter(terms));
 </script>
 
 {#if layout === 'tile'}
@@ -74,8 +62,8 @@
         {#if hit.referenskod}· {hit.referenskod}{/if}
       </div>
       <div class="line-clamp-3 text-xs leading-snug [overflow-wrap:anywhere]">
-        <!-- highlighted is HTML-escaped + safe to inject -->
-        {@html highlighted}
+        <!-- highlight() HTML-escapes then wraps matches — safe to inject -->
+        {@html highlight(hit.text ?? '')}
       </div>
       {#if hit.caption}
         <div class="line-clamp-2 text-[10px] italic text-muted-foreground" title={hit.caption}>
@@ -129,8 +117,8 @@
         {#if hit.referenskod}· {hit.referenskod}{/if}
       </div>
       <div class="line-clamp-3 text-sm leading-snug [overflow-wrap:anywhere]">
-        <!-- highlighted is HTML-escaped + safe to inject -->
-        {@html highlighted}
+        <!-- highlight() HTML-escapes then wraps matches — safe to inject -->
+        {@html highlight(hit.text ?? '')}
       </div>
       {#if hit.caption}
         <div class="line-clamp-1 text-[11px] italic text-muted-foreground" title={hit.caption}>

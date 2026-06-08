@@ -29,7 +29,7 @@
 
 <script lang="ts">
   import { thumbnailUrl } from '$lib/api';
-  import { queryTerms, escapeHtml } from '$lib/utils';
+  import { queryTerms, makeHighlighter, hitKey } from '$lib/utils';
 
   let {
     hits,
@@ -47,17 +47,8 @@
 
   const cols = $derived(TABLE_COLUMNS.filter((c) => visible.includes(c.key)));
   const terms = $derived(queryTerms(query));
-
-  /** Wrap matched query terms in a highlight mark (HTML-safe). Mirrors hit-card. */
-  function highlight(text: string): string {
-    if (!terms.length) return escapeHtml(text);
-    const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const re = new RegExp(`(${escaped.join('|')})`, 'giu');
-    return escapeHtml(text).replace(
-      re,
-      '<mark class="bg-highlight/30 text-foreground rounded-sm">$1</mark>',
-    );
-  }
+  const highlight = $derived(makeHighlighter(terms));
+  const activeKey = $derived(active ? hitKey(active) : null);
 </script>
 
 <div class="overflow-x-auto">
@@ -70,10 +61,10 @@
       </tr>
     </thead>
     <tbody>
-      {#each hits as hit (hit.doc_id + ':' + hit.speech_id + ':' + hit.chunk_id)}
+      {#each hits as hit (hitKey(hit))}
         <tr
           class={'cursor-pointer border-b border-border/60 hover:bg-secondary/40 ' +
-            (active === hit
+            (activeKey === hitKey(hit)
               ? 'bg-primary/15 font-medium [box-shadow:inset_3px_0_0_0_var(--color-primary)]'
               : '')}
           onclick={() => onselect?.(hit)}
