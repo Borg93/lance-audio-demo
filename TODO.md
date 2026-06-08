@@ -228,9 +228,9 @@ Deleted the untracked repo-root test image, and corrected the
 ## Search performance
 
 The worthwhile work here is **✅ done** (recall knobs, read-path caching, scalar
-indexes, compaction — below). Everything still marked 📋 was **audited 2026-06 and
-is parked / YAGNI for a single-user local demo**: sub-millisecond serialization
-wins (`alignments_json`), exact-repeat-only gains (query-vector LRU), or
+indexes, compaction, **dropping `alignments_json` from search results** — below).
+Everything still marked 📋 was **audited 2026-06 and is parked / YAGNI for a
+single-user local demo**: exact-repeat-only gains (query-vector LRU) or
 concurrency/rare-mode-only payoffs (parallel `all` legs, `IVF_HNSW_SQ`). Revisit
 only if a profiler or real concurrency makes them bite. The benchmarking recipe at
 the end is kept as reference.
@@ -280,14 +280,14 @@ memory, not latency), `LANCE_IO_THREADS`/`LANCE_CPU_THREADS` bumps (local defaul
 the current `IVF_PQ`. Compacting `chunk_frames` (73 frags) is low-value — the frame
 reads are index-driven, not scan-bound.
 
-### 📋 Stop fetching `alignments_json` in the search projection
-`alignments_json` is a multi-KB JSONB blob per chunk that the result list never
-renders (only the player pane needs it). The hit projection (`_HIT_COLUMNS` /
-`_PAYLOAD_COLUMNS` in `service.py`) currently includes it. Drop it from the
-search projection and add a `GET /api/chunk-alignments/{doc_id}/{speech_id}/
-{chunk_id}` endpoint that returns it on demand (the player pane already re-fetches
-per hit). Estimated 30–60% win on result-set serialization for large `all`/hybrid
-queries.
+### ✅ Stop fetching `alignments_json` in the search projection (done)
+`alignments_json` (the multi-KB per-word timing blob) was **~93% of a search
+payload** (430 KB at n=100) yet only the player renders it, for the one open hit
+— so I was wrong to park this as "sub-ms". Dropped from `_HIT_COLUMNS` in
+`service.py`; search hits ship `alignments: []`, and the player lazy-fetches via
+the new `GET /api/chunk-alignments/{doc}/{speech}/{chunk}`. Measured **430 KB →
+80 KB** (~5×), karaoke preserved. (Atlas/selection hits still carry inline
+alignments and skip the fetch.)
 
 ### 📋 Query-vector LRU cache
 The vLLM client is cached on `app.state` (`backend/clients.py`) ✅, but every
