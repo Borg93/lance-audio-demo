@@ -418,6 +418,16 @@ designed. Kept here only as historical context.
 
 ## Code-quality backlog
 
+**Audited + partly cleared 2026-06.** ✅ Done: FTS-language default → `Swedish`
+(both `ingest` + `reindex-fts`); CORS now env-configurable
+(`RAUDIO_CORS_ORIGINS`, default `*`); default DB path repointed from the empty
+`./transcripts.lance` → `./transcripts_v2.lance`; `print()`→`logging` and the
+minor typing/dedup items were already done (incl. the reranker↔jinja cross-ref,
+now corrected). 🚫 **Declined** as over-engineering for a single-user demo: the
+`DomainError` hierarchy — inline `HTTPException` is clear + local here. 🟡
+**Deferred** (low-value / broad surface): `_Ctx`→Typer context, eslint+prettier,
+and the `demo/` items below.
+
 Larger or behavior-shifting changes intentionally deferred from the skills-audit
 pass (the safe mechanical wins are in [Closed](#closed-for-context--commit-log)).
 
@@ -437,12 +447,10 @@ ever exposed.
 
 ### CLI / Python (`src/raudio/`)
 
-#### 📋 FTS-language defaults disagree (latent correctness bug on a Swedish corpus)
-`ingest` defaults `--fts-language English` (`src/raudio/cli/ingest.py:75`) but
-`reindex-fts` defaults `Swedish` (`:143`). On this Swedish corpus the English
-stemmer silently mis-stems inflected forms (`ministern`, `vägen`, `ansåg`). Pick
-one default (almost certainly `Swedish`) so a plain `raudio ingest` produces a
-usable index without the flag.
+#### ✅ FTS-language defaults agree (was a latent bug) — fixed
+`ingest --fts-language` now defaults to `Swedish` (matching `reindex-fts`), so a
+plain `raudio ingest` on this Swedish corpus builds a correctly-stemmed index
+without the flag (the English stemmer mis-stemmed `ministern`/`vägen`/`ansåg`).
 
 #### 📋 `_Ctx` global state → Typer's context object
 `src/raudio/cli/_app.py` shares `--db`/`--table` via mutable class attributes on
@@ -460,24 +468,20 @@ closures lack annotations; the reranker prefix/suffix constants in
 `vllm/reranker.py` and `retrieval/qwen3_vl_reranker.jinja` want a one-line
 cross-reference comment (they must stay in sync). All low priority.
 
-### Frontend & demo
+### Frontend
 
-#### 📋 Add eslint + prettier to `frontend/` and `demo/`
-`svelte-check` + `tsc` are the type gate today; eslint/prettier would round out
-the `writing-typescript` toolchain.
+#### ✅ eslint + prettier added to `frontend/` (done)
+Flat-config eslint (typescript-eslint + eslint-plugin-svelte) + prettier, with
+`lint` / `lint:fix` / `format` / `format:check` scripts; over-strict rules tuned
+to warnings (`{@html}` highlight, Set/Map in `.svelte.ts`, `no-undef` off for TS
+types). Two one-time follow-ups, left until the in-flight atlas edits are
+committed (to avoid tangling that diff):
+- `bun run format` — first reformat (`.ts` was 4-space, `.svelte` 2-space; now
+  unified to 2-space → ~47 files). Best as its own commit.
+- `bun run lint:fix` — clears 2 stale `svelte-ignore` comments + flags 1 unused
+  `topic` var in `AtlasTooltip.svelte`.
 
-#### 📋 `demo/`: type the Web Worker message protocol
-`worker.ts` ↔ `+page.svelte`/`RealtimePanel`/`BatchPanel` share one
-`postMessage` channel disambiguated only by an implicit `jobId` convention. A
-shared discriminated-union message type would remove the ad-hoc `as` casts.
-(Secondary app — low urgency.)
-
-#### 📋 `demo/`: tighten `tsconfig`, drop unused dep, decide the `/search` stub
-Add `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` (as in
-`frontend/`); `d3-scale` looks unused (remove from `package.json` + reinstall);
-the `/search` route is a permanent `WorkInProgress` placeholder — build it or
-remove route + sidebar entry. Also: `formatBytes` is duplicated across
-`ProgressItem`, `TranscriptHistory`, and `BatchPanel` — extract one helper.
+(The secondary `demo/` app was removed 2026-06 — superseded by the real `frontend/`.)
 
 ---
 
