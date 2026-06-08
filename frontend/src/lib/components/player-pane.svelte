@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type Hit, type DocTranscriptChunk, getDocTranscript, mediaUrl } from '$lib/api';
   import { fmtTime } from '$lib/utils';
-  import { Captions, ChevronRight, Maximize2, Minimize2 } from 'lucide-svelte';
+  import { ChevronRight, Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptWindow from './transcript-window.svelte';
   import ChunkTimeline from './chunk-timeline.svelte';
 
@@ -290,7 +290,6 @@
         <div
           class="flex items-center gap-1.5 border-t border-border/70 px-3 py-1.5 text-xs font-medium text-muted-foreground"
         >
-          <Captions class="size-3.5" />
           <span>Transcript</span>
           {@render fsToggle(
             'ml-auto rounded p-1 transition-colors hover:bg-secondary hover:text-foreground',
