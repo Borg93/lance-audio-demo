@@ -9,6 +9,7 @@
    *  the markup (image / highlighted HTML); their `render` is unused. */
   export const TABLE_COLUMNS: TableColumn[] = [
     { key: 'thumbnail', label: 'Thumb', render: () => '' },
+    { key: 'score', label: 'Score', render: (h) => (h._score != null ? h._score.toFixed(3) : '') },
     { key: 'namn', label: 'Name', render: (h) => h.namn ?? '' },
     { key: 'referenskod', label: 'Ref', render: (h) => h.referenskod ?? '' },
     { key: 'bildid', label: 'Bild ID', render: (h) => h.bildid ?? '' },

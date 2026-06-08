@@ -36,6 +36,11 @@
     const code = pts.namn?.[index];
     return code != null ? (pts.namns?.[code] ?? null) : null;
   });
+  const videoId = $derived.by(() => {
+    if (index == null) return null;
+    const dc = pts.doc[index];
+    return dc !== undefined ? (pts.docs[dc] ?? null) : null;
+  });
   const topic = $derived.by(() => {
     if (index == null) return null;
     const code = pts.topic?.[index];
@@ -126,6 +131,11 @@
     </div>
     {#if namn}
       <div class="mb-1 truncate font-medium text-foreground" title={namn}>{namn}</div>
+    {/if}
+    {#if videoId}
+      <div class="mb-1 truncate font-mono text-[10px] text-muted-foreground/70" title={videoId}>
+        video {videoId}
+      </div>
     {/if}
     {#if snip && snipFor === index}
       {#if snip.text}

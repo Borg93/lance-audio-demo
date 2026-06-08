@@ -32,6 +32,7 @@
     onPick,
     onLasso,
     mode,
+    markerXY = null,
   }: {
     x: Float32Array;
     y: Float32Array;
@@ -45,6 +46,7 @@
     onPick: (dataX: number, dataY: number) => void;
     onLasso: (polyDataXY: number[]) => void; // flat [x0,y0,x1,y1,...] in DATA coords
     mode: Mode;
+    markerXY?: [number, number] | null; // active point in DATA coords → highlight ring
   } = $props();
 
   const dpr = Math.min(globalThis.devicePixelRatio ?? 1, 1.5);
@@ -553,6 +555,17 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
   });
 
   const cursor = $derived(mode === 'pan' ? 'grab' : 'crosshair');
+
+  // Screen position (css px) of the active-point highlight ring, recomputed as
+  // the camera pans/zooms (reads center/scale — the same transform `screenToData`
+  // inverts). Hidden when the point is off-screen.
+  const markerScreen = $derived.by((): { left: number; top: number } | null => {
+    if (!markerXY) return null;
+    const left = ((markerXY[0] - center[0]) * scale) / dpr + width / 2;
+    const top = ((markerXY[1] - center[1]) * scale) / dpr + height / 2;
+    if (left < -8 || left > width + 8 || top < -8 || top > height + 8) return null;
+    return { left, top };
+  });
 </script>
 
 {#if gpuError}
@@ -579,4 +592,19 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     style:width="{width}px"
     style:height="{height}px"
   ></canvas>
+  <!-- very subtle dot grid backing the embedding space (theme-neutral grey, low alpha) -->
+  <div
+    class="pointer-events-none absolute inset-0"
+    style:background-image="radial-gradient(rgba(125,125,125,0.08) 1px, transparent 1.4px)"
+    style:background-size="24px 24px"
+  ></div>
+  {#if markerScreen}
+    <!-- highlight ring for the active hit (the point shown in the player / table) -->
+    <div
+      class="pointer-events-none absolute z-10 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary"
+      style:left="{markerScreen.left}px"
+      style:top="{markerScreen.top}px"
+      style:box-shadow="0 0 0 2px rgba(0,0,0,0.45), 0 0 10px 2px var(--color-primary)"
+    ></div>
+  {/if}
 {/if}

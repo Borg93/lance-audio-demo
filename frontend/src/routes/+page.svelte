@@ -67,7 +67,7 @@
   // results table + player read this set while the Map view is active.
   let mapHits = $state<Hit[]>([]);
   let mapSelectionTotal = $state(0);
-  const MAP_TABLE_COLS = ['thumbnail', 'namn', 'language', 'start', 'end', 'text'];
+  const MAP_TABLE_COLS = ['thumbnail', 'score', 'namn', 'language', 'start', 'text'];
 
   // The Map-view table shows the lasso/legend selection when there is one,
   // otherwise the active search hits (text or image search) — which are also
@@ -372,45 +372,57 @@
       </div>
 
       {#if view === 'map'}
-        <!-- ── Map view: the embedding atlas + its selection results table ── -->
-        <div class="grid min-h-0 flex-1 grid-rows-[1fr_auto]">
-          <AtlasMap
-            bind:active
-            onSeedSearch={seedSearchFromSelection}
-            onSelectionHits={onMapSelectionHits}
-          />
-          <div class="flex h-56 min-h-0 flex-col border-t border-border bg-card/30">
-            <div class="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs">
-              {#if mapSelectionTotal > 0}
-                <span class="font-medium text-foreground">Map selection</span>
-                <span class="text-muted-foreground">
-                  {mapSelectionTotal.toLocaleString()} chunks
-                  {#if mapSelectionTotal > mapHits.length}
-                    <span class="text-muted-foreground/70">· showing {mapHits.length}</span>
+        <!-- ── Map view: the embedding atlas + a draggable selection/results table ── -->
+        <div class="min-h-0 flex-1">
+          <ResizableSplit
+            orientation="vertical"
+            storageKey="raudio-search-map-vsplit"
+            minLeft={220}
+            minRight={120}
+            initial={0.66}
+          >
+            {#snippet left()}
+              <AtlasMap
+                bind:active
+                onSeedSearch={seedSearchFromSelection}
+                onSelectionHits={onMapSelectionHits}
+              />
+            {/snippet}
+            {#snippet right()}
+              <div class="flex h-full min-h-0 flex-col border-t border-border bg-card/30">
+                <div class="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs">
+                  {#if mapSelectionTotal > 0}
+                    <span class="font-medium text-foreground">Map selection</span>
+                    <span class="text-muted-foreground">
+                      {mapSelectionTotal.toLocaleString()} chunks
+                      {#if mapSelectionTotal > mapHits.length}
+                        <span class="text-muted-foreground/70">· showing {mapHits.length}</span>
+                      {/if}
+                    </span>
+                  {:else if hits.length > 0}
+                    <span class="font-medium text-foreground">Search results</span>
+                    <span class="text-muted-foreground">
+                      {hits.length.toLocaleString()} hits · highlighted on the map
+                    </span>
+                  {:else}
+                    <span class="font-medium text-foreground">Selection</span>
+                    <span class="text-muted-foreground">lasso a region, click a legend, or search to list chunks</span>
                   {/if}
-                </span>
-              {:else if hits.length > 0}
-                <span class="font-medium text-foreground">Search results</span>
-                <span class="text-muted-foreground">
-                  {hits.length.toLocaleString()} hits · highlighted on the map
-                </span>
-              {:else}
-                <span class="font-medium text-foreground">Selection</span>
-                <span class="text-muted-foreground">lasso a region, click a legend, or search to list chunks</span>
-              {/if}
-            </div>
-            <div class="min-h-0 flex-1 overflow-auto">
-              {#if mapTableHits.length}
-                <HitTable
-                  hits={mapTableHits}
-                  {active}
-                  visible={MAP_TABLE_COLS}
-                  query={mapSelectionTotal > 0 ? '' : spec.q}
-                  onselect={(h) => (active = h)}
-                />
-              {/if}
-            </div>
-          </div>
+                </div>
+                <div class="min-h-0 flex-1 overflow-auto">
+                  {#if mapTableHits.length}
+                    <HitTable
+                      hits={mapTableHits}
+                      {active}
+                      visible={MAP_TABLE_COLS}
+                      query={mapSelectionTotal > 0 ? '' : spec.q}
+                      onselect={(h) => (active = h)}
+                    />
+                  {/if}
+                </div>
+              </div>
+            {/snippet}
+          </ResizableSplit>
         </div>
       {:else}
       <div class="relative min-h-0 flex-1 overflow-y-auto">

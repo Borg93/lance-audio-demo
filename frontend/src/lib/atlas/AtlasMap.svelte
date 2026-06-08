@@ -27,7 +27,7 @@
     type AtlasSpace,
     type Hit,
   } from '$lib/api';
-  import { crossFilter, buildKeyIndex, type ColorBy } from './cross-filter.svelte';
+  import { crossFilter, buildKeyIndex, hitKey, type ColorBy } from './cross-filter.svelte';
   import { buildGrid, nearestIndex, type SpatialGrid } from './atlas-grid';
   import { hexToRgb, hueRgb, hueCss, buildHuePalette, type Rgb } from './atlas-colors';
   import { indicesInPolygon, type Pt } from './atlas-geometry';
@@ -185,6 +185,9 @@
     if (mode === 'topic' && p.topic && p.topics) return { codes: p.topic, labels: p.topics };
     if (mode === 'doc_topic' && p.doc_topic && p.doc_topics)
       return { codes: p.doc_topic, labels: p.doc_topics };
+    // `doc`/`docs` (the video ids) are always shipped, so colour-by-Video is
+    // always available — one hue per source video.
+    if (mode === 'doc') return { codes: p.doc, labels: p.docs };
     return null;
   }
 
@@ -283,6 +286,20 @@
 
   const autoPointSize = $derived(pointSize > 0 ? pointSize : 3);
 
+  // Data-space coords of the active hit's point (the one in the player / table)
+  // so <GpuScatter> can ring it — resolves via the shared key→index map.
+  const activeMarkerXY = $derived.by((): [number, number] | null => {
+    const a = active;
+    const xs = x;
+    const ys = y;
+    if (!a || !xs || !ys) return null;
+    const i = crossFilter.keyToIndex.get(hitKey(a));
+    if (i === undefined) return null;
+    const mx = xs[i];
+    const my = ys[i];
+    return mx !== undefined && my !== undefined ? [mx, my] : null;
+  });
+
   // ── legends (clickable → selectCluster / language facet) ──────────────────
   // Legend swatches read the SAME hslToRgb hues the map uses, so a swatch can
   // never disagree with its points.
@@ -352,7 +369,9 @@
         ? 'Topics'
         : crossFilter.colorBy === 'doc_topic'
           ? 'Video topics'
-          : '',
+          : crossFilter.colorBy === 'doc'
+            ? 'Videos'
+            : '',
   );
 
   // Topic modes appear only once the columns are built (factorized into the
@@ -362,10 +381,11 @@
     if (pts?.language) opts.push({ value: 'language', label: 'Language' });
     if (pts?.topic) opts.push({ value: 'topic', label: 'Topic' });
     if (pts?.doc_topic) opts.push({ value: 'doc_topic', label: 'Video topic' });
+    opts.push({ value: 'doc', label: 'Video' });
     opts.push({ value: 'none', label: 'None' });
     return opts;
   });
-  const ALL_COLOR_BY: ColorBy[] = ['cluster', 'language', 'topic', 'doc_topic', 'none'];
+  const ALL_COLOR_BY: ColorBy[] = ['cluster', 'language', 'topic', 'doc_topic', 'doc', 'none'];
   const isColorBy = (v: string): v is ColorBy => (ALL_COLOR_BY as string[]).includes(v);
   let colorByValue = $state<string>('cluster');
   $effect(() => {
@@ -569,6 +589,7 @@
           onPick={onScatterPick}
           onLasso={onScatterLasso}
           {mode}
+          markerXY={activeMarkerXY}
         />
       {/if}
 
