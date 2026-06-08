@@ -9,7 +9,7 @@ from typing import Annotated
 
 import typer
 
-from ._app import _Ctx, _require_table, app
+from ._app import CliContext, _require_table, app
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,7 @@ def cmd_download(
 
 @app.command("extract-chunk-frames")
 def cmd_extract_chunk_frames(
+    ctx: typer.Context,
     audio_root: Annotated[
         Path,
         typer.Option(
@@ -140,10 +141,11 @@ def cmd_extract_chunk_frames(
         write_chunk_frames,
     )
 
-    db = lancedb.connect(str(_Ctx.db))
-    _require_table(db, _Ctx.table)
-    chunks_tbl = db.open_table(_Ctx.table)
-    frames_path = _Ctx.db / "chunk_frames.lance"
+    cfg: CliContext = ctx.obj
+    db = lancedb.connect(str(cfg.db))
+    _require_table(db, cfg.table, cfg.db)
+    chunks_tbl = db.open_table(cfg.table)
+    frames_path = cfg.db / "chunk_frames.lance"
     frames_exists = "chunk_frames" in db.list_tables().tables
 
     if frames_exists and not only_null:
@@ -223,6 +225,7 @@ def cmd_extract_chunk_frames(
 
 @app.command("compact")
 def cmd_compact(
+    ctx: typer.Context,
     target_rows_per_fragment: Annotated[
         int,
         typer.Option(
@@ -254,10 +257,11 @@ def cmd_compact(
 
     from ..features.engine import ensure_vector_index
 
-    db = lancedb.connect(str(_Ctx.db))
-    _require_table(db, _Ctx.table)
-    table = db.open_table(_Ctx.table)
-    ds = lance.dataset(str(_Ctx.db / f"{_Ctx.table}.lance"))
+    cfg: CliContext = ctx.obj
+    db = lancedb.connect(str(cfg.db))
+    _require_table(db, cfg.table, cfg.db)
+    table = db.open_table(cfg.table)
+    ds = lance.dataset(str(cfg.db / f"{cfg.table}.lance"))
 
     before = len(ds.get_fragments())
     typer.echo(

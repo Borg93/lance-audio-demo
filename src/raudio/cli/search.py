@@ -10,11 +10,12 @@ from typing import Annotated
 import typer
 
 from ..retrieval.search import extract_query_terms, iter_matching_words, nearest_chunks, timecode
-from ._app import _Ctx, app
+from ._app import CliContext, app
 
 
 @app.command("search")
 def cmd_search(
+    ctx: typer.Context,
     query: Annotated[str, typer.Argument()],
     limit: Annotated[int, typer.Option("-n", "--limit")] = 10,
     where: Annotated[
@@ -34,10 +35,11 @@ def cmd_search(
     ] = False,
 ) -> None:
     """Run a full-text (Tantivy BM25) query."""
+    cfg: CliContext = ctx.obj
     hits = nearest_chunks(
-        _Ctx.db,
+        cfg.db,
         query,
-        table_name=_Ctx.table,
+        table_name=cfg.table,
         limit=limit,
         where=where,
         include_alignments=words or json_output,
@@ -69,6 +71,7 @@ def cmd_search(
 
 @app.command("serve")
 def cmd_serve(
+    ctx: typer.Context,
     host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port")] = 8000,
 ) -> None:
@@ -78,4 +81,5 @@ def cmd_serve(
     """
     from backend import run
 
-    run(db_path=_Ctx.db, host=host, port=port)
+    cfg: CliContext = ctx.obj
+    run(db_path=cfg.db, host=host, port=port)

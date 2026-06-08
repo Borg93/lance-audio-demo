@@ -3,7 +3,7 @@
 #   make search Q='spring of hope'
 #   make demo AUDIO_ROOT=./examples
 
-DB       ?= ./transcripts.lance
+DB       ?= ./transcripts_v2.lance
 LOG_DIR  ?= ./logs
 TABLE    ?= chunks
 SAMPLE   ?= examples/taleoftwocities_01_dickens_64kb_trimmed.json

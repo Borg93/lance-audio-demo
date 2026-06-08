@@ -8,11 +8,12 @@ from typing import Annotated
 import typer
 
 from ..ingest.ingest import ingest_many, load_transcript, reindex_fts
-from ._app import _Ctx, app
+from ._app import CliContext, app
 
 
 @app.command("ingest")
 def cmd_ingest(
+    ctx: typer.Context,
     json_paths: Annotated[
         list[Path], typer.Argument(metavar="JSON...", help="AudioMetadata JSON files.")
     ],
@@ -65,14 +66,14 @@ def cmd_ingest(
         typer.Option(
             "--fts-language",
             help=(
-                "Stemmer/stop-word language for the FTS index. "
-                "Use 'Swedish' for Swedish text — default 'English' mis-stems "
-                "forms like 'ministern'/'vägen'/'ansåg'. Supported: English, "
-                "Swedish, Norwegian, Danish, Finnish, French, German, Spanish, "
-                "Italian, Portuguese, Dutch, Russian, and more."
+                "Stemmer/stop-word language for the FTS index. Defaults to "
+                "'Swedish' (this corpus); an 'English' stemmer mis-stems forms "
+                "like 'ministern'/'vägen'/'ansåg'. Supported: English, Swedish, "
+                "Norwegian, Danish, Finnish, French, German, Spanish, Italian, "
+                "Portuguese, Dutch, Russian, and more."
             ),
         ),
-    ] = "English",
+    ] = "Swedish",
     doc_language: Annotated[
         str | None,
         typer.Option(
@@ -88,11 +89,11 @@ def cmd_ingest(
     """Ingest one or more easytranscriber AudioMetadata JSON files."""
     from tqdm import tqdm
 
+    cfg: CliContext = ctx.obj
     # Parsing the alignment JSONs is the I/O-heavy part; the subsequent table
     # write + FTS index build log their own progress (see ingest_many).
     docs = [
-        load_transcript(p)
-        for p in tqdm(json_paths, unit="file", desc="parsing", smoothing=0.05)
+        load_transcript(p) for p in tqdm(json_paths, unit="file", desc="parsing", smoothing=0.05)
     ]
 
     # Infer doc_language from the alignments dir if not explicitly passed.
@@ -103,11 +104,11 @@ def cmd_ingest(
             doc_language = candidate.lower()
 
     table = ingest_many(
-        _Ctx.db,
+        cfg.db,
         docs,
         audio_root=audio_root,
         media_base_uri=media_base_uri,
-        table_name=_Ctx.table,
+        table_name=cfg.table,
         metadata_csv=metadata_csv,
         thumbnail_dir=thumbnail_dir,
         fts_language=fts_language,
@@ -126,7 +127,7 @@ def cmd_ingest(
         suffix += f" + thumbnails from {thumbnail_dir}"
     suffix += f" + FTS({fts_language})"
     typer.echo(
-        f"Ingested {len(docs)} transcript(s) → '{_Ctx.table}' now has "
+        f"Ingested {len(docs)} transcript(s) → '{cfg.table}' now has "
         f"{table.count_rows()} chunk row(s){suffix}.",
         err=True,
     )
@@ -134,6 +135,7 @@ def cmd_ingest(
 
 @app.command("reindex-fts")
 def cmd_reindex_fts(
+    ctx: typer.Context,
     language: Annotated[
         str,
         typer.Option(
@@ -155,16 +157,17 @@ def cmd_reindex_fts(
     ] = True,
 ) -> None:
     """Rebuild only the FTS index on an existing chunks table. No re-ingest."""
+    cfg: CliContext = ctx.obj
     reindex_fts(
-        _Ctx.db,
-        table_name=_Ctx.table,
+        cfg.db,
+        table_name=cfg.table,
         language=language,
         with_position=with_position,
         remove_stop_words=remove_stop_words,
         ascii_folding=ascii_folding,
     )
     typer.echo(
-        f"Rebuilt FTS index on '{_Ctx.table}' "
+        f"Rebuilt FTS index on '{cfg.table}' "
         f"(language={language}, with_position={with_position}, "
         f"remove_stop_words={remove_stop_words}, ascii_folding={ascii_folding}).",
         err=True,

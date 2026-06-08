@@ -7,11 +7,12 @@ from typing import Annotated
 
 import typer
 
-from ._app import _Ctx, _die, _require_table, app
+from ._app import CliContext, _die, _require_table, app
 
 
 @app.command("feature")
 def cmd_feature(
+    ctx: typer.Context,
     name: Annotated[str, typer.Argument(help="Feature column to build (see the list below).")],
     url: Annotated[
         str | None,
@@ -86,13 +87,14 @@ def cmd_feature(
 
     from ..features.columns import FEATURES, FeatureRunOptions
 
+    cfg: CliContext = ctx.obj
     feature = FEATURES.get(name)
     if feature is None:
         _die(f"Unknown feature '{name}'. Available: {', '.join(FEATURES)}.")
 
     if feature.table == "chunks":
-        _require_table(lancedb.connect(str(_Ctx.db)), "chunks")
-    elif not (_Ctx.db / f"{feature.table}.lance").exists():
+        _require_table(lancedb.connect(str(cfg.db)), "chunks", cfg.db)
+    elif not (cfg.db / f"{feature.table}.lance").exists():
         _die(f"Table '{feature.table}' missing — run `raudio extract-chunk-frames` first.")
 
     # model_validate (not kwargs) so `space` is validated against its Literal at
@@ -113,5 +115,5 @@ def cmd_feature(
     )
     typer.echo(f"Building feature '{name}' on {feature.table} …", err=True)
     with tqdm(unit="row", smoothing=0.05) as pbar:
-        written = feature.run(_Ctx.db, options, pbar.update)
+        written = feature.run(cfg.db, options, pbar.update)
     typer.echo(f"  done: {written} row(s) written.", err=True)

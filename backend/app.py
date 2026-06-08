@@ -11,12 +11,13 @@ vectors), ``visual`` (frame vectors, text or image query), ``hybrid`` (Lance
 native FTS+vector RRF), ``all`` (RRF over all three). ``rerank=true`` swaps the
 default RRF for the Qwen3-VL cross-encoder.
 
-Run:  raudio serve --db ./transcripts.lance --port 8000
+Run:  raudio serve --db ./transcripts_v2.lance --port 8000
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -67,11 +68,14 @@ def create_app(db_path: str | Path) -> FastAPI:
     app.include_router(atlas_router)
     app.include_router(topics_router)
 
-    # API-only — the Bun frontend serves assets and proxies /api/*.
+    # API-only — the Bun frontend serves assets and proxies /api/*. Default "*"
+    # is fine behind that local proxy; set RAUDIO_CORS_ORIGINS=https://a,https://b
+    # (comma-separated) to lock it down if the API is ever exposed directly.
     # expose_headers is load-bearing for browser Range seeking.
+    origins = [o.strip() for o in os.getenv("RAUDIO_CORS_ORIGINS", "*").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=origins,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
         expose_headers=["Content-Range", "Content-Length", "Accept-Ranges"],

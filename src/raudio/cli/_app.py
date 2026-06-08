@@ -2,7 +2,8 @@
 
 The command groups in this package (``transcribe``, ``ingest``, ``media``,
 ``search``, ``features``) register against the single :data:`app` defined here.
-:class:`_Ctx` carries the root ``--db`` / ``--table`` options down to subcommands.
+:class:`CliContext` (carried on ``typer.Context.obj``) passes the root ``--db`` /
+``--table`` options down to subcommands.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn
 
 import typer
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     import lancedb
@@ -24,9 +26,14 @@ app = typer.Typer(
 )
 
 
-# Global state carried between the root callback and subcommands.
-class _Ctx:
-    db: Path = Path("./transcripts.lance")
+class CliContext(BaseModel):
+    """Per-invocation root options, carried via ``typer.Context.obj`` to subcommands.
+
+    Replaces the old mutable module-global; each ``raudio`` invocation gets its own
+    instance built by :func:`_root`, so there is no shared cross-command state.
+    """
+
+    db: Path = Path("./transcripts_v2.lance")
     table: str = "chunks"
 
 
@@ -59,18 +66,19 @@ def _die(message: str) -> NoReturn:
     raise typer.Exit(code=1)
 
 
-def _require_table(db: lancedb.DBConnection, table: str) -> None:
+def _require_table(db: lancedb.DBConnection, table: str, db_path: Path) -> None:
     """Abort with a clear message if ``table`` is missing from ``db``."""
     if table not in db.list_tables().tables:
-        _die(f"Table '{table}' not found in {_Ctx.db}.")
+        _die(f"Table '{table}' not found in {db_path}.")
 
 
 @app.callback()
 def _root(
+    ctx: typer.Context,
     db: Annotated[
         Path,
         typer.Option("--db", help="Path to the Lance database."),
-    ] = Path("./transcripts.lance"),
+    ] = Path("./transcripts_v2.lance"),
     table: Annotated[
         str,
         typer.Option("--table", help="Table name."),
@@ -81,5 +89,4 @@ def _root(
     ] = None,
 ) -> None:
     _configure_logging(log_file)
-    _Ctx.db = db
-    _Ctx.table = table
+    ctx.obj = CliContext(db=db, table=table)
