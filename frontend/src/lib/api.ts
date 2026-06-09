@@ -43,7 +43,15 @@ const AlignmentSchema = z.object({
 export type Alignment = z.infer<typeof AlignmentSchema>;
 
 export const HitSchema = z.object({
+  // Ranking signals — exactly one is present per mode (see `relevanceOf`):
+  //   _score           BM25, FTS (higher = better)
+  //   _distance        cosine distance, semantic/visual (lower = better)
+  //   _relevance_score hybrid RRF/weighted, normalized 0..1 (higher = better)
+  // Declared optional so the field the active mode emits survives the zod parse
+  // (an undeclared field is stripped); scene/visual-only modes carry none.
   _score: z.number().optional(),
+  _distance: z.number().optional(),
+  _relevance_score: z.number().optional(),
   doc_id: z.string(),
   audio_path: z.string(),
   speech_id: z.number().int(),
@@ -69,6 +77,43 @@ export const HitSchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 export type Hit = z.infer<typeof HitSchema>;
+
+// Cosine distance ∈ [0,2]; invert to a similarity so "higher = better" holds
+// uniformly across modes and the table can sort one numeric column.
+const COSINE_DISTANCE_MAX = 2;
+
+/** A single comparable relevance number for a hit, normalized so higher is
+ *  always better. Returns `null` when the hit carries no ranking signal (e.g.
+ *  scene/visual browsing modes), which the table renders as a blank cell.
+ *
+ *  Per-mode mapping (modes share these fields one-at-a-time — see HitSchema):
+ *    fts             → `_score`              (BM25, higher better)
+ *    semantic/visual → `2 - _distance`       (cosine distance inverted)
+ *    hybrid          → `_relevance_score`    (already 0..1, higher better)
+ *
+ *  `mode` is optional: when omitted (callers without the active mode, e.g. the
+ *  results table) the present field is used directly, since the backend emits
+ *  exactly one ranking field per mode. */
+export function relevanceOf(hit: Hit, mode?: SearchMode): number | null {
+  switch (mode) {
+    case 'fts':
+    case 'scene_fts':
+      return hit._score ?? null;
+    case 'semantic':
+    case 'visual':
+      return hit._distance != null ? COSINE_DISTANCE_MAX - hit._distance : null;
+    case 'hybrid':
+      return hit._relevance_score ?? null;
+    case 'scene':
+      return null;
+    default:
+      // Mode unknown (or 'all'): infer from whichever ranking field is present.
+      if (hit._relevance_score != null) return hit._relevance_score;
+      if (hit._score != null) return hit._score;
+      if (hit._distance != null) return COSINE_DISTANCE_MAX - hit._distance;
+      return null;
+  }
+}
 
 export const DocumentSchema = z.object({
   doc_id: z.string(),
