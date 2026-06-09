@@ -77,6 +77,7 @@ const KIND_LABEL: Record<NodeKind, string> = {
   query: 'Text query',
   image: 'Image',
   filter: 'Filter',
+  atlas: 'Atlas selection',
   search: 'Search',
   combine: 'Combine',
   tagger: 'Tagger',

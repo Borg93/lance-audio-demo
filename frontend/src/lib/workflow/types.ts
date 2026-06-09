@@ -11,6 +11,7 @@ export const NODE_KINDS = [
   'query',
   'image',
   'filter',
+  'atlas',
   'search',
   'combine',
   'tagger',

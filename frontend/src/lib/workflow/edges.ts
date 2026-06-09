@@ -25,6 +25,7 @@ const PAYLOAD_COLOR: Record<string, string> = {
   query: '#f59e0b', // amber  — text query spec
   image: '#8b5cf6', // violet — image spec
   filter: '#64748b', // slate  — metadata filter spec
+  atlas: '#10b981', // emerald — atlas selection result set
   results: '#10b981', // emerald — a concrete result set
   refine: '#10b981', // emerald — results used to scope a downstream Search
   tagged: '#22c55e', // green   — tagged results
@@ -39,6 +40,7 @@ export function edgePayload(
 ): { label: string; color: string } {
   let label: string;
   if (source === 'query' || source === 'image' || source === 'filter') label = source;
+  else if (source === 'atlas') label = target === 'search' ? 'refine' : 'results';
   else if (source === 'tagger') label = 'tagged';
   else if (source === 'search' || source === 'combine')
     label = target === 'search' ? 'refine' : 'results';
