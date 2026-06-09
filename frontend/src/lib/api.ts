@@ -63,10 +63,6 @@ export const HitSchema = z.object({
   // Backend (`_postprocess_hits`) always emits this field — empty array
   // when the chunk has no alignments — so we keep it required here.
   alignments: z.array(AlignmentSchema),
-  // Client-side only: user/Tagger-node tags, keyed by chunk identity in the
-  // workflow graph's tag store and stamped onto hit copies at export time. The
-  // API never sends this (it parses to `undefined`).
-  tags: z.array(z.string()).optional(),
 });
 export type Hit = z.infer<typeof HitSchema>;
 
