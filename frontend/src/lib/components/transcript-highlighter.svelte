@@ -80,7 +80,6 @@
       return null;
     }
 
-    let rafId = 0;
     let prevWord: HTMLElement | null = null;
     let prevSent: HTMLElement | null = null;
 
@@ -101,21 +100,17 @@
       }
     }
 
-    // Always tick — even when paused, so seek-while-paused updates the cursor.
-    // Skipping refresh when paused (the old behavior) meant the highlight
-    // didn't track when the user dragged the playhead on a paused video.
-    function tick() {
-      refresh();
-      rafId = requestAnimationFrame(tick);
-    }
-
+    // `timeupdate` fires ~4–66×/s during playback (enough for word-level
+    // karaoke) and costs NOTHING when paused, while `seeked` covers dragging
+    // the playhead on a paused video. This replaces the old always-on
+    // requestAnimationFrame(tick) loop — up to 3 windowed highlighters share
+    // one media element, so the RAF loops were 3 idle 60fps spinners on a
+    // paused video for zero benefit over these two listeners.
     el.addEventListener('seeked', refresh);
     el.addEventListener('timeupdate', refresh);
-    rafId = requestAnimationFrame(tick);
     refresh();
 
     return () => {
-      cancelAnimationFrame(rafId);
       el.removeEventListener('seeked', refresh);
       el.removeEventListener('timeupdate', refresh);
       prevWord?.classList.remove('cursor-word');

@@ -67,6 +67,13 @@
   let uniformBindGroup: GPUBindGroup | null = null;
   let posBuffer: GPUBuffer | null = null;
   let colorBuffer: GPUBuffer | null = null;
+  // Allocated byte capacity of each vertex buffer. We reuse the buffer across
+  // recolours/repositions (writeBuffer only) and reallocate it ONLY when the
+  // data grows past what we've allocated — recolour is the hot path (every
+  // filterAlpha slider tick), so destroy+create of a ~580KB buffer per frame is
+  // pure churn we avoid here.
+  let posCapacity = 0;
+  let colorCapacity = 0;
   let count = 0;
   let ready = false; // device + pipeline initialised
 
@@ -225,33 +232,41 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       interleaved[i * 2] = x[i]!;
       interleaved[i * 2 + 1] = y[i]!;
     }
-    if (posBuffer) posBuffer.destroy();
     const byteLength = Math.max(interleaved.byteLength, 4); // GPU buffers must be non-empty
-    const buf = dev.createBuffer({
-      size: byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
+    // Reuse the existing buffer when it's large enough; only (re)create on grow.
+    if (!posBuffer || byteLength > posCapacity) {
+      if (posBuffer) posBuffer.destroy();
+      posBuffer = dev.createBuffer({
+        size: byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      posCapacity = byteLength;
+    }
     dev.queue.writeBuffer(
-      buf,
+      posBuffer,
       0,
       interleaved.buffer,
       interleaved.byteOffset,
       interleaved.byteLength,
     );
-    posBuffer = buf;
   }
 
   function uploadColors(): void {
     const dev = device;
     if (!dev) return;
-    if (colorBuffer) colorBuffer.destroy();
     const byteLength = Math.max(rgba.byteLength, 4); // GPU buffers must be non-empty
-    const buf = dev.createBuffer({
-      size: byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    dev.queue.writeBuffer(buf, 0, rgba.buffer, rgba.byteOffset, rgba.byteLength);
-    colorBuffer = buf;
+    // Recolour is the hot path (filterAlpha slider, lasso, theme): just
+    // writeBuffer into the existing buffer instead of destroy+create, and
+    // reallocate only when the point count actually grows.
+    if (!colorBuffer || byteLength > colorCapacity) {
+      if (colorBuffer) colorBuffer.destroy();
+      colorBuffer = dev.createBuffer({
+        size: byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      colorCapacity = byteLength;
+    }
+    dev.queue.writeBuffer(colorBuffer, 0, rgba.buffer, rgba.byteOffset, rgba.byteLength);
   }
 
   /** Fit the camera so the whole point cloud is visible & centred. */
@@ -392,6 +407,8 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       uniformBindGroup = null;
       posBuffer = null;
       colorBuffer = null;
+      posCapacity = 0;
+      colorCapacity = 0;
       ready = false;
     };
   });

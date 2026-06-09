@@ -10,7 +10,7 @@
     type SearchSpec,
     type Document,
   } from '$lib/api';
-  import { fmtTime, hitKey } from '$lib/utils';
+  import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
   import SearchBar from '$lib/components/search-bar.svelte';
   import ActiveFilters from '$lib/components/active-filters.svelte';
   import HitList from '$lib/components/hit-list.svelte';
@@ -44,6 +44,10 @@
   let hits = $state<Hit[]>([]);
   let active = $state<Hit | null>(null);
   const activeKey = $derived(active ? hitKey(active) : null);
+  // Compile the query → highlighter ONCE for the grid view, then pass the
+  // prebuilt fn to every tile (the grid renders HitCard directly, bypassing
+  // hit-list). This avoids one RegExp compilation per card across large pages.
+  const gridHighlight = $derived(makeHighlighter(queryTerms(spec.q)));
   let loadingHits = $state(false);
   let loadingMore = $state(false);
   let error = $state<string | null>(null);
@@ -588,6 +592,7 @@
                   <HitCard
                     {hit}
                     query={spec.q}
+                    highlight={gridHighlight}
                     active={activeKey === hitKey(hit)}
                     layout="tile"
                     onclick={() => (active = hit)}

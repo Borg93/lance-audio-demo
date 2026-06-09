@@ -1,7 +1,7 @@
 <script lang="ts">
   import HitCard from './hit-card.svelte';
   import type { Hit } from '$lib/api';
-  import { hitKey } from '$lib/utils';
+  import { hitKey, queryTerms, makeHighlighter } from '$lib/utils';
 
   type Props = {
     hits: Hit[];
@@ -20,6 +20,11 @@
   }: Props = $props();
 
   const activeKey = $derived(active ? hitKey(active) : null);
+
+  // Compile the query → highlighter ONCE for the whole list, then hand the
+  // prebuilt fn to every card. Previously each HitCard re-derived its own
+  // RegExp; at large result/selection sizes that was up to ~1000 compilations.
+  const highlight = $derived(makeHighlighter(queryTerms(query)));
 </script>
 
 <div>
@@ -27,7 +32,13 @@
     <div class="px-4 py-6 text-sm text-muted-foreground">{emptyMessage}</div>
   {:else}
     {#each hits as hit (hitKey(hit))}
-      <HitCard {hit} {query} active={activeKey === hitKey(hit)} onclick={() => onselect?.(hit)} />
+      <HitCard
+        {hit}
+        {query}
+        {highlight}
+        active={activeKey === hitKey(hit)}
+        onclick={() => onselect?.(hit)}
+      />
     {/each}
   {/if}
 </div>

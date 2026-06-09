@@ -9,13 +9,27 @@
     active?: boolean;
     /** "row" = side-by-side (list); "tile" = thumbnail on top (grid). */
     layout?: 'row' | 'tile';
+    /**
+     * Prebuilt highlighter (HTML-escapes + wraps query matches). A list renders
+     * one card per hit, so the parent (hit-list / the grid) compiles the match
+     * RegExp ONCE and passes it down — at ~1000 cards this avoids ~1000 regex
+     * compilations. When omitted (standalone use), we fall back to deriving it
+     * from `query` here so the card stays self-contained.
+     */
+    highlight?: (text: string) => string;
     onclick?: () => void;
   };
-  let { hit, query = '', active = false, layout = 'row', onclick }: Props = $props();
+  let {
+    hit,
+    query = '',
+    active = false,
+    layout = 'row',
+    highlight: highlightProp,
+    onclick,
+  }: Props = $props();
 
   const title = $derived(hit.namn ?? hit.audio_path ?? hit.doc_id);
-  const terms = $derived(queryTerms(query));
-  const highlight = $derived(makeHighlighter(terms));
+  const highlight = $derived(highlightProp ?? makeHighlighter(queryTerms(query)));
 </script>
 
 {#if layout === 'tile'}

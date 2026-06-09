@@ -267,7 +267,7 @@
         bind:duration
         controls
         controlslist="nofullscreen"
-        preload="auto"
+        preload="metadata"
         src={mediaUrl(hit.doc_id)}
         class={isFullscreen
           ? 'min-h-0 w-full flex-1 bg-black object-contain'
