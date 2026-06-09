@@ -117,6 +117,7 @@
   // readable subset; the chooser bar toggles any of TABLE_COLUMNS.
   let tableCols = $state<string[]>([
     'thumbnail',
+    'score',
     'namn',
     'start',
     'end',
@@ -138,7 +139,7 @@
   ];
   $effect(() => {
     if (typeof localStorage === 'undefined') return;
-    const v = localStorage.getItem('raudio-table-cols-v3');
+    const v = localStorage.getItem('raudio-table-cols-v4');
     if (v) {
       try {
         tableCols = JSON.parse(v) as string[];
@@ -150,7 +151,7 @@
   function toggleCol(key: string) {
     tableCols = tableCols.includes(key) ? tableCols.filter((k) => k !== key) : [...tableCols, key];
     try {
-      localStorage.setItem('raudio-table-cols-v3', JSON.stringify(tableCols));
+      localStorage.setItem('raudio-table-cols-v4', JSON.stringify(tableCols));
     } catch {
       /* ignore */
     }
