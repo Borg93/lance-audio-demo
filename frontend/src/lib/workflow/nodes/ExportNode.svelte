@@ -30,8 +30,11 @@
             <span class="text-foreground">{hits.length}</span> hits ·
             {cfg.exportColumns.length} col{cfg.exportColumns.length === 1 ? '' : 's'} ·
             {cfg.exportFormat.toUpperCase()}
-          {:else}
+            {#if cfg.exportColumns.includes('tags')}<span class="text-primary">+ tags</span>{/if}
+          {:else if rt.status === 'idle'}
             Run the graph to feed this export.
+          {:else}
+            No results — check upstream nodes.
           {/if}
         </div>
         <button

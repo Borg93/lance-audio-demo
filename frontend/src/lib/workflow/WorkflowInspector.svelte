@@ -230,7 +230,15 @@
           </div>
         {:else if kind === 'search' || kind === 'results' || kind === 'export' || kind === 'combine' || kind === 'tagger'}
           <p class="text-[11px] text-muted-foreground">
-            {rt.status === 'idle' ? 'Not run yet — press Run.' : 'No results.'}
+            {#if kind === 'export' && rt.status === 'idle'}
+              Press Run to feed results. Selected columns{cfg.exportColumns.includes('tags')
+                ? ' (including tags)'
+                : ''} will export.
+            {:else if rt.status === 'idle'}
+              Not run yet — press Run.
+            {:else}
+              No results.
+            {/if}
           </p>
         {:else}
           <p class="text-[11px] text-muted-foreground">
