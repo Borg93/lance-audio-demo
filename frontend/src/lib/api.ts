@@ -63,6 +63,10 @@ export const HitSchema = z.object({
   // Backend (`_postprocess_hits`) always emits this field — empty array
   // when the chunk has no alignments — so we keep it required here.
   alignments: z.array(AlignmentSchema),
+  // Client-side only: user/Tagger-node tags, keyed by chunk identity in the
+  // workflow graph's tag store and stamped onto hit copies at export time. The
+  // API never sends this (it parses to `undefined`).
+  tags: z.array(z.string()).optional(),
 });
 export type Hit = z.infer<typeof HitSchema>;
 
@@ -256,8 +260,10 @@ export async function getDocTranscript(
     docTranscriptCache.set(doc_id, cached);
     return cached;
   }
-  const p = fetchOnce().catch((e: unknown) => {
-    docTranscriptCache.delete(doc_id); // evict failures so they can be retried
+  const p: Promise<DocTranscript> = fetchOnce().catch((e: unknown) => {
+    // Evict a failure so it can be retried — but only if THIS promise is still
+    // the cached one (a newer fetch for the same doc may have replaced it).
+    if (docTranscriptCache.get(doc_id) === p) docTranscriptCache.delete(doc_id);
     throw e;
   });
   docTranscriptCache.set(doc_id, p);
@@ -347,43 +353,49 @@ export async function getAtlasStatus(
  *  `cluster`/`language`/`namn` are per-space colour/label codes; `namn[i]`
  *  indexes into `namns` (the distinct archival names) for the hover popup.
  *
- *  The payload is an Apache Arrow IPC stream (see `getAtlasPoints`): `x`/`y` and
- *  the keys arrive as typed arrays (kept typed — `ArrayLike<number>` — to avoid
- *  a million-element copy), while the factorized colour *codes* are decoded to
- *  plain `number[]` because they feed APIs typed `readonly number[]`. */
+ *  The payload is an Apache Arrow IPC stream (see `getAtlasPoints`): `x`/`y`
+ *  arrive as Arrow **float16** (raw bits exposed as `xBits`/`yBits` for the GPU
+ *  vertex buffer) and are decoded ONCE on load into owned `Float32Array`s for
+ *  CPU math (hover/lasso/grid). The factorized colour *codes* (doc/cluster/…)
+ *  arrive as Arrow int32 and are kept as `Int32Array` (zero-boxing 145k loops);
+ *  the int64 keys (speech_id/chunk_id/rowid) decode to plain `number[]`. */
 export interface AtlasPoints {
   count: number;
   space?: AtlasSpace;
-  // Float32Array from Arrow — only ever consumed via `Float32Array.from(...)`.
-  x: ArrayLike<number>;
-  y: ArrayLike<number>;
+  /** Decoded f32 coords (owned), full f16-equivalent precision — CPU math. */
+  x: Float32Array;
+  y: Float32Array;
+  /** Raw float16 bits (zero-copy Arrow view) — the GPU vertex data. */
+  xBits: Uint16Array;
+  yBits: Uint16Array;
   docs: string[];
-  doc: number[];
+  doc: Int32Array;
   /** Readable filename stem per distinct doc (aligned with `docs`) — video labels. */
   docFiles?: string[];
   speech_id: number[];
   chunk_id: number[];
   /** Stable Lance row address per point — sent back to /chunks for an
    *  O(selection) take when listing a lasso/legend selection. */
-  rowid?: ArrayLike<number>;
-  cluster?: number[];
-  language?: number[];
+  rowid?: number[];
+  cluster?: Int32Array;
+  language?: Int32Array;
   languages?: string[];
-  namn?: number[];
+  namn?: Int32Array;
   namns?: string[];
   /** Chunk broad topic (`topic_l2`) factorized: `topic[i]` indexes `topics`.
    *  Empty label ('') = unclustered/noise. */
-  topic?: number[];
+  topic?: Int32Array;
   topics?: string[];
   /** Per-video topic (`doc_topic`) factorized: `doc_topic[i]` indexes `doc_topics`. */
-  doc_topic?: number[];
+  doc_topic?: Int32Array;
   doc_topics?: string[];
 }
 
 /** A factorized (codes, labels) pair pulled from one Arrow DICTIONARY column.
- *  `codes` are the per-point dictionary indices; `labels` the distinct values. */
+ *  `codes` are the per-point dictionary indices (int32) kept typed; `labels` the
+ *  distinct values. */
 interface DictColumn {
-  codes: number[];
+  codes: Int32Array;
   labels: string[];
 }
 
@@ -394,27 +406,74 @@ interface DictColumn {
  *  (e.g. `['sv','en','sv']`), not the indices — useless for the per-point colour
  *  codes. The indices live on the underlying `Data` as `.values` (an Int32Array,
  *  since the backend ships `dictionary<int32, utf8>`), and the label list is the
- *  attached `.dictionary` vector. A Vector may be chunked, so we concat the
- *  per-chunk index arrays; the dictionary is shared across chunks, so the first
- *  one wins. Verified against apache-arrow 21.x (`d.values` / `d.dictionary`). */
+ *  attached `.dictionary` vector. A Vector may be chunked; the single-chunk case
+ *  returns the underlying `Int32Array` directly (zero-copy), and a multi-chunk
+ *  vector is concatenated into ONE `Int32Array`. The dictionary is shared across
+ *  chunks, so the first one wins. Verified against apache-arrow 21.x
+ *  (`d.values` is an Int32Array / `d.dictionary`). */
 function dictColumn(vec: Vector | null): DictColumn | null {
   if (!vec) return null;
-  const codes: number[] = [];
   let labels: string[] = [];
   for (const d of vec.data) {
-    for (const code of d.values) codes.push(code);
     if (d.dictionary && labels.length === 0) labels = d.dictionary.toArray() as string[];
   }
+  const codes = concatInt32(vec);
   return { codes, labels };
 }
 
-/** A typed numeric column, kept as the underlying typed array (no copy). */
-function typedColumn(vec: Vector | null): ArrayLike<number> {
-  return (vec?.toArray() ?? []) as ArrayLike<number>;
+/** Concat an int-typed Arrow vector's chunk `.values` into ONE `Int32Array`.
+ *  The single-chunk path returns the underlying buffer view directly (zero-copy);
+ *  the backend ships these columns as int32, so each chunk's `.values` is already
+ *  an `Int32Array`. */
+function concatInt32(vec: Vector): Int32Array {
+  const chunks = vec.data;
+  if (chunks.length === 1) return chunks[0]!.values as Int32Array;
+  let total = 0;
+  for (const d of chunks) total += d.length;
+  const out = new Int32Array(total);
+  let off = 0;
+  for (const d of chunks) {
+    out.set((d.values as Int32Array).subarray(0, d.length), off);
+    off += d.length;
+  }
+  return out;
 }
 
-/** A numeric key column decoded to a plain `number[]` (Arrow int64 columns come
- *  back as BigInt64Array, and several consumers want `readonly number[]`). */
+/** An int32 column kept as the underlying typed array (zero-copy view, or a
+ *  single concat copy if chunked). The backend casts these (e.g. `cluster`) to
+ *  int32, so `.toArray()` returns an `Int32Array`. */
+function int32Column(vec: Vector | null): Int32Array {
+  return (vec?.toArray() ?? new Int32Array()) as Int32Array;
+}
+
+/** A float16 column's RAW bits as a `Uint16Array` (zero-copy Arrow view). Arrow
+ *  stores f16 as `ArrayType=Uint16Array`; `.toArray()` does NOT decode — it
+ *  returns the raw half-float bits, which is exactly the GPU vertex data. */
+function u16Column(vec: Vector | null): Uint16Array {
+  return (vec?.toArray() ?? new Uint16Array()) as Uint16Array;
+}
+
+/** Decode raw float16 bits → an owned `Float32Array` (CPU math). Reproduces
+ *  apache-arrow's `uint16ToFloat64` (numpy's `npy_half_to_double`) emitting f32:
+ *  exponent 0x1F → ±Inf/NaN, 0x00 → subnormal, else normalized. */
+function f16ToF32(bits: Uint16Array): Float32Array {
+  const out = new Float32Array(bits.length);
+  for (let i = 0; i < bits.length; i++) {
+    const h = bits[i]!;
+    const expo = (h & 0x7c00) >> 10;
+    const sigf = (h & 0x03ff) / 1024;
+    const sign = (h & 0x8000) === 0 ? 1 : -1;
+    if (expo === 0x1f) out[i] = sign * (sigf ? Number.NaN : Infinity);
+    else if (expo === 0x00) out[i] = sign * (sigf ? 6.103515625e-5 * sigf : 0);
+    else out[i] = sign * 2 ** (expo - 15) * (1 + sigf);
+  }
+  return out;
+}
+
+/** A numeric key column decoded to a plain `number[]` (consumers want
+ *  `readonly number[]`). Generic across int widths: the only int64 caller is
+ *  `rowid` (a BigInt64Array, so `Number()` is required); the int32 callers
+ *  (speech_id/chunk_id) already iterate as numbers and `Number()` is a no-op. */
 function numberColumn(vec: Vector | null): number[] {
   if (!vec) return [];
   const out: number[] = [];
@@ -434,7 +493,10 @@ export async function getAtlasPoints(
   // added, which would silently break the selection table. Bump when the
   // points payload shape changes; the backend ignores the extra param.
   // v=5: switched the wire format from JSON to an Arrow IPC stream.
-  const r = await fetcher(`/api/atlas/points?space=${space}&v=5`);
+  // v=6: x/y now float16 wire + GPU, decoded to f32 for CPU; ~3 sig-digit
+  // precision. The backend's version-keyed _POINTS_CACHE + the HTTP max-age=300
+  // would otherwise serve stale float32 bytes a JS f16 decoder would misread.
+  const r = await fetcher(`/api/atlas/points?space=${space}&v=6`);
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
     throw new ApiError(r.status, body?.detail ?? r.statusText);
@@ -451,14 +513,20 @@ export async function getAtlasPoints(
   const doc = dictColumn(table.getChild('doc'));
   if (!doc) throw new ApiError(500, 'malformed /api/atlas/points payload (no doc column)');
 
+  // x/y arrive as Arrow float16. Keep the raw bits for the GPU vertex buffer
+  // (zero-copy view) and decode ONCE into owned f32 arrays for CPU math.
+  const xBits = u16Column(table.getChild('x'));
+  const yBits = u16Column(table.getChild('y'));
   const data: AtlasPoints = {
     count,
     docs: doc.labels,
     doc: doc.codes,
     speech_id: numberColumn(table.getChild('speech_id')),
     chunk_id: numberColumn(table.getChild('chunk_id')),
-    x: typedColumn(table.getChild('x')),
-    y: typedColumn(table.getChild('y')),
+    xBits,
+    yBits,
+    x: f16ToF32(xBits),
+    y: f16ToF32(yBits),
   };
 
   if (spaceMeta === 'text' || spaceMeta === 'visual' || spaceMeta === 'caption')
@@ -470,7 +538,7 @@ export async function getAtlasPoints(
   const rowid = table.getChild('rowid');
   if (rowid) data.rowid = numberColumn(rowid); // int64 → number[] (BigInt otherwise)
   const cluster = table.getChild('cluster');
-  if (cluster) data.cluster = numberColumn(cluster); // iterated + fed to readonly number[]
+  if (cluster) data.cluster = int32Column(cluster); // int32 view — index access only
 
   const language = dictColumn(table.getChild('language'));
   if (language) {

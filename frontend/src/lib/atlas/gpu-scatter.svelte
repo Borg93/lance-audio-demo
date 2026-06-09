@@ -5,8 +5,17 @@
    * Modern WebGPU only: the point renderer uses instanced quads (WebGPU has no
    * point-size primitive) shaded into round, premultiplied-alpha sprites. The
    * component owns ONLY pixels + camera + pointer gestures; all data/colour/
-   * selection logic stays in AtlasMap, which feeds us premultiply-free RGBA
-   * bytes and receives DATA-space callbacks.
+   * selection logic stays in AtlasMap, which feeds us split GPU data and
+   * receives DATA-space callbacks.
+   *
+   * DATA SPLIT (for cheap slider dimming — see #2): instead of one premultiplied
+   * RGBA buffer rebuilt on every filterAlpha tick, AtlasMap feeds:
+   *   • xBits/yBits — raw float16 position bits (the GPU vertex buffer, #3);
+   *   • baseRgb     — per-point category hue (rebuilt only on colorBy/theme);
+   *   • state       — 1 byte/point membership enum (rebuilt only on filter/
+   *                   selection/hidden); 0=NORMAL 1=NOISE 2=DIMMED 3=HIDDEN;
+   *   • filterAlpha/noiseAlpha — uniforms the shader applies per state.
+   * A slider drag now writes ONE 4-byte uniform region, not a 145k JS buffer.
    *
    *   • onHover(dataX, dataY)  — rAF-throttled cursor → data coords
    *   • onHoverEnd()           — pointer left the canvas
@@ -18,11 +27,17 @@
    */
 
   type Mode = 'lasso' | 'pan';
+  type FitBounds = { minX: number; minY: number; maxX: number; maxY: number };
 
   let {
-    x,
-    y,
-    rgba,
+    xBits,
+    yBits,
+    fitBounds,
+    baseRgb,
+    // aliased: a bare `state` binding shadows the `$state` rune (svelte error).
+    state: pointState,
+    filterAlpha,
+    noiseAlpha,
     pointSize,
     width,
     height,
@@ -34,9 +49,13 @@
     mode,
     markerXY = null,
   }: {
-    x: Float32Array;
-    y: Float32Array;
-    rgba: Uint8Array; // length 4*count, RGBA bytes; shader premultiplies
+    xBits: Uint16Array; // raw float16 bits, length count — GPU position X
+    yBits: Uint16Array; // raw float16 bits, length count — GPU position Y
+    fitBounds: FitBounds; // data extent (from decoded f32 in AtlasMap) for fit()
+    baseRgb: Uint8Array; // length 3*count or 4*count, per-point category RGB hue
+    state: Uint8Array; // length count, membership enum (0 NORMAL / 1 NOISE / 2 DIMMED / 3 HIDDEN)
+    filterAlpha: number; // 0..120 byte-scale opacity of DIMMED points (slider)
+    noiseAlpha: number; // 0..255 byte-scale opacity of NOISE points (const)
     pointSize: number; // device px diameter; clamped to a sane minimum
     width: number; // css px
     height: number; // css px
@@ -67,19 +86,22 @@
   let uniformBindGroup: GPUBindGroup | null = null;
   let posBuffer: GPUBuffer | null = null;
   let colorBuffer: GPUBuffer | null = null;
+  let stateBuffer: GPUBuffer | null = null;
   // Allocated byte capacity of each vertex buffer. We reuse the buffer across
   // recolours/repositions (writeBuffer only) and reallocate it ONLY when the
-  // data grows past what we've allocated — recolour is the hot path (every
-  // filterAlpha slider tick), so destroy+create of a ~580KB buffer per frame is
-  // pure churn we avoid here.
+  // data grows past what we've allocated. The hot path (a filterAlpha slider
+  // tick) now touches NO vertex buffer at all — it writes a 4-byte uniform —
+  // and a selection change re-uploads only the n-byte state buffer.
   let posCapacity = 0;
   let colorCapacity = 0;
+  let stateCapacity = 0;
   let count = 0;
   let ready = false; // device + pipeline initialised
 
   // identity tracking so we re-upload only when a prop's buffer actually swaps
-  let lastXY: Float32Array | null = null;
-  let lastRgba: Uint8Array | null = null;
+  let lastXBits: Uint16Array | null = null;
+  let lastBaseRgb: Uint8Array | null = null;
+  let lastState: Uint8Array | null = null;
 
   // ── clear colour parsed from the background hex (0..1, opaque) ────────────
   function clearRgb(hex: string): GPUColor {
@@ -96,20 +118,23 @@ struct U {
   scale  : f32,     // device px per data unit
   pointSize : f32,  // point diameter, device px
   resolution : vec2f, // device px
-  _pad : vec2f,
+  filterAlpha : f32,  // 0..1 opacity for DIMMED points (slider)
+  noiseAlpha : f32,   // 0..1 opacity for NOISE points
 };
 @group(0) @binding(0) var<uniform> u : U;
 
 struct VSOut {
   @builtin(position) pos : vec4f,
-  @location(0) color : vec4f,
+  @location(0) rgb   : vec3f,   // per-point category hue
   @location(1) quad  : vec2f,   // [-0.5,0.5] local, for the round mask
+  @location(2) @interpolate(flat) state : u32, // membership enum
 };
 
 @vertex
 fn vs(@builtin(vertex_index) vi : u32,
       @location(0) iPos : vec2f,
-      @location(1) iColor : vec4f) -> VSOut {
+      @location(1) iColor : vec4f,
+      @location(2) iState : vec4u) -> VSOut {
   var C = array<vec2f,6>(
     vec2f(-0.5,-0.5), vec2f(0.5,-0.5), vec2f(-0.5,0.5),
     vec2f(-0.5,0.5),  vec2f(0.5,-0.5), vec2f(0.5,0.5));
@@ -119,16 +144,23 @@ fn vs(@builtin(vertex_index) vi : u32,
   let clip = (p / u.resolution) * 2.0 - vec2f(1.0, 1.0);
   var o : VSOut;
   o.pos = vec4f(clip.x, -clip.y, 0.0, 1.0);  // flip Y (screen is y-down)
-  o.color = iColor;
+  o.rgb = iColor.rgb;
   o.quad = corner;
+  o.state = iState.x;
   return o;
 }
 
 @fragment
-fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec4f {
-  if (color.a < 0.02) { discard; }          // hidden points
-  if (dot(quad, quad) > 0.25) { discard; }  // round point
-  return vec4f(color.rgb * color.a, color.a); // premultiplied
+fn fs(@location(0) rgb : vec3f, @location(1) quad : vec2f,
+      @location(2) @interpolate(flat) state : u32) -> @location(0) vec4f {
+  // alpha per membership state — reproduces AtlasMap's old alphaFor() exactly.
+  // Priority: HIDDEN > DIMMED (filtered-out / not-selected) > NOISE > NORMAL.
+  if (state == 3u) { discard; }                 // HIDDEN
+  if (dot(quad, quad) > 0.25) { discard; }      // round point
+  var a : f32 = 1.0;                            // NORMAL
+  if (state == 2u) { a = u.filterAlpha; }       // DIMMED
+  else if (state == 1u) { a = u.noiseAlpha; }   // NOISE
+  return vec4f(rgb * a, a);                      // premultiplied (a=0 → invisible no-op)
 }
 `;
 
@@ -182,14 +214,25 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
         entryPoint: 'vs',
         buffers: [
           {
-            arrayStride: 8,
+            // position: float16x2 (4 bytes/point, was float32x2/8). The shader's
+            // `iPos: vec2f` auto-converts f16→f32.
+            arrayStride: 4,
             stepMode: 'instance',
-            attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
+            attributes: [{ shaderLocation: 0, offset: 0, format: 'float16x2' }],
           },
           {
+            // base colour: per-point category RGB (alpha byte unused). The shader
+            // reads `.rgb` and applies the state-derived alpha itself.
             arrayStride: 4,
             stepMode: 'instance',
             attributes: [{ shaderLocation: 1, offset: 0, format: 'unorm8x4' }],
+          },
+          {
+            // state: membership enum in `.x` (uint8x4 — WebGPU requires
+            // arrayStride%4==0, so the source byte is padded to 4 at upload).
+            arrayStride: 4,
+            stepMode: 'instance',
+            attributes: [{ shaderLocation: 2, offset: 0, format: 'uint8x4' }],
           },
         ],
       },
@@ -210,7 +253,10 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     });
 
     const ubo = dev.createBuffer({
-      size: 32, // center vec2f, scale f32, pointSize f32, resolution vec2f, pad vec2f
+      // center vec2f(8) + scale f32(4) + pointSize f32(4) + resolution vec2f(8,
+      // @16) + filterAlpha f32(4, @24) + noiseAlpha f32(4, @28) = 32 bytes
+      // (already a 16-byte multiple).
+      size: 32,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     const bindGroup = dev.createBindGroup({
@@ -218,19 +264,27 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       entries: [{ binding: 0, resource: { buffer: ubo } }],
     });
 
-    return { device: dev, ctx: context, pipeline: pl, uniformBuffer: ubo, uniformBindGroup: bindGroup };
+    return {
+      device: dev,
+      ctx: context,
+      pipeline: pl,
+      uniformBuffer: ubo,
+      uniformBindGroup: bindGroup,
+    };
   }
 
   // ── data → GPU buffers ────────────────────────────────────────────────────
+  /** Interleave the raw f16 x/y bits into ONE Uint16Array(n*2) — the GPU reads
+   *  it as float16x2 (4 bytes/point, half the old float32x2 buffer). */
   function uploadPositions(): void {
     const dev = device;
     if (!dev) return;
-    const n = Math.min(x.length, y.length);
+    const n = Math.min(xBits.length, yBits.length);
     count = n;
-    const interleaved = new Float32Array(n * 2);
+    const interleaved = new Uint16Array(n * 2);
     for (let i = 0; i < n; i++) {
-      interleaved[i * 2] = x[i]!;
-      interleaved[i * 2 + 1] = y[i]!;
+      interleaved[i * 2] = xBits[i]!;
+      interleaved[i * 2 + 1] = yBits[i]!;
     }
     const byteLength = Math.max(interleaved.byteLength, 4); // GPU buffers must be non-empty
     // Reuse the existing buffer when it's large enough; only (re)create on grow.
@@ -251,13 +305,26 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     );
   }
 
-  function uploadColors(): void {
+  /** Upload the per-point base RGB (the category hue). Always 4 bytes/point on
+   *  the GPU (unorm8x4 reads .rgb; the alpha byte is unused). Accepts a packed
+   *  3-byte/point source and expands, or a 4-byte/point source uploaded as-is.
+   *  Rebuilt rarely (colorBy / theme change), so the expand cost is negligible. */
+  function uploadBase(): void {
     const dev = device;
     if (!dev) return;
-    const byteLength = Math.max(rgba.byteLength, 4); // GPU buffers must be non-empty
-    // Recolour is the hot path (filterAlpha slider, lasso, theme): just
-    // writeBuffer into the existing buffer instead of destroy+create, and
-    // reallocate only when the point count actually grows.
+    const n = count;
+    let rgba4: Uint8Array;
+    if (baseRgb.length >= n * 4) {
+      rgba4 = baseRgb;
+    } else {
+      rgba4 = new Uint8Array(n * 4);
+      for (let i = 0; i < n; i++) {
+        rgba4[i * 4] = baseRgb[i * 3] ?? 0;
+        rgba4[i * 4 + 1] = baseRgb[i * 3 + 1] ?? 0;
+        rgba4[i * 4 + 2] = baseRgb[i * 3 + 2] ?? 0;
+      }
+    }
+    const byteLength = Math.max(rgba4.byteLength, 4); // GPU buffers must be non-empty
     if (!colorBuffer || byteLength > colorCapacity) {
       if (colorBuffer) colorBuffer.destroy();
       colorBuffer = dev.createBuffer({
@@ -266,24 +333,37 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       });
       colorCapacity = byteLength;
     }
-    dev.queue.writeBuffer(colorBuffer, 0, rgba.buffer, rgba.byteOffset, rgba.byteLength);
+    dev.queue.writeBuffer(colorBuffer, 0, rgba4.buffer, rgba4.byteOffset, rgba4.byteLength);
   }
 
-  /** Fit the camera so the whole point cloud is visible & centred. */
-  function fit(): void {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    const n = Math.min(x.length, y.length);
-    for (let i = 0; i < n; i++) {
-      const xi = x[i]!;
-      const yi = y[i]!;
-      if (xi < minX) minX = xi;
-      if (xi > maxX) maxX = xi;
-      if (yi < minY) minY = yi;
-      if (yi > maxY) maxY = yi;
+  /** Upload the per-point state enum. The source is n bytes; the GPU attribute
+   *  is uint8x4 (arrayStride must be %4==0, so stride 1 is INVALID) — expand to
+   *  Uint8Array(n*4) with the enum in `.x` and the rest zero. n bytes of state
+   *  re-uploaded on a selection/filter change is 8× smaller than the old RGBA. */
+  function uploadState(): void {
+    const dev = device;
+    if (!dev) return;
+    const n = count;
+    const padded = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) padded[i * 4] = pointState[i] ?? 0;
+    const byteLength = Math.max(padded.byteLength, 4); // GPU buffers must be non-empty
+    if (!stateBuffer || byteLength > stateCapacity) {
+      if (stateBuffer) stateBuffer.destroy();
+      stateBuffer = dev.createBuffer({
+        size: byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      stateCapacity = byteLength;
     }
+    dev.queue.writeBuffer(stateBuffer, 0, padded.buffer, padded.byteOffset, padded.byteLength);
+  }
+
+  /** Fit the camera so the whole point cloud is visible & centred. The data
+   *  extent is computed by AtlasMap from the SAME decoded f32 x/y the grid uses
+   *  (we only hold the raw f16 bits here), so the initial fit matches the
+   *  rendered f16 positions. */
+  function fit(): void {
+    let { minX, minY, maxX, maxY } = fitBounds;
     if (!Number.isFinite(minX)) {
       minX = 0;
       minY = 0;
@@ -318,7 +398,9 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     if (canvas.width !== resW) canvas.width = resW;
     if (canvas.height !== resH) canvas.height = resH;
 
-    // uniforms: center vec2f, scale f32, pointSize f32, resolution vec2f, pad vec2f
+    // uniforms: center vec2f, scale f32, pointSize f32, resolution vec2f,
+    // filterAlpha f32, noiseAlpha f32 (byte alphas → 0..1 here). A slider tick
+    // changes only u[6] and is picked up on the next draw — no buffer re-upload.
     const u = new Float32Array(8);
     u[0] = center[0];
     u[1] = center[1];
@@ -326,8 +408,8 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
     u[3] = Math.max(1.5, pointSize);
     u[4] = resW;
     u[5] = resH;
-    u[6] = 0;
-    u[7] = 0;
+    u[6] = filterAlpha / 255;
+    u[7] = noiseAlpha / 255;
     dev.queue.writeBuffer(uniformBuffer, 0, u.buffer, u.byteOffset, u.byteLength);
 
     const enc = dev.createCommandEncoder();
@@ -341,11 +423,12 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
         },
       ],
     });
-    if (count > 0 && posBuffer && colorBuffer) {
+    if (count > 0 && posBuffer && colorBuffer && stateBuffer) {
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, uniformBindGroup);
       pass.setVertexBuffer(0, posBuffer);
       pass.setVertexBuffer(1, colorBuffer);
+      pass.setVertexBuffer(2, stateBuffer);
       pass.draw(6, count);
     }
     pass.end();
@@ -384,9 +467,11 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       uniformBindGroup = h.uniformBindGroup;
       ready = true;
       uploadPositions();
-      uploadColors();
-      lastXY = x;
-      lastRgba = rgba;
+      uploadBase();
+      uploadState();
+      lastXBits = xBits;
+      lastBaseRgb = baseRgb;
+      lastState = pointState;
       fit();
       requestDraw();
     })();
@@ -398,6 +483,7 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       }
       if (posBuffer) posBuffer.destroy();
       if (colorBuffer) colorBuffer.destroy();
+      if (stateBuffer) stateBuffer.destroy();
       if (uniformBuffer) uniformBuffer.destroy();
       if (device) device.destroy();
       device = null;
@@ -407,30 +493,51 @@ fn fs(@location(0) color : vec4f, @location(1) quad : vec2f) -> @location(0) vec
       uniformBindGroup = null;
       posBuffer = null;
       colorBuffer = null;
+      stateBuffer = null;
       posCapacity = 0;
       colorCapacity = 0;
+      stateCapacity = 0;
       ready = false;
     };
   });
 
-  // Re-upload + refit when x/y swap identity (a space change / new data).
+  // Re-upload + refit when the position bits swap identity (space change / new
+  // data). Identity keys on xBits (x and y always swap together on a load).
   $effect(() => {
-    void x;
-    void y;
-    if (!ready || x === lastXY) return;
+    void xBits;
+    void yBits;
+    if (!ready || xBits === lastXBits) return;
     uploadPositions();
-    lastXY = x;
+    lastXBits = xBits;
     fit();
     requestDraw();
   });
 
-  // Re-upload colours when the rgba buffer swaps identity (recolour / filter).
+  // Re-upload the base hue only when it swaps identity (colorBy / theme change).
   $effect(() => {
-    void rgba;
-    if (!ready || rgba === lastRgba) return;
-    uploadColors();
-    lastRgba = rgba;
+    void baseRgb;
+    if (!ready || baseRgb === lastBaseRgb) return;
+    uploadBase();
+    lastBaseRgb = baseRgb;
     requestDraw();
+  });
+
+  // Re-upload the membership state only when it swaps identity (filter /
+  // selection / hidden change) — n bytes, 8× smaller than the old RGBA buffer.
+  $effect(() => {
+    void pointState;
+    if (!ready || pointState === lastState) return;
+    uploadState();
+    lastState = pointState;
+    requestDraw();
+  });
+
+  // A filterAlpha (or noiseAlpha) slider tick: draw() reads it into the uniform
+  // every frame, so just request a redraw — ZERO 145k JS, ZERO buffer upload.
+  $effect(() => {
+    void filterAlpha;
+    void noiseAlpha;
+    if (ready) requestDraw();
   });
 
   // Redraw on any camera / size / point-size change.

@@ -6,11 +6,14 @@ frontend's custom Atlas tab:
 
 * ``GET /status?space=`` — which projection spaces (text|visual) are built, and
   how many rows carry the requested one.
-* ``GET /points?space=`` — compact arrays (x/y/cluster/language/namn + a doc-id
-  dictionary and per-point keys) for the in-browser scatter renderer. No 2048-d
-  vectors, no per-point text — small and fast to load. ``namn`` is factorized
-  (low-cardinality archival metadata) for the hover popup; high-cardinality
-  text/caption stay out and are lazy-fetched per chunk via ``/chunk``.
+* ``GET /points?space=`` — one Apache Arrow IPC **stream** (binary, parse-free):
+  x/y coords, per-point keys, and a handful of categorical columns shipped as
+  Arrow ``DICTIONARY<int32, utf8>`` (the dictionary indices are the per-point
+  colour codes, the dictionary values are the labels — factorization for free).
+  No 2048-d vectors, no per-point text — small and fast to load. ``namn`` is a
+  dictionary column (low-cardinality archival metadata) for the hover popup;
+  high-cardinality text/caption stay out and are lazy-fetched per chunk via
+  ``/chunk``.
 * ``GET /chunk/..`` — the full hit for one chunk (text + alignments + paths),
   fetched lazily when a point is selected, for the detail pane + playback.
 
@@ -18,12 +21,14 @@ All are pure ``StateDep`` reads via the native-LanceDB scan idiom over the cache
 ``state.chunks_ds`` handle (the same dataset ``search/service.py`` reads from).
 """
 
+import json
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
+import pyarrow as pa
+import pyarrow.compute as pc
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from backend.deps import StateDep
@@ -31,13 +36,17 @@ from raudio.features.topic_tree import topic_layer_columns
 
 router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 
+#: Media type for the /points Arrow IPC stream response.
+_ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
+
 #: Memoized /points payloads keyed on (space, dataset version). The full 145k-row
-#: scan + factorize is identical for a given dataset version, so we compute it once
-#: per space and serve the cached dict thereafter. The dataset version bumps on any
-#: rewrite (and a backend restart reopens `chunks_ds` anyway), invalidating stale
-#: entries. A plain dict suffices: writes are idempotent (same input → same output),
-#: so a concurrent double-compute just overwrites with an equal value.
-_POINTS_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
+#: scan + dictionary-encode is identical for a given dataset version, so we build
+#: the Arrow IPC stream once per space and serve the cached *bytes* thereafter. The
+#: dataset version bumps on any rewrite (and a backend restart reopens `chunks_ds`
+#: anyway), invalidating stale entries. A plain dict suffices: writes are idempotent
+#: (same input → same bytes), so a concurrent double-compute overwrites with equal
+#: bytes.
+_POINTS_CACHE: dict[tuple[str, int], bytes] = {}
 
 #: The two projection spaces and their column triplets. ``text`` is the default
 #: (``raudio feature atlas``, from ``text_embedding``); ``visual`` is the
@@ -84,24 +93,19 @@ def _is_projected(state: StateDep, space: str = "text") -> bool:
     return _space_cols(space)["x"] in state.chunks.schema.names
 
 
-def _factorize(values: list[Any]) -> tuple[list[int], list[str]]:
-    """Map a column of repeated values to (per-row index, distinct-label list).
+def _dictionary(column: pa.ChunkedArray) -> pa.Array:
+    """Encode a string column as Arrow ``DICTIONARY<int32, utf8>`` — the codes/
+    labels split done natively (indices = per-point colour codes, values =
+    labels), replacing the hand-rolled ``_factorize``.
 
-    Lets us ship one small label list + a compact int per row instead of the
-    full (often long, repeated) string on every point — e.g. doc ids, language.
+    NULLs are filled to the empty-string label ``""`` first (the frontend
+    renders that muted), so the dictionary carries no nulls — matching the old
+    contract. ``int32`` indices keep the codes in the typed-array range the JS
+    scatter expects.
     """
-    index: dict[Any, int] = {}
-    labels: list[str] = []
-    codes: list[int] = []
-    for v in values:
-        v = "" if v is None else v
-        code = index.get(v)
-        if code is None:
-            code = len(labels)
-            index[v] = code
-            labels.append(str(v))
-        codes.append(code)
-    return codes, labels
+    filled = pc.fill_null(column.cast(pa.string()), "")
+    encoded = filled.combine_chunks().dictionary_encode()
+    return encoded.cast(pa.dictionary(pa.int32(), pa.string()))
 
 
 @router.get("/status")
@@ -125,10 +129,30 @@ def atlas_status(
     return {"projected": projected, "rows": rows, "space": space, "spaces": spaces}
 
 
-def _build_points(state: StateDep, space: str) -> dict[str, Any]:
-    """The expensive part of /points: full-table scan + factorize into ``out``.
+def _doc_file_stems(doc_dict: pa.Array, doc_ids: list[str], audio_paths: list[str]) -> list[str]:
+    """Filename stem per distinct doc, aligned with the ``doc`` dictionary order.
 
-    Pulled out so :func:`atlas_points` can memoize the result per (space, version).
+    The map view colours/labels by video using the readable audio stem (e.g.
+    ``T0000234_00001``) rather than the hashed doc id. The result is one value
+    per dictionary entry, in dictionary order, so the frontend can index it by
+    the same code it uses for ``doc``. Shipped in schema metadata (not a column:
+    it has one entry per distinct doc, not one per point).
+    """
+    stem_by_doc: dict[str, str] = {}
+    for d, a in zip(doc_ids, audio_paths, strict=True):
+        if d not in stem_by_doc:
+            stem_by_doc[d] = Path(a).stem if a else d
+    return [stem_by_doc.get(d, d) for d in doc_dict.to_pylist()]
+
+
+def _build_points(state: StateDep, space: str) -> bytes:
+    """The expensive part of /points: full-table scan → one Arrow IPC stream.
+
+    Builds a single ``pyarrow.Table`` (float16 coords, ~3 sig-digit precision —
+    fine for a ~2000px scatter, and it halves both the wire payload and the GPU
+    vertex buffer; int32/int64 keys, and a handful of ``DICTIONARY<int32, utf8>``
+    colour columns) and serializes it to Arrow IPC **stream** bytes. Pulled out
+    so :func:`atlas_points` can memoize the bytes per (space, version).
     """
     cols = _space_cols(space)
     x_col, y_col, cluster_col = cols["x"], cols["y"], cols["cluster"]
@@ -136,7 +160,7 @@ def _build_points(state: StateDep, space: str) -> dict[str, Any]:
     columns = ["doc_id", "audio_path", "speech_id", "chunk_id", x_col, y_col]
     # The broadest topic layer (data-dependent — `topic_l{N-1}`, not always l2)
     # colours the map into named regions; `doc_topic` is the per-video roll-up.
-    # Both are low-cardinality (~19) so they factorize into a small label list.
+    # Both are low-cardinality (~19), so the dictionary label list stays tiny.
     topic_cols = topic_layer_columns(list(schema))
     broad_topic_col = topic_cols[-1] if topic_cols else None
     for optional in (cluster_col, "language", "namn", broad_topic_col, "doc_topic"):
@@ -146,66 +170,79 @@ def _build_points(state: StateDep, space: str) -> dict[str, Any]:
     # `with_row_id` ships each point's stable Lance row address (`_rowid`) so the
     # selection table can be fetched with an O(selection) `take` (see /chunks)
     # instead of a per-key filtered full-table scan.
-    tbl = (
-        state.chunks_ds.scanner(
-            columns=columns, filter=f"{x_col} IS NOT NULL", with_row_id=True
-        ).to_table()
+    tbl = state.chunks_ds.scanner(
+        columns=columns, filter=f"{x_col} IS NOT NULL", with_row_id=True
+    ).to_table()
+
+    def halves(name: str) -> pa.Array:
+        # Ship coords as float16 — ~3 sig-digit precision, sub-pixel on the
+        # ~2000px scatter — halving the /points payload AND the GPU vertex
+        # buffer. The frontend reads the raw f16 bits for the GPU and decodes
+        # them to f32 for CPU hover/lasso math (api.ts:f16ToF32).
+        arr = tbl.column(name).to_numpy(zero_copy_only=False).astype(np.float16)
+        return pa.array(arr, type=pa.float16())
+
+    def ints(name: str, dtype: pa.DataType) -> pa.Array:
+        return tbl.column(name).combine_chunks().cast(dtype)
+
+    doc_dict = _dictionary(tbl.column("doc_id"))
+    doc_files = _doc_file_stems(
+        doc_dict.dictionary,
+        tbl.column("doc_id").to_pylist(),
+        tbl.column("audio_path").to_pylist(),
     )
 
-    def floats(name: str) -> list[float]:
-        return np.round(tbl.column(name).to_numpy(zero_copy_only=False), 4).tolist()
+    arrays: list[pa.Array] = [
+        halves(x_col),
+        halves(y_col),
+        ints("speech_id", pa.int32()),
+        ints("chunk_id", pa.int32()),
+        ints("_rowid", pa.int64()),  # stable address for take-based selection fetch
+        doc_dict,  # DICTIONARY<int32, utf8>: indices = `doc`, values = `docs`
+    ]
+    names = ["x", "y", "speech_id", "chunk_id", "rowid", "doc"]
 
-    def ints(name: str) -> list[int]:
-        return tbl.column(name).to_numpy(zero_copy_only=False).astype(int).tolist()
-
-    doc_ids = tbl.column("doc_id").to_pylist()
-    docs_codes, docs_labels = _factorize(doc_ids)
-    # Readable per-video label: the audio filename stem (e.g. "T0000234_00001"),
-    # one per distinct doc and aligned with `docs`, so the UI can colour/label by
-    # video without exposing the hashed doc_id.
-    stem_by_doc: dict[str, str] = {}
-    for d, a in zip(doc_ids, tbl.column("audio_path").to_pylist(), strict=True):
-        if d not in stem_by_doc:
-            stem_by_doc[d] = Path(a).stem if a else d
-    out: dict[str, Any] = {
-        "count": tbl.num_rows,
-        "space": space,
-        "x": floats(x_col),
-        "y": floats(y_col),
-        "docs": docs_labels,  # distinct doc ids
-        "doc": docs_codes,  # per-point index into `docs`
-        "docFiles": [stem_by_doc.get(d, d) for d in docs_labels],  # filename stem per doc
-        "speech_id": ints("speech_id"),
-        "chunk_id": ints("chunk_id"),
-        "rowid": ints("_rowid"),  # stable address for take-based selection fetch
-    }
     if cluster_col in columns:
-        out["cluster"] = ints(cluster_col)
+        arrays.append(ints(cluster_col, pa.int32()))
+        names.append("cluster")
     if "language" in columns:
-        lang_codes, lang_labels = _factorize(tbl.column("language").to_pylist())
-        out["language"] = lang_codes
-        out["languages"] = lang_labels
+        arrays.append(_dictionary(tbl.column("language")))
+        names.append("language")
     if "namn" in columns:
-        # Factorized archival name: low-cardinality metadata for the hover popup.
-        # A small label list + a per-point int — safe to ship for 145k rows
+        # Archival name dictionary: low-cardinality metadata for the hover popup.
+        # A small label list + a per-point int32 — safe to ship for 145k rows
         # (unlike high-cardinality text/caption, which we lazy-fetch per chunk).
-        namn_codes, namn_labels = _factorize(tbl.column("namn").to_pylist())
-        out["namn"] = namn_codes
-        out["namns"] = namn_labels
+        arrays.append(_dictionary(tbl.column("namn")))
+        names.append("namn")
     if broad_topic_col and broad_topic_col in columns:
         # Broadest chunk topic — colours the map into named regions. Unclustered
         # chunks are NULL → "" label, rendered muted on the map.
-        topic_codes, topic_labels = _factorize(tbl.column(broad_topic_col).to_pylist())
-        out["topic"] = topic_codes
-        out["topics"] = topic_labels
+        arrays.append(_dictionary(tbl.column(broad_topic_col)))
+        names.append("topic")
     if "doc_topic" in columns:
         # Per-video dominant topic; NULL → "" label when a video's chunks are all
         # noise (so not strictly 100% — most videos do get a topic).
-        dt_codes, dt_labels = _factorize(tbl.column("doc_topic").to_pylist())
-        out["doc_topic"] = dt_codes
-        out["doc_topics"] = dt_labels
+        arrays.append(_dictionary(tbl.column("doc_topic")))
+        names.append("doc_topic")
 
-    return out
+    # count + space + docFiles ride along in the schema metadata. `docFiles` has
+    # one entry per distinct doc (not one per point), so it can't be a column in
+    # this per-point table — it's JSON-encoded here, aligned with the `doc`
+    # dictionary order so the frontend can index it by the same code.
+    out_schema = pa.schema(
+        [pa.field(n, a.type) for n, a in zip(names, arrays, strict=True)],
+        metadata={
+            b"count": str(tbl.num_rows).encode(),
+            b"space": space.encode(),
+            b"docFiles": json.dumps(doc_files).encode(),
+        },
+    )
+    out = pa.table(arrays, schema=out_schema)
+
+    sink = pa.BufferOutputStream()
+    with pa.ipc.RecordBatchStreamWriter(sink, out.schema) as writer:
+        writer.write_table(out)
+    return sink.getvalue().to_pybytes()
 
 
 @router.get("/points")
@@ -214,8 +251,8 @@ def atlas_points(
     space: Literal["text", "visual", "caption"] = Query(
         "text", description="Projection space to read."
     ),
-) -> JSONResponse:
-    """Compact arrays for the scatter renderer (coords + colour codes + keys)."""
+) -> Response:
+    """One Apache Arrow IPC stream for the scatter renderer (coords + codes + keys)."""
     if not _is_projected(state, space):
         hint = (
             "raudio feature atlas" if space == "text" else f"raudio feature atlas --space {space}"
@@ -225,29 +262,36 @@ def atlas_points(
             detail=f"{space} 2D projection not built yet — run `{hint}`",
         )
 
-    # Memoize on (space, dataset version): the scan+factorize is identical until
-    # the dataset is rewritten (version bump) or the backend restarts.
+    # Memoize on (space, dataset version): the scan+encode is identical until the
+    # dataset is rewritten (version bump) or the backend restarts.
     key = (space, state.chunks_ds.version)
-    out = _POINTS_CACHE.get(key)
-    if out is None:
-        out = _build_points(state, space)
-        _POINTS_CACHE[key] = out
+    body = _POINTS_CACHE.get(key)
+    if body is None:
+        body = _build_points(state, space)
+        _POINTS_CACHE[key] = body
 
-    return JSONResponse(out, headers={"Cache-Control": "public, max-age=300"})
+    return Response(
+        content=body,
+        media_type=_ARROW_STREAM_MEDIA_TYPE,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
 
 
 def _attach_frame_captions(frames: Any, rows: list[dict[str, Any]]) -> None:
     """Attach each chunk's representative-frame (``frame_idx=0``) caption from
-    ``chunk_frames`` — captions live there, not on ``chunks``. Batched so the key
-    filter never grows the deep ``OR`` that overflows the parser on a big
-    selection; a no-op when frames/captions are absent (captions are decorative).
+    ``chunk_frames`` — captions live there, not on ``chunks``. Batched to keep the
+    number of ``chunk_frames`` scans low per selection; a no-op when frames or
+    captions are absent (captions are decorative).
     """
     from backend.search.service import _attach_captions
 
     if frames is None or not rows:
         return
-    for start in range(0, len(rows), 150):
-        _attach_captions(frames, rows[start : start + 150])
+    # _attach_captions now filters with `doc_id IN (...)` (not the deep per-hit
+    # OR that used to overflow the parser), so we batch large — a 1000-point
+    # lasso goes from ~7 scans to ~2 (≈430ms→360ms, benchmarked).
+    for start in range(0, len(rows), 500):
+        _attach_captions(frames, rows[start : start + 500])
 
 
 @router.get("/chunk/{doc_id}/{speech_id}/{chunk_id}")

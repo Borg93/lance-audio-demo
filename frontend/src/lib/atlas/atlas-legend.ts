@@ -19,7 +19,9 @@ export type CategoryLegendRow = {
   frac: number;
   empty: boolean;
 };
-export type CategoryChannel = { codes: readonly number[]; labels: readonly string[] };
+// `codes` is `ArrayLike<number>` (not `readonly number[]`) so an `Int32Array`
+// from the points payload satisfies it — consumers only index + read `.length`.
+export type CategoryChannel = { codes: ArrayLike<number>; labels: readonly string[] };
 export type ClusterRanking = { slotOf: Map<number, number>; distinct: number };
 
 /** Intersection of the search-filter set and the map-selection set (null ⇒ all points). */
@@ -38,8 +40,11 @@ export function visibleIds(
   return f ?? s ?? null;
 }
 
-/** Tally code[i] over the visible indices (or every point when null). */
-export function tally(codes: readonly number[], visible: Set<number> | null): Map<number, number> {
+/** Tally code[i] over the visible indices (or every point when null). `codes`
+ *  is `ArrayLike<number>` (an `Int32Array` from the points payload), so the
+ *  no-`visible` path uses an index loop, not `for…of` (a TypedArray iterates
+ *  fine, but `ArrayLike` carries no iterator in the type). */
+export function tally(codes: ArrayLike<number>, visible: Set<number> | null): Map<number, number> {
   const counts = new Map<number, number>();
   if (visible) {
     for (const i of visible) {
@@ -47,7 +52,10 @@ export function tally(codes: readonly number[], visible: Set<number> | null): Ma
       if (code !== undefined) counts.set(code, (counts.get(code) ?? 0) + 1);
     }
   } else {
-    for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
+    for (let i = 0; i < codes.length; i++) {
+      const code = codes[i]!;
+      counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
   }
   return counts;
 }
@@ -62,7 +70,7 @@ export function maxCount(values: Iterable<number>): number {
 /** Legend rows for cluster mode (clickable to select a cluster). Caller guards
  *  that the points have a `cluster` column and `ranking` is resolved. */
 export function buildClusterLegend(
-  cluster: readonly number[],
+  cluster: ArrayLike<number>,
   ranking: ClusterRanking,
   visible: Set<number> | null,
   isDark: boolean,
@@ -83,7 +91,7 @@ export function buildClusterLegend(
 /** Distinct non-noise cluster count + noise (unclustered) point count — for
  *  the legend's "showing X of Y" line and the noise summary row. */
 export function clusterStats(
-  cluster: readonly number[] | undefined,
+  cluster: ArrayLike<number> | undefined,
   visible: Set<number> | null,
 ): { total: number; noise: number } {
   if (!cluster) return { total: 0, noise: 0 };

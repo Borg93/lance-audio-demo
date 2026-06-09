@@ -44,6 +44,7 @@
   } from './atlas-legend';
   import { Button, Select, type SelectOption } from '$lib/components/ui';
   import { Loader2, Lasso, X, Hand, Settings2 } from 'lucide-svelte';
+  import { useColorMode } from '$lib/theme.svelte';
 
   let {
     active = $bindable(null),
@@ -66,8 +67,18 @@
   let error = $state<string | null>(null);
   let loading = $state(true);
   let pts = $state.raw<AtlasPoints | null>(null);
-  let x = $state.raw<Float32Array | null>(null);
+  let x = $state.raw<Float32Array | null>(null); // decoded f32 coords (CPU math)
   let y = $state.raw<Float32Array | null>(null);
+  let xBits = $state.raw<Uint16Array | null>(null); // raw f16 bits (GPU vertex data)
+  let yBits = $state.raw<Uint16Array | null>(null);
+  // Data extent computed from the decoded f32 x/y (same source the grid uses) so
+  // GpuScatter's camera fit matches the rendered f16 positions.
+  let fitBounds = $state.raw<{ minX: number; minY: number; maxX: number; maxY: number }>({
+    minX: 0,
+    minY: 0,
+    maxX: 1,
+    maxY: 1,
+  });
   let grid = $state.raw<SpatialGrid | null>(null); // uniform bucket index for hover
   let visualBuilt = $state(false); // whether atlas_img_* exists (gates the toggle)
   let captionBuilt = $state(false); // whether atlas_cap_* exists (gates the toggle)
@@ -89,17 +100,33 @@
   let mapH = $state(0);
 
   // theme follows the app's theme button (toggles `.dark` on <html>)
-  let isDark = $state(document.documentElement.classList.contains('dark'));
-  $effect(() => {
-    const obs = new MutationObserver(() => {
-      isDark = document.documentElement.classList.contains('dark');
-    });
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    return () => obs.disconnect();
-  });
+  const theme = useColorMode();
+  const isDark = $derived(theme.isDark);
 
   // Spatial-grid hover picking (`buildGrid`/`nearestIndex`) lives in ./atlas-grid;
   // lasso geometry in ./atlas-geometry; colour math in ./atlas-colors — all pure.
+
+  /** Data extent of the decoded f32 coords (drives GpuScatter's camera fit). */
+  function boundsOf(
+    xs: Float32Array,
+    ys: Float32Array,
+  ): { minX: number; minY: number; maxX: number; maxY: number } {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const n = Math.min(xs.length, ys.length);
+    for (let i = 0; i < n; i++) {
+      const xi = xs[i]!;
+      const yi = ys[i]!;
+      if (xi < minX) minX = xi;
+      if (xi > maxX) maxX = xi;
+      if (yi < minY) minY = yi;
+      if (yi > maxY) maxY = yi;
+    }
+    if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
+    return { minX, minY, maxX, maxY };
+  }
 
   // ── load points for a space + (re)build the shared key→index map ──────────
   async function load(space: AtlasSpace): Promise<void> {
@@ -108,11 +135,19 @@
     try {
       const p = await getAtlasPoints(space);
       pts = p;
-      const xs = Float32Array.from(p.x);
-      const ys = Float32Array.from(p.y);
+      // x/y arrive already decoded to owned Float32Arrays (api.ts) — consume the
+      // views directly, no `Float32Array.from(...)` copy. The raw f16 bits feed
+      // the GPU vertex buffer.
+      const xs = p.x;
+      const ys = p.y;
       x = xs;
       y = ys;
+      xBits = p.xBits;
+      yBits = p.yBits;
       grid = buildGrid(xs, ys);
+      // Compute the data extent from the SAME decoded f32 so GpuScatter's fit
+      // lines up with the f16 GPU positions (both derive from these bits).
+      fitBounds = boundsOf(xs, ys);
       crossFilter.resetForSpace(buildKeyIndex(p.docs, p.doc, p.speech_id, p.chunk_id));
       selectionCount = 0;
       onSelectionHits?.([], 0);
@@ -120,6 +155,8 @@
       pts = null;
       x = null;
       y = null;
+      xBits = null;
+      yBits = null;
       grid = null;
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -200,30 +237,34 @@
     return null;
   }
 
+  // Membership state enum bytes (must match the WGSL fragment + the old alphaFor
+  // priority): 0=NORMAL (full), 1=NOISE (noiseAlpha), 2=DIMMED (filterAlpha),
+  // 3=HIDDEN (discard). DIMMED outranks NOISE — a filtered-out/unselected noise
+  // point dims to filterAlpha, exactly as the old alphaFor did.
+  const ST_NORMAL = 0;
+  const ST_NOISE = 1;
+  const ST_DIMMED = 2;
+  const ST_HIDDEN = 3;
+
   /**
-   * Per-point RGBA buffer (length 4*count). Replaces the old category/
-   * categoryColors pair — the shader reads true per-point alpha so dimming is
-   * just a low alpha byte, removing the 256-slot palette limit entirely.
-   * Recomputed when colorBy / space / filteredIds / selectedIds /
-   * hidden codes / theme change — NOT on hover.
+   * Per-point base RGB hue (length 3*count) — the category colour ONLY, no
+   * alpha. The shader applies the state-derived alpha. Rebuilt only when the
+   * HUE changes: colorBy / theme (isDark) / space (pts) / clusterRanking — NOT
+   * on the filterAlpha slider, NOT on selection. (hidden points are handled by
+   * the state buffer, so `hidden` is intentionally not a dep here.)
    */
-  const rgba = $derived.by((): Uint8Array | null => {
+  const baseRgb = $derived.by((): Uint8Array | null => {
     const p = pts;
     if (!p) return null;
     const n = p.count;
     const colorBy = crossFilter.colorBy;
-    const buf = new Uint8Array(n * 4);
+    const buf = new Uint8Array(n * 3);
 
-    // Read both cross-filter Sets once (tracks them as deps + avoids 145k method
-    // calls). A point EXCLUDED by either the search filter or the lasso/cluster
-    // selection fades to the slider-controlled `filterAlpha`, so the "Dimmed
-    // opacity" slider governs how visible excluded points are in BOTH contexts.
-    const fIds = crossFilter.filteredIds;
-    const sel = crossFilter.selectedIds;
-    const alphaFor = (i: number, base: number): number => {
-      const filteredOut = fIds !== null && !fIds.has(i);
-      const notSelected = sel.size > 0 && !sel.has(i);
-      return filteredOut || notSelected ? filterAlpha : base;
+    const write = (i: number, col: Rgb): void => {
+      const o = i * 3;
+      buf[o] = col.r;
+      buf[o + 1] = col.g;
+      buf[o + 2] = col.b;
     };
 
     if (colorBy === 'cluster' && p.cluster) {
@@ -232,32 +273,16 @@
       const { slotOf, distinct } = r;
       const palette = buildHuePalette(distinct, isDark); // distinct hues once, not per point
       const cl = p.cluster;
-      const hidden = crossFilter.hidden;
       const noise = NOISE_RGB;
       const other = OTHER_RGB;
       for (let i = 0; i < n; i++) {
-        const o = i * 4;
         const c = cl[i]!;
-        // Noise (c < 0) shares one hide key (-1); clusters use their own id.
-        if (hidden.has(c < 0 ? -1 : c)) {
-          buf[o + 3] = 0; // fully hidden
-          continue;
-        }
-        let col: Rgb;
-        let base: number;
         if (c < 0) {
-          col = noise;
-          base = NOISE_ALPHA;
+          write(i, noise);
         } else {
           const rank = slotOf.get(c) ?? -1;
-          col = rank < 0 ? other : palette[rank]!;
-          base = 255;
+          write(i, rank < 0 ? other : palette[rank]!);
         }
-        const alpha = alphaFor(i, base);
-        buf[o] = col.r;
-        buf[o + 1] = col.g;
-        buf[o + 2] = col.b;
-        buf[o + 3] = alpha;
       }
       return buf;
     }
@@ -269,32 +294,78 @@
       const palette = buildHuePalette(distinct, isDark); // distinct hues once, not per point
       const other = OTHER_RGB;
       const noise = NOISE_RGB;
-      const hidden = crossFilter.hidden;
       for (let i = 0; i < n; i++) {
-        const o = i * 4;
         const code = codes[i] ?? 0;
-        if (hidden.has(code)) {
-          buf[o + 3] = 0; // hidden for this colour mode → background
-          continue;
-        }
         const empty = (labels[code] ?? '') === ''; // unclustered/noise → muted grey
-        const col = empty ? noise : code < distinct ? palette[code]! : other;
-        buf[o] = col.r;
-        buf[o + 1] = col.g;
-        buf[o + 2] = col.b;
-        buf[o + 3] = alphaFor(i, empty ? NOISE_ALPHA : 255);
+        write(i, empty ? noise : code < distinct ? palette[code]! : other);
       }
       return buf;
     }
 
     // colorBy === 'none' (or the channel's data is absent): one accent hue.
     const accent = ACCENT_RGB;
+    for (let i = 0; i < n; i++) write(i, accent);
+    return buf;
+  });
+
+  /**
+   * Per-point membership state (length count, 1 byte/point). Rebuilt only on
+   * filteredIds / selectedIds / hidden / colorBy / space change — NOT on the
+   * filterAlpha slider (a uniform) and NOT on theme. This is the buffer a
+   * selection/filter change re-uploads (8× smaller than the old RGBA).
+   */
+  const pointState = $derived.by((): Uint8Array | null => {
+    const p = pts;
+    if (!p) return null;
+    const n = p.count;
+    const colorBy = crossFilter.colorBy;
+    const buf = new Uint8Array(n);
+
+    // Read both cross-filter Sets once (tracks them as deps + avoids 145k method
+    // calls). A point EXCLUDED by either the search filter or the lasso/cluster
+    // selection becomes DIMMED (the shader applies the slider's filterAlpha).
+    const fIds = crossFilter.filteredIds;
+    const sel = crossFilter.selectedIds;
+    const selActive = sel.size > 0;
+    const hidden = crossFilter.hidden;
+
+    // Cluster mode: noise (c<0) shares one hide key (-1); clusters use their id.
+    if (colorBy === 'cluster' && p.cluster) {
+      const cl = p.cluster;
+      for (let i = 0; i < n; i++) {
+        const c = cl[i]!;
+        if (hidden.has(c < 0 ? -1 : c)) {
+          buf[i] = ST_HIDDEN;
+          continue;
+        }
+        if ((fIds !== null && !fIds.has(i)) || (selActive && !sel.has(i))) buf[i] = ST_DIMMED;
+        else if (c < 0) buf[i] = ST_NOISE;
+        else buf[i] = ST_NORMAL;
+      }
+      return buf;
+    }
+
+    const channel = channelFor(p, colorBy);
+    if (channel) {
+      const { codes, labels } = channel;
+      for (let i = 0; i < n; i++) {
+        const code = codes[i] ?? 0;
+        if (hidden.has(code)) {
+          buf[i] = ST_HIDDEN;
+          continue;
+        }
+        if ((fIds !== null && !fIds.has(i)) || (selActive && !sel.has(i))) buf[i] = ST_DIMMED;
+        else if ((labels[code] ?? '') === '')
+          buf[i] = ST_NOISE; // empty label → muted
+        else buf[i] = ST_NORMAL;
+      }
+      return buf;
+    }
+
+    // colorBy === 'none': no noise/hidden semantics — only the dim membership.
     for (let i = 0; i < n; i++) {
-      const o = i * 4;
-      buf[o] = accent.r;
-      buf[o + 1] = accent.g;
-      buf[o + 2] = accent.b;
-      buf[o + 3] = alphaFor(i, 255);
+      buf[i] =
+        (fIds !== null && !fIds.has(i)) || (selActive && !sel.has(i)) ? ST_DIMMED : ST_NORMAL;
     }
     return buf;
   });
@@ -331,7 +402,9 @@
   );
   const clusterStatsValue = $derived(buildClusterStats(pts?.cluster, visible));
   const categoryChannel = $derived(channelFor(pts, crossFilter.colorBy));
-  const categoryRows = $derived(buildCategoryLegend(categoryChannel, visible, isDark, MAX_DISTINCT));
+  const categoryRows = $derived(
+    buildCategoryLegend(categoryChannel, visible, isDark, MAX_DISTINCT),
+  );
   const categoryTotal = $derived(categoryChannel?.labels.length ?? 0);
   const categoryTitleValue = $derived(deriveCategoryTitle(crossFilter.colorBy));
 
@@ -561,16 +634,20 @@
     role="presentation"
     class="relative h-full min-h-0 bg-background"
   >
-    {#if loading || !x || !y || !pts || !rgba}
+    {#if loading || !x || !y || !xBits || !yBits || !pts || !baseRgb || !pointState}
       <div class="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
         <Loader2 class="size-4 animate-spin" /> Loading embedding map…
       </div>
     {:else}
       {#if mapW > 0 && mapH > 0}
         <GpuScatter
-          {x}
-          {y}
-          {rgba}
+          {xBits}
+          {yBits}
+          {fitBounds}
+          {baseRgb}
+          state={pointState}
+          {filterAlpha}
+          noiseAlpha={NOISE_ALPHA}
           pointSize={autoPointSize}
           width={mapW}
           height={mapH}
@@ -692,8 +769,8 @@
                   class="w-full accent-primary"
                 />
                 <span class="mt-0.5 block text-[10px] text-muted-foreground/70">
-                  How visible excluded points are — search-filtered or not in the
-                  lasso/cluster selection (left = hidden).
+                  How visible excluded points are — search-filtered or not in the lasso/cluster
+                  selection (left = hidden).
                 </span>
               </label>
             </div>

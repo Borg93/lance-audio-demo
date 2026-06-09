@@ -27,10 +27,12 @@ import { hitKey } from '$lib/utils';
  *  chunk broad topic (topic_l2); `doc_topic` = per-video topic. */
 export type ColorBy = 'cluster' | 'language' | 'topic' | 'doc_topic' | 'doc' | 'none';
 
-/** Build a `'doc|speech|chunk' → point index` map once per loaded space. */
+/** Build a `'doc|speech|chunk' → point index` map once per loaded space. `doc`
+ *  is `ArrayLike<number>` so an `Int32Array` (from the points payload) satisfies
+ *  it; the key columns are read by index only. */
 export function buildKeyIndex(
   docs: readonly string[],
-  doc: readonly number[],
+  doc: ArrayLike<number>,
   speech_id: readonly number[],
   chunk_id: readonly number[],
 ): Map<string, number> {
@@ -112,8 +114,9 @@ class CrossFilter {
     if (this.selectedIds.size > 0) this.selectedIds = new Set();
   }
 
-  /** Select every point in a cluster — a first-class lasso-equivalent. */
-  selectCluster(clusterId: number, clusters: readonly number[]): void {
+  /** Select every point in a cluster — a first-class lasso-equivalent.
+   *  `clusters` is `ArrayLike<number>` (an `Int32Array` from the points payload). */
+  selectCluster(clusterId: number, clusters: ArrayLike<number>): void {
     const next = new Set<number>();
     for (let i = 0; i < clusters.length; i++) {
       if (clusters[i] === clusterId) next.add(i);
