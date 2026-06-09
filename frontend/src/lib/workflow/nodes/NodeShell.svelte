@@ -26,6 +26,11 @@
   const displayTitle = $derived(cfg?.label?.trim() || title);
   const enabled = $derived(cfg?.enabled ?? true);
 
+  // Per-node error attribution: when this node's run failed, surface the message
+  // right on the card (the red status dot alone isn't enough to debug from).
+  // Shown for EVERY node kind, so attribution is consistent, not Search-only.
+  const error = $derived(status === 'error' ? (graph.runtime[id]?.error ?? null) : null);
+
   const btn =
     'nodrag shrink-0 rounded p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground';
 </script>
@@ -82,6 +87,14 @@
     </button>
   </div>
   <div class="px-3 py-2 text-xs text-foreground">
+    {#if error}
+      <div
+        class="nodrag mb-2 max-h-16 overflow-y-auto rounded border border-destructive/30 bg-destructive/10 px-2 py-1 text-[10px] leading-snug break-words text-destructive"
+        title={error}
+      >
+        {error}
+      </div>
+    {/if}
     {@render children()}
   </div>
 </div>

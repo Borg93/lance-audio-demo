@@ -5,7 +5,16 @@
    *  Search → Search refines progressively. */
   import { Handle, Position, type NodeProps } from '@xyflow/svelte';
   import type { SearchMode } from '$lib/api';
-  import { graph, SEARCH_MODES, modeLabel } from '$lib/workflow/graph.svelte';
+  import {
+    graph,
+    SEARCH_MODES,
+    modeLabel,
+    DEFAULT_N,
+    MAX_N,
+    MIN_N,
+    type NodeKind,
+    type RefineScope,
+  } from '$lib/workflow/graph.svelte';
   import { FIELD_CLASS } from './field';
   import NodeShell from './NodeShell.svelte';
 
@@ -13,6 +22,22 @@
   const cfg = $derived(graph.config[id]);
   const rt = $derived(graph.runtime[id]);
   const isVisual = $derived(cfg?.mode === 'visual');
+
+  const REFINE_SCOPES: { value: RefineScope; label: string }[] = [
+    { value: 'video', label: 'Videos' },
+    { value: 'chunk', label: 'Chunks' },
+  ];
+
+  // The refine scope only does anything when a RESULT set feeds this node (an
+  // upstream Search/Combine/Tagger). Without one, the toggle is a no-op — hide
+  // it so it isn't set on the wrong node (e.g. an image-only first Search).
+  const RESULT_KINDS: NodeKind[] = ['search', 'combine', 'tagger'];
+  const hasUpstreamResults = $derived(
+    graph.edges.some((e) => {
+      const k = graph.kindOf(e.source);
+      return e.target === id && k !== null && RESULT_KINDS.includes(k);
+    }),
+  );
 </script>
 
 {#if cfg && rt}
@@ -46,13 +71,13 @@
       <input
         id="n-{id}"
         type="number"
-        min="1"
-        max="100"
+        min={MIN_N}
+        max={MAX_N}
         class="{FIELD_CLASS} w-16"
         value={cfg.n}
         oninput={(e) =>
           graph.setConfig(id, {
-            n: Math.max(1, Math.min(100, Number(e.currentTarget.value) || 24)),
+            n: Math.max(MIN_N, Math.min(MAX_N, Number(e.currentTarget.value) || DEFAULT_N)),
           })}
       />
       <label class="nodrag ml-auto flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -61,33 +86,64 @@
       </label>
     </div>
 
-    <div class="mt-2 border-t border-border pt-1.5 text-[10px]">
-      {#if rt.status === 'running'}
-        <span class="text-primary">Searching…</span>
-      {:else if rt.status === 'error'}
-        <span class="text-destructive">{rt.error}</span>
-      {:else if rt.status === 'done'}
-        <span class="text-muted-foreground">
-          <span class="text-foreground">{rt.count}</span> hits · {rt.ms} ms{#if rt.scopedDocs}
-            · within <span class="text-foreground">{rt.scopedDocs}</span> videos{#if rt.scopeCapped}
-              <span class="text-amber-500"> (capped)</span>{/if}{/if}
+    {#if hasUpstreamResults}
+      <div class="nodrag mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <span
+          title="Re-rank all chunks in the upstream videos, or narrow to the exact upstream chunks"
+        >
+          Refine within
         </span>
-        {#if rt.count === 0 && rt.scopedDocs}
+        <div class="ml-auto flex overflow-hidden rounded border border-border">
+          {#each REFINE_SCOPES as s (s.value)}
+            <button
+              type="button"
+              class="px-1.5 py-0.5 transition-colors {cfg.refineScope === s.value
+                ? 'bg-primary text-primary-foreground'
+                : 'hover:bg-muted'}"
+              onclick={() => graph.setConfig(id, { refineScope: s.value })}
+            >
+              {s.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    <!-- Run summary; on error the NodeShell banner carries the signal, so the
+         whole footer (divider included) is hidden rather than left blank. -->
+    {#if rt.status !== 'error'}
+      <div class="mt-2 border-t border-border pt-1.5 text-[10px]">
+        {#if rt.status === 'running'}
+          <span class="text-primary">Searching…</span>
+        {:else if rt.status === 'done'}
+          <span class="text-muted-foreground">
+            <span class="text-foreground">{rt.count}</span> hits · {rt.ms} ms{#if rt.scopedDocs}
+              · within <span class="text-foreground">{rt.scopedDocs}</span>
+              videos{#if rt.scopeCapped}
+                <span class="text-amber-500"> (capped)</span>{/if}{:else if rt.scopedChunks}
+              · within <span class="text-foreground">{rt.scopedChunks}</span>
+              chunks{#if rt.scopeCapped}
+                <span class="text-amber-500"> (capped)</span>{/if}{/if}
+          </span>
+          {#if rt.count === 0 && (rt.scopedDocs || rt.scopedChunks)}
+            <div class="mt-1 text-amber-500">
+              Nothing matched inside the {rt.scopedChunks
+                ? `${rt.scopedChunks} chunks`
+                : `${rt.scopedDocs} videos`}
+              — delete the incoming refine edge to search all.
+            </div>
+          {/if}
+        {:else}
+          <span class="text-muted-foreground/70">idle — add a query or image, then Run</span>
+        {/if}
+        {#if rt.droppedInputs > 0}
           <div class="mt-1 text-amber-500">
-            Nothing matched inside those {rt.scopedDocs} videos — delete the incoming refine edge to search
-            all.
+            {rt.droppedInputs} extra input{rt.droppedInputs > 1 ? 's' : ''} ignored — a Search uses one
+            query + one image. Use a Combine node to merge result sets.
           </div>
         {/if}
-      {:else}
-        <span class="text-muted-foreground/70">idle — add a query or image, then Run</span>
-      {/if}
-      {#if rt.droppedInputs > 0}
-        <div class="mt-1 text-amber-500">
-          {rt.droppedInputs} extra input{rt.droppedInputs > 1 ? 's' : ''} ignored — a Search uses one
-          query + one image. Use a Combine node to merge result sets.
-        </div>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
     <Handle type="source" position={Position.Right} />
   </NodeShell>

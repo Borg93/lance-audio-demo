@@ -1,0 +1,109 @@
+/**
+ * Shared vocabulary for the workflow editor — the node kinds + the per-node
+ * config/runtime shapes. Kept in its own module so the graph store AND the Zod
+ * persistence schema can both import them without an import cycle (the graph
+ * re-exports the public ones, so components keep importing from graph.svelte).
+ */
+import type { Hit, SearchMode, SearchSpec } from '$lib/api';
+
+/** The pipeline stages, as a runtime list (drives the persistence schema). */
+export const NODE_KINDS = [
+  'query',
+  'image',
+  'filter',
+  'search',
+  'combine',
+  'tagger',
+  'results',
+  'export',
+] as const;
+/** A node's `type` (used to pick its component) is its kind. */
+export type NodeKind = (typeof NODE_KINDS)[number];
+
+export type RunStatus = 'idle' | 'running' | 'done' | 'error';
+
+/** Head size the cross-encoder reranker re-scores when a Search has rerank on.
+ *  One source of truth so the executor spec and the Inspector badge can't drift. */
+export const RERANK_TOP_N = 20;
+
+/** A Search node's result count (`n`): default + allowed range. One source of
+ *  truth for the default config, the persistence clamp, and the SearchNode input. */
+export const DEFAULT_N = 24;
+export const MIN_N = 1;
+export const MAX_N = 100;
+
+/** How a Combine node merges its incoming result sets. */
+export type CombineMode = 'union' | 'intersect';
+
+/** Granularity of a Search's refinement by an upstream result set. */
+export type RefineScope = 'video' | 'chunk';
+
+/** Per-node user input. One flat shape covers every kind (each node UI only
+ *  edits the fields it cares about) — simpler than a discriminated union for a
+ *  POC, and the unused fields stay at their harmless defaults. */
+export interface NodeConfig {
+  /** query node, and the Search node's own inline query. */
+  q: string;
+  /** image: the uploaded file fed to the visual leg (POST multipart). Never
+   *  persisted (a File can't serialise) — `imageName` survives a reload so the
+   *  Image node can prompt for re-upload. */
+  image: File | null;
+  imageName: string;
+  /** filter: a raw SQL WHERE plus the common scalar facets. */
+  where: string;
+  language: string;
+  namn: string;
+  /** search: how the merged inputs are ranked. */
+  mode: SearchMode;
+  n: number;
+  rerank: boolean;
+  /** search: when scoped by an upstream result set, narrow to those videos
+   *  (`doc_id IN`, may return new chunks) or to the exact upstream chunks
+   *  (`(doc_id,speech_id,chunk_id) IN`, result ⊆ upstream). */
+  refineScope: RefineScope;
+  /** combine: union vs intersect of incoming result sets. */
+  combineMode: CombineMode;
+  /** tagger: tags this node stamps onto every hit that flows through it. */
+  tags: string[];
+  /** export: download format + which chunk columns to include. */
+  exportFormat: 'json' | 'csv';
+  exportColumns: string[];
+  /** ergonomics: optional custom title; disabled nodes are bypassed on run. */
+  label: string;
+  enabled: boolean;
+}
+
+/** Per-node RUN state (status / hits / error / timing), keyed by node id. */
+export interface NodeRuntime {
+  status: RunStatus;
+  error: string | null;
+  /** Result hits (Search / Combine / Results nodes). */
+  hits: Hit[] | null;
+  /** Result count summary (cheap to render without holding the array). */
+  count: number | null;
+  /** Last run wall-clock in ms (Search node). */
+  ms: number | null;
+  /** How many videos this Search was scoped to by upstream results (null = whole corpus). */
+  scopedDocs: number | null;
+  /** How many exact chunks a chunk-level refine scoped to (null = not chunk-scoped). */
+  scopedChunks: number | null;
+  /** True when the scope hit its cap (`MAX_SCOPE_DOCS` / `MAX_SCOPE_CHUNKS`) and was truncated. */
+  scopeCapped: boolean;
+  /** Count of upstream inputs ignored because only one query/image is used. */
+  droppedInputs: number;
+}
+
+/** What travels along an edge from a node to its successors. */
+export interface NodeOutput {
+  /** Partial search spec contributed by this node (query text, image, filters). */
+  spec: Partial<SearchSpec>;
+  /** A concrete result set, once a Search/Combine node has produced one. */
+  hits: Hit[] | null;
+}
+
+/** A detached node, copied to the clipboard for paste. */
+export interface ClipboardNode {
+  type: NodeKind;
+  config: NodeConfig;
+  position: { x: number; y: number };
+}

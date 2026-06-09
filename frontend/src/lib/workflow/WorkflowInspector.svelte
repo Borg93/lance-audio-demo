@@ -1,7 +1,7 @@
 <script lang="ts">
   /** Persistent right panel. Click a node → see its inputs + intermediate
    *  results; click a result → play it here (reuses PlayerPane). */
-  import { ArrowLeft, Copy, Eye, EyeOff } from 'lucide-svelte';
+  import { ArrowLeft, Copy, Download, Eye, EyeOff } from 'lucide-svelte';
   import {
     graph,
     modeLabel,
@@ -9,6 +9,7 @@
     RERANK_TOP_N,
     STATUS_DOT,
   } from '$lib/workflow/graph.svelte';
+  import { exportHits, EXPORT_COLUMNS } from '$lib/workflow/export';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import HitList from '$lib/workflow/HitList.svelte';
 
@@ -17,6 +18,15 @@
   const cfg = $derived(id ? graph.config[id] : null);
   const rt = $derived(id ? graph.runtime[id] : null);
   const hits = $derived(rt?.hits ?? []);
+
+  const EXPORT_FORMATS = ['csv', 'json'] as const;
+
+  /** Toggle one export column, keeping the selection in canonical column order. */
+  function toggleExportColumn(nodeId: string, current: readonly string[], col: string): void {
+    const has = current.includes(col);
+    const next = EXPORT_COLUMNS.filter((c) => (c === col ? !has : current.includes(c)));
+    graph.setConfig(nodeId, { exportColumns: next });
+  }
 
   const title = $derived(
     kind === 'search' && cfg ? `Search · ${modeLabel(cfg.mode)}` : kind ? nodeLabel(kind) : '',
@@ -47,12 +57,20 @@
       r.push(['Query', cfg.q || (cfg.mode === 'visual' ? '(from image)' : '—')]);
       r.push(['Results', String(cfg.n)]);
       if (cfg.rerank) r.push(['Rerank', `top ${RERANK_TOP_N}`]);
+      // Only surface the refine granularity once a scope was actually applied
+      // (an upstream result fed in) — the SearchNode toggle shows the setting
+      // itself, so a standalone row here would read as a scope when there's none.
       if (rt?.scopedDocs)
         r.push(['Scope', `within ${rt.scopedDocs} videos${rt.scopeCapped ? ' (capped)' : ''}`]);
+      if (rt?.scopedChunks)
+        r.push(['Scope', `within ${rt.scopedChunks} chunks${rt.scopeCapped ? ' (capped)' : ''}`]);
       if (rt?.ms != null) r.push(['Time', `${rt.ms} ms`]);
     }
     if (kind === 'combine') {
       r.push(['Combine', cfg.combineMode === 'intersect' ? 'intersect (∩)' : 'union (∪)']);
+    }
+    if (kind === 'tagger') {
+      r.push(['Tags', cfg.tags.length ? cfg.tags.join(', ') : '(none — add some)']);
     }
     return r;
   });
@@ -126,6 +144,83 @@
           {/each}
         </dl>
 
+        {#if kind === 'export'}
+          <!-- Configure exactly what the Export node downloads: format + which
+               chunk columns (both JSON and CSV honour the column selection). -->
+          <div class="flex flex-col gap-2.5 border-t border-border pt-3">
+            <div class="flex items-center gap-2">
+              <span class="text-muted-foreground">Format</span>
+              <div class="flex overflow-hidden rounded border border-border">
+                {#each EXPORT_FORMATS as fmt (fmt)}
+                  <button
+                    type="button"
+                    class="px-2.5 py-0.5 text-[11px] font-medium transition-colors {cfg.exportFormat ===
+                    fmt
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted'}"
+                    onclick={() => graph.setConfig(id, { exportFormat: fmt })}
+                  >
+                    {fmt.toUpperCase()}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            <div>
+              <div class="mb-1 flex items-center justify-between">
+                <span class="text-[10px] tracking-wide text-muted-foreground uppercase">
+                  Columns ({cfg.exportColumns.length}/{EXPORT_COLUMNS.length})
+                </span>
+                <div class="flex gap-2 text-[10px]">
+                  <button
+                    type="button"
+                    class="text-primary hover:underline"
+                    onclick={() => graph.setConfig(id, { exportColumns: [...EXPORT_COLUMNS] })}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    class="text-primary hover:underline"
+                    onclick={() => graph.setConfig(id, { exportColumns: [] })}
+                  >
+                    None
+                  </button>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                {#each EXPORT_COLUMNS as col (col)}
+                  <label class="flex items-center gap-1.5 text-[11px] text-foreground">
+                    <input
+                      type="checkbox"
+                      class="size-3 accent-primary"
+                      checked={cfg.exportColumns.includes(col)}
+                      onchange={() => toggleExportColumn(id, cfg.exportColumns, col)}
+                    />
+                    <span class="truncate" title={col}>{col}</span>
+                  </label>
+                {/each}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              class="inline-flex items-center justify-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+              disabled={hits.length === 0 || cfg.exportColumns.length === 0}
+              onclick={() =>
+                exportHits(
+                  graph.tags.withTags(hits),
+                  cfg.exportFormat,
+                  new Date(),
+                  cfg.exportColumns,
+                )}
+            >
+              <Download class="size-3.5" />
+              Download {hits.length} hit{hits.length === 1 ? '' : 's'} as {cfg.exportFormat.toUpperCase()}
+            </button>
+          </div>
+        {/if}
+
         {#if hits.length}
           <div>
             <div class="mb-1 text-[10px] tracking-wide text-muted-foreground uppercase">
@@ -133,7 +228,7 @@
             </div>
             <HitList {hits} maxHeight="max-h-none" />
           </div>
-        {:else if kind === 'search' || kind === 'results'}
+        {:else if kind === 'search' || kind === 'results' || kind === 'export' || kind === 'combine' || kind === 'tagger'}
           <p class="text-[11px] text-muted-foreground">
             {rt.status === 'idle' ? 'Not run yet — press Run.' : 'No results.'}
           </p>
