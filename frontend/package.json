@@ -15,7 +15,9 @@
     "prepare": "svelte-kit sync"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
     "@xyflow/svelte": "^1.6.0",
+    "apache-arrow": "^21.1.0",
     "bits-ui": "^2.0.0",
     "clsx": "^2.1.1",
     "embedding-atlas": "^0.21.0",
