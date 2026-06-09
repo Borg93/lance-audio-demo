@@ -28,6 +28,12 @@ const ConfigSchema = z.object({
   tags: z.array(z.string()).catch(() => []),
   exportFormat: z.enum(['json', 'csv']).catch('csv'),
   exportColumns: z.array(z.string()).catch(() => [...EXPORT_COLUMNS]),
+  // Atlas modal capture is a full Hit[] (audio_path, alignments, …) — too heavy
+  // and stale-prone to round-trip through localStorage, so it is NOT persisted:
+  // the schema always heals it to null, and a reload discards the capture (the
+  // user re-opens the modal to re-select). TODO: persist a minimal key set
+  // (doc_id|speech_id|chunk_id) + rehydrate via /api/atlas/chunks if needed.
+  capturedAtlasSelection: z.null().catch(null),
   label: z.string().catch(''),
   enabled: z.boolean().catch(true),
 });

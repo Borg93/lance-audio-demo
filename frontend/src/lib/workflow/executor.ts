@@ -7,7 +7,6 @@
 import type { Edge, Node } from '@xyflow/svelte';
 import { search, type Hit, type SearchSpec } from '$lib/api';
 import { hitKey } from '$lib/utils';
-import { crossFilter } from '$lib/atlas/cross-filter.svelte';
 import { chunkScopeClause, dedupeHits, videoScopeClause } from './scope';
 import {
   RERANK_TOP_N,
@@ -136,37 +135,18 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
         return { spec, hits: null };
       }
       case 'atlas': {
-        // Read the live atlas selection (crossFilter.selectedIds = a Set of point
-        // indices). Reverse-map each index back to (doc_id, speech_id, chunk_id)
-        // via keyToIndex to build pseudo-hits for downstream refinement.
-        const indexToKey = new Map<number, string>();
-        for (const [key, idx] of crossFilter.keyToIndex) indexToKey.set(idx, key);
-        const hits: Hit[] = [];
-        for (const idx of crossFilter.selectedIds) {
-          const key = indexToKey.get(idx);
-          if (!key) continue;
-          const [doc_id, speechStr, chunkStr] = key.split('|');
-          if (!doc_id || !speechStr || !chunkStr) continue;
-          const speech_id = Number(speechStr);
-          const chunk_id = Number(chunkStr);
-          if (Number.isNaN(speech_id) || Number.isNaN(chunk_id)) continue;
-          hits.push({
-            doc_id,
-            speech_id,
-            chunk_id,
-            audio_path: '',
-            start: 0,
-            end: 0,
-            text: '',
-            alignments: [],
-          });
-        }
+        // Emit the selection the user CAPTURED in the Atlas modal viewer
+        // (stored on the node's config), NOT the live global crossFilter — so
+        // the /atlas page and the workflow no longer share live map state. An
+        // empty/null capture is idle (the node emits nothing downstream).
+        const captured = cfg.capturedAtlasSelection;
+        const hits = captured && captured.length ? captured : null;
         deps.patchRuntime(id, {
-          status: hits.length ? 'done' : 'idle',
-          hits: hits.length ? hits : null,
-          count: hits.length || null,
+          status: hits ? 'done' : 'idle',
+          hits,
+          count: hits?.length ?? null,
         });
-        return { spec: {}, hits: hits.length ? hits : null };
+        return { spec: {}, hits };
       }
       case 'combine': {
         let combined: Hit[] = [];

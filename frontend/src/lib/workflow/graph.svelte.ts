@@ -31,6 +31,7 @@ import { WorkflowTags } from './tags.svelte';
 import { UndoHistory } from './history.svelte';
 import { autoLayout } from './layout';
 import { runGraph } from './executor';
+import { dedupeHits } from './scope';
 import {
   DEFAULT_N,
   MAX_N,
@@ -111,6 +112,7 @@ function defaultConfig(): NodeConfig {
     tags: [],
     exportFormat: 'csv',
     exportColumns: [...EXPORT_COLUMNS],
+    capturedAtlasSelection: null,
     label: '',
     enabled: true,
   };
@@ -336,6 +338,21 @@ class WorkflowGraph {
     }
     out.delete(id);
     return [...out];
+  }
+
+  /** The merged result set flowing INTO `id` from its direct predecessors' LAST
+   *  run — the same union the executor feeds a node's scope. Reads each incoming
+   *  edge's source `runtime.hits` and dedupes by chunk identity. Returns null
+   *  when no predecessor has produced hits (so the Atlas modal shows all points).
+   *  Used at EDIT time (open the Atlas modal pre-filtered to upstream results). */
+  getPredecessorHits(id: string): Hit[] | null {
+    const merged: Hit[] = [];
+    for (const e of this.edges) {
+      if (e.target !== id) continue;
+      const hits = this.runtime[e.source]?.hits;
+      if (hits && hits.length) merged.push(...hits);
+    }
+    return merged.length ? dedupeHits(merged) : null;
   }
 
   // ── Undo / redo (auto-checkpointed via the canvas's debounced effect) ────────
@@ -576,6 +593,9 @@ class WorkflowGraph {
         tags: c.tags,
         exportFormat: c.exportFormat,
         exportColumns: c.exportColumns,
+        // Never round-trip the captured Atlas selection (heavy Hit[]); see
+        // persistence.ts — a reload discards it (re-open the modal to re-select).
+        capturedAtlasSelection: null,
         label: c.label,
         enabled: c.enabled,
       };

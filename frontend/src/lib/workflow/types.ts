@@ -69,6 +69,11 @@ export interface NodeConfig {
   /** export: download format + which chunk columns to include. */
   exportFormat: 'json' | 'csv';
   exportColumns: string[];
+  /** atlas: the exact hit set the user captured in the Atlas modal viewer
+   *  (lasso/box/legend selection). `null` until a selection is confirmed; the
+   *  executor emits this downstream (NOT the live global crossFilter). Not
+   *  persisted (see persistence.ts) — a reload discards the capture. */
+  capturedAtlasSelection: Hit[] | null;
   /** ergonomics: optional custom title; disabled nodes are bypassed on run. */
   label: string;
   enabled: boolean;
