@@ -220,15 +220,53 @@ const DocTranscriptSchema = z.object({
 });
 export type DocTranscript = z.infer<typeof DocTranscriptSchema>;
 
+// Module-level cache of in-flight + resolved transcripts, keyed by doc_id. The
+// transcript is immutable for a given document and the payload is heavy (full
+// per-word alignments for every chunk, zod-parsed), so re-opening any hit in
+// the same doc should be instant and must NOT re-compete with the <video>'s
+// range requests on the connection pool. We cache the PROMISE (not just the
+// value) so concurrent opens of the same doc dedupe to one fetch; a rejected
+// fetch is evicted so a transient failure can be retried.
+// Bounded LRU (Map keeps insertion order): keep only the most-recently-opened
+// docs so heavy browsing on a low-end machine can't grow this without limit —
+// each entry holds a whole document's per-word alignments. ~24 is plenty for
+// back-and-forth navigation.
+const MAX_DOC_TRANSCRIPTS = 50;
+const docTranscriptCache = new Map<string, Promise<DocTranscript>>();
+
 /** Whole-document transcript, chunk-segmented + ordered. Lazy-fetched when a
  *  hit opens so playback past the selected chunk still has karaoke. The player
- *  flattens chunks[].alignments; a future timeline can use the chunk envelope. */
+ *  flattens chunks[].alignments; a future timeline can use the chunk envelope.
+ *  Cached per doc_id (default fetcher only) — same-doc re-opens are instant. */
 export async function getDocTranscript(
   doc_id: string,
   fetcher: typeof fetch = fetch,
 ): Promise<DocTranscript> {
-  const r = await fetcher(`/api/doc-transcript/${encodeURIComponent(doc_id)}`);
-  return asJson(r, DocTranscriptSchema);
+  const fetchOnce = async (): Promise<DocTranscript> => {
+    const r = await fetcher(`/api/doc-transcript/${encodeURIComponent(doc_id)}`);
+    return asJson(r, DocTranscriptSchema);
+  };
+  // Only cache the default fetcher path; a custom fetcher (e.g. SSR/test) may
+  // carry per-request context, so it bypasses the shared module-level cache.
+  if (fetcher !== fetch) return fetchOnce();
+  const cached = docTranscriptCache.get(doc_id);
+  if (cached) {
+    // LRU touch: re-insert so this doc becomes "most recent" and survives eviction.
+    docTranscriptCache.delete(doc_id);
+    docTranscriptCache.set(doc_id, cached);
+    return cached;
+  }
+  const p = fetchOnce().catch((e: unknown) => {
+    docTranscriptCache.delete(doc_id); // evict failures so they can be retried
+    throw e;
+  });
+  docTranscriptCache.set(doc_id, p);
+  // Drop the least-recently-used entry once over the cap (first key = oldest).
+  if (docTranscriptCache.size > MAX_DOC_TRANSCRIPTS) {
+    const oldest = docTranscriptCache.keys().next().value;
+    if (oldest !== undefined) docTranscriptCache.delete(oldest);
+  }
+  return p;
 }
 
 // ── Health ──────────────────────────────────────────────────────────────
