@@ -16,6 +16,18 @@
   let language = $state(spec.language ?? '');
   let whereSql = $state(spec.where ?? '');
 
+  // Re-sync from `spec` when it changes OUTSIDE this popover — an active-filter
+  // pill removed (active-filters.svelte), a topic seeded, or Clear-all. These were
+  // captured once at mount, so a dropped filter stayed stale here: it still counted
+  // toward the badge and got re-committed on the next edit, so it "came back" — the
+  // not-dropped-when-popped bug. Typing in the raw-SQL box is NOT clobbered: it
+  // mutates `whereSql` locally (not `spec.where`), so this effect only re-fires on an
+  // external change, not mid-keystroke.
+  $effect(() => {
+    language = spec.language ?? '';
+    whereSql = spec.where ?? '';
+  });
+
   function commit() {
     // Always prefilter (correct + uses the scalar index; never returns < n).
     spec = { ...spec, language: language || undefined, where: whereSql || undefined };
