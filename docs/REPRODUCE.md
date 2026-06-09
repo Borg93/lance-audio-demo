@@ -95,14 +95,15 @@ Verify the restore (counts should match the published numbers):
 ```bash
 uv run python - <<'PY'
 import lance
-for t in ("chunks", "chunk_frames"):
+for t in ("chunks", "chunk_frames", "speaker_turns"):
     ds = lance.dataset(f"transcripts_v2.lance/{t}.lance")
     print(t, "rows:", ds.count_rows(), "indices:",
           sorted(i["name"] for i in ds.list_indices()))
 PY
 # expect: chunks ~145k (text_idx, text_embedding_idx, doc_id_idx, …);
 #         chunk_frames ~145k (frame_embedding_idx, caption_idx,
-#                             caption_embedding_idx, doc_id_idx)
+#                             caption_embedding_idx, doc_id_idx);
+#         speaker_turns — diarization turns (no vector index; optional doc_id BTREE)
 ```
 
 Then jump to [§ Serving the stack](#serving-the-stack). Done — this *is* the
@@ -124,6 +125,7 @@ flowchart TD
     TH --> ING["ingest-full → chunks + documents (+FTS, BTREE)"]
     ING --> TE[embed-chunks → text_embedding]
     ING --> XF[extract-chunk-frames → chunk_frames]
+    ING --> ST["speaker-turns → speaker_turns (diarization)"]
     XF --> FE[embed-chunk-frames → frame_embedding]
     XF --> CAP["captions → caption + caption_embedding"]
     TE --> AT[atlas → atlas_x/y/cluster]
@@ -133,6 +135,7 @@ flowchart TD
     ATV --> TOP
     ATC --> TOP
     TOP --> CO[compact]
+    ST --> CO
 ```
 
 ### B.1 — Acquire + transcribe (CPU/GPU, hours)
@@ -200,6 +203,41 @@ make compact DB=$DB TABLE=chunk_frames  # merge fragments + rebuild indexes (opt
 Gate: `make atlas` columns present →
 `uv run python -c "import lance; print([n for n in lance.dataset('$DB/chunks.lance').schema.names if n.startswith('atlas_') or n.startswith('topic_')])"`.
 
+### B.5 — Speaker diarization → `speaker_turns` (no server, GPU optional)
+
+Diarization ("who spoke when") is **independent of the embed/Gemma servers** —
+`pyannote.audio` runs **in-process** (GPU-accelerated when available, ~90 s/video,
+crash-resumable). It needs only the `chunks` table (for the `doc_id` → source-MP4
+map), the source MP4s under `--audio-root`, a **cached HF token** (`hf auth
+login`), and the **`pyannote/speaker-diarization-community-1` model terms accepted**
+on the Hub.
+
+```bash
+make speaker-turns DB=$DB AUDIO_DIR=$AUDIO_DIR        # → speaker_turns.lance (all videos)
+make speaker-turns DB=$DB AUDIO_DIR=$AUDIO_DIR LIMIT=5  # debug: first 5 videos only
+#   = raudio --db $DB extract-speaker-turns --audio-root $AUDIO_DIR
+#     (--only-null by default skips already-diarized videos; --all rebuilds clean)
+```
+
+Gate (table built + per-video labels present):
+
+```bash
+uv run python -c "import lance; ds=lance.dataset('$DB/speaker_turns.lance'); \
+print('turns:', ds.count_rows(), '| videos:', len(set(ds.to_table(columns=['doc_id'])['doc_id'].to_pylist())))"
+```
+
+> **No vector reindex.** `speaker_turns` carries **no** embedding column, so there
+> is nothing to IVF-index and **no `feature … embedding` step** for it. Optional
+> housekeeping only: `make compact DB=$DB TABLE=speaker_turns` (=`raudio --db $DB
+> --table speaker_turns compact`) consolidates the per-video append fragments
+> (exactly like `chunk_frames`), and a scalar **BTREE on `doc_id`** speeds the
+> per-video lookup at full-corpus scale.
+>
+> **Restart the backend after building** — `raudio serve` has **no auto-reload**,
+> so a running backend won't serve the new `/api/diarization/{doc_id}` route (and
+> the player's **Speakers** tab) until it is restarted (`make stack-down` →
+> `make stack-up`, or restart just `make backend`).
+
 ---
 
 ## Serving the stack
@@ -245,6 +283,11 @@ for m in fts semantic visual scene scene_fts hybrid all; do
   curl -s "http://127.0.0.1:8000/api/search?q=regeringen&mode=$m&n=3" \
     | python3 -c "import sys,json;print('hits:', len(json.load(sys.stdin)))"
 done
+
+# diarization built? (pick any doc_id from a search hit above)
+curl -s "http://127.0.0.1:8000/api/diarization/<doc_id>" \
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print('built:', d['built'], '| turns:', len(d['turns']), '| speakers:', len(d['speakers']))"
+# built:false simply means speaker_turns isn't built for that video (or at all).
 ```
 
 `scripts/e2e_smoke.py` (`make e2e-smoke`) runs **ingest → text + frame embeddings
@@ -265,3 +308,8 @@ path works without the full corpus; it does **not** exercise transcribe or scene
 - [ ] Captions/topics need **your own Gemma at `:8003`** — raudio never starts it.
 - [ ] FTS must be built with `--fts-language Swedish` (the English stemmer mangles
       `ministern`/`vägen`); `make ingest-full` does this, or `make reindex-fts`.
+- [ ] Diarization (`make speaker-turns`) needs a **cached HF token** (`hf auth
+      login`) + the **`speaker-diarization-community-1` model terms accepted**; it
+      runs in-process (no server). **Restart the backend** afterwards (no
+      auto-reload) so `/api/diarization` + the Speakers tab go live. No vector
+      reindex — `speaker_turns` has no embeddings.

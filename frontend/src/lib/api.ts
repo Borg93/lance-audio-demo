@@ -63,6 +63,10 @@ export const HitSchema = z.object({
   // Backend (`_postprocess_hits`) always emits this field — empty array
   // when the chunk has no alignments — so we keep it required here.
   alignments: z.array(AlignmentSchema),
+  // Client-side only: user/Tagger-node tags, keyed by chunk identity in the
+  // workflow graph's tag store and stamped onto hit copies at export time. The
+  // API never sends this (it parses to `undefined`).
+  tags: z.array(z.string()).optional(),
 });
 export type Hit = z.infer<typeof HitSchema>;
 
@@ -269,6 +273,41 @@ export async function getDocTranscript(
     if (oldest !== undefined) docTranscriptCache.delete(oldest);
   }
   return p;
+}
+
+// ── Diarization (Speakers tab) ─────────────────────────────────────────────
+// `raudio extract-speaker-turns` (Makefile: `make speaker-turns`) writes one set
+// of speaker turns per video into `speaker_turns.lance`. `getDiarization` reads
+// that table on demand for one
+// doc_id; the player's Speakers tab renders the turns as a per-speaker timeline.
+// Times are ABSOLUTE video seconds (same clock as <video>.currentTime).
+
+const DiarTurnSchema = z.object({
+  turn_id: z.number().int(),
+  speaker: z.string(),
+  start: z.number(),
+  end: z.number(),
+});
+export type DiarTurn = z.infer<typeof DiarTurnSchema>;
+
+const DiarizationResponseSchema = z.object({
+  built: z.boolean(),
+  doc_id: z.string(),
+  turns: z.array(DiarTurnSchema),
+  speakers: z.array(z.string()),
+});
+export type DiarizationResponse = z.infer<typeof DiarizationResponseSchema>;
+
+/** Speaker turns for one document (`built: false` if diarization isn't built or
+ *  the doc is absent). Turns are sorted by start; the Speakers tab maps each
+ *  distinct `speaker` to a lane and positions bars on the absolute-time clock. */
+export async function getDiarization(
+  docId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<{ built: boolean; turns: DiarTurn[]; speakers: string[] }> {
+  const r = await fetcher(`/api/diarization/${encodeURIComponent(docId)}`);
+  const data = await asJson(r, DiarizationResponseSchema);
+  return { built: data.built, turns: data.turns, speakers: data.speakers };
 }
 
 // ── Health ──────────────────────────────────────────────────────────────

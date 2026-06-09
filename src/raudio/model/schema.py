@@ -196,3 +196,29 @@ CHUNK_FRAMES_SCHEMA: pa.Schema = pa.schema(
 
 #: Lance file format version required for chunk_frames (blob_field).
 CHUNK_FRAMES_STORAGE_VERSION: Final = "2.2"
+
+
+# ───────────────────────── Speaker-turns table (diarization) ────────────────
+# A NEW separate, append-only table holding pyannote speaker-diarization output:
+# one row per diarized turn, keyed logically by (doc_id, turn_id). `turn_id` is
+# the per-video enumerate index of the turn (turns sorted by `start`).
+# `speaker_label` is pyannote's local label ("SPEAKER_00", "SPEAKER_01", …) —
+# stable only *within* a single video, never across videos. `start`/`end` are
+# ABSOLUTE video seconds. Built offline by `raudio extract-speaker-turns`; read
+# on demand by the backend (`GET /api/diarization/{doc_id}`). Kept separate from
+# `chunks` for the same reason `chunk_frames` is: avoid `merge_insert` against
+# the wide `chunks` schema, and one video's turns are produced as a unit.
+SPEAKER_TURNS_SCHEMA: pa.Schema = pa.schema(
+    [
+        pa.field("doc_id", pa.string(), nullable=False),
+        pa.field("turn_id", pa.int32(), nullable=False),
+        pa.field("speaker_label", pa.string(), nullable=False),
+        pa.field("start", pa.float32(), nullable=False),
+        pa.field("end", pa.float32(), nullable=False),
+    ]
+)
+
+
+#: Lance file format version for the speaker_turns dataset (kept at 2.2 for
+#: consistency with the other tables; no Blob V2 columns here).
+SPEAKER_TURNS_STORAGE_VERSION: Final = "2.2"

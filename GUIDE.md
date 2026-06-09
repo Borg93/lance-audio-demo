@@ -98,9 +98,9 @@ for free. The CLI/backend are just HTTP clients of it.
 
 ---
 
-## 4. The data model — three Lance tables
+## 4. The data model — four Lance tables
 
-All three live inside one `transcripts.lance/` directory (gitignored — local
+All four live inside one `transcripts.lance/` directory (gitignored — local
 working data). Schemas: [`src/raudio/model/schema.py`](src/raudio/model/schema.py).
 
 | Table | Grain | Carries | Key columns |
@@ -108,6 +108,7 @@ working data). Schemas: [`src/raudio/model/schema.py`](src/raudio/model/schema.p
 | **`chunks`** | one row per ~30 s transcript chunk | FTS text, metadata, alignments JSON, **two** vector columns — `text_embedding` (2048-d) and `frame_embedding` (2048-d, the chunk-level image vector) — plus the six EVōC atlas columns `atlas_x/y/cluster` (text space) and `atlas_img_x/y/cluster` (visual space) | `(doc_id, speech_id, chunk_id)` |
 | **`documents`** | one row per source media file | `media_blob` (Blob V2 *External* URI), `thumbnail` (Blob V2 *Inline* bytes), metadata | `doc_id` |
 | **`chunk_frames`** | one row per extracted frame (a chunk can hold N frames, `frame_idx` 0..K-1; `frame_idx=0` is the single representative frame) | `frame_blob` (Blob V2 Inline JPEG), `frame_embedding` (2048-d, added later) | `(doc_id, speech_id, chunk_id, frame_idx)` |
+| **`speaker_turns`** | one row per diarized speaker turn (a video produces N turns) | `speaker_label` (anonymous pyannote label `SPEAKER_00`…, stable only *within* one video), `start` / `end` in **absolute video seconds**. **No** vector/blob column → no IVF/vector index | `(doc_id, turn_id)` |
 
 `doc_id` is `sha1(audio_path)[:16]` — deterministic, so re-ingesting the same
 file is stable.
@@ -116,6 +117,7 @@ file is stable.
 erDiagram
     documents ||--o{ chunks : "doc_id"
     documents ||--o{ chunk_frames : "doc_id"
+    documents ||--o{ speaker_turns : "doc_id"
     chunks ||--o| chunk_frames : "(doc_id, speech_id, chunk_id)"
 
     documents {
@@ -142,6 +144,13 @@ erDiagram
         blob frame_blob "Blob V2 Inline — JPEG"
         vector frame_embedding "2048-d cosine IVF_PQ"
     }
+    speaker_turns {
+        string doc_id FK
+        int turn_id "per-video enumerate index (sorted by start)"
+        string speaker_label "anonymous SPEAKER_00…, per-video only"
+        float start "absolute video seconds"
+        float end "absolute video seconds"
+    }
 ```
 
 See [`docs/STORAGE.md`](docs/STORAGE.md) for the full Lance storage deep-dive.
@@ -162,6 +171,18 @@ joins the representative frame (`frame_idx=0`) up onto `chunks` so the visual
 EVōC projection (`atlas_img_*`) can be computed. It is **not** the per-frame
 vector that backs visual search; that one lives on `chunk_frames` and is what
 `_frame_search` queries.
+
+**Why `speaker_turns` is its own table too:** speaker diarization ("who spoke
+when") is produced *per video* as a unit (one pyannote pass → that video's whole
+set of turns), so it follows the same "append-only, never `merge_insert` into the
+wide `chunks` schema" rationale as `chunk_frames`. It carries **no** embedding or
+blob column — it is pure timeline metadata (anonymous label + absolute-second
+`start`/`end`) — so there is **no** IVF/vector index on it; the only useful index
+is an optional scalar BTREE on `doc_id` to speed the per-video lookup at
+full-corpus scale. The labels (`SPEAKER_00`, `SPEAKER_01`, …) are **anonymous and
+local to one video** — they identify distinct speakers *within* that recording but
+carry no identity across videos (that cross-video "voice search" axis is a
+separate, *unshipped* effort — see [TODO.md](TODO.md)).
 
 **Blob V2 cheat-sheet** (load-bearing constraints):
 
@@ -278,6 +299,30 @@ Per-chunk frames are fetched on demand from `/api/chunk-frame/{doc_id}/{speech_i
 the frontend stops asking after the first 404 (frames not extracted yet) via the
 `feature-flags.svelte.ts` singleton.
 
+### Speaker diarization (the "Speakers" tab)
+
+A separate, offline pipeline answers **"who spoke when"** for each video. `raudio
+extract-speaker-turns` runs [`pyannote/speaker-diarization-community-1`](https://hf.co/pyannote/speaker-diarization-community-1)
+**in-process** (pyannote.audio is in the main venv — no isolated worker, no vLLM
+server; GPU-accelerated when available, ~90 s/video, crash-resumable at video
+granularity) and appends each video's turns to the `speaker_turns` table. On the
+read side, `GET /api/diarization/{doc_id}` (`backend/diarization/router.py`,
+mounted by `create_app`) reads `speaker_turns.lance` on demand and returns
+`{built, doc_id, turns[], speakers[]}` — `built: false` when the table or the doc
+is absent. The frontend's **"Speakers"** tab in the player
+(`frontend/src/lib/components/player-pane.svelte` → `diarization-timeline.svelte`,
+fetched via `getDiarization()` in `api.ts`) draws per-speaker lanes with a
+playhead synced to the `<video>` and click-to-seek; the player defaults to the
+existing **Transcript** tab and the Speakers tab shows "Diarization not built for
+this video" when absent. The labels are **anonymous per-video** (`SPEAKER_00`…) —
+they distinguish speakers within one recording, never across the corpus.
+
+> ```mermaid
+> flowchart LR
+>     V["source MP4"] -->|"raudio extract-speaker-turns<br/>(pyannote, in-process, GPU)"| ST["speaker_turns.lance<br/>(doc_id, turn_id, label, start, end)"]
+>     ST -->|"GET /api/diarization/{doc_id}"| TAB["player → Speakers tab<br/>(diarization-timeline.svelte)"]
+> ```
+
 ---
 
 ## 6. Where things live (navigation map)
@@ -294,6 +339,7 @@ src/raudio/                Python pipeline — the WRITE side + search/embedding
 │   └── audio.py            source-path resolution + media URI / MIME composition
 ├── media/                 FFMPEG / DOWNLOAD side-steps
 │   ├── frames.py           ffmpeg frame extraction + write_chunk_frames (thread-pool batcher)
+│   ├── diarize.py          in-process pyannote diarization → write_speaker_turns (one video at a time)
 │   ├── thumbnails.py       per-file thumbnail / waveform generation (ffmpeg)
 │   └── download.py         bulk media download from a video_batcher CSV (httpx async)
 ├── asr/                   UPSTREAM ASR wrappers (in-process pipeline STAGE)
@@ -325,6 +371,7 @@ backend/                   FastAPI package (the read-side serving app)
 ├── search/                /api/search router + search core
 ├── media/                 /api/media /thumbnail /chunk-frame router
 ├── atlas/                  /api/atlas/{status,points,chunk,chunks} router (the map view)
+├── diarization/            /api/diarization/{doc_id} router (Speakers-tab timeline; reads speaker_turns)
 └── system/                health / system router
 
 frontend/                  primary SvelteKit 2 / Svelte 5 SPA (the viewer UI)
@@ -552,6 +599,7 @@ the authoritative, commented description of how every process fits together.
 | Add/modify a feature column (embed/summary/caption) | `src/raudio/features/columns.py` (+ `features/engine.py`) |
 | Change search behavior / add a mode | `backend/search/service.py` (`run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`) + `backend/search/spec.py` (`SearchMode`) |
 | Touch the Atlas projection / map endpoints | `src/raudio/features/projection.py` (EVōC fit) + `backend/atlas/router.py` (`/api/atlas/*`) |
+| Touch speaker diarization (Speakers tab) | `src/raudio/media/diarize.py` (pyannote → `speaker_turns`) + `backend/diarization/router.py` (`/api/diarization/{doc_id}`) + `frontend/src/lib/components/diarization-timeline.svelte` |
 | Add an API endpoint | the relevant router under `backend/` (`search/`, `media/`, `atlas/`, `system/`) |
 | Change the embedding/rerank wire format | `src/raudio/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
 | Touch the search UI | `frontend/src/routes/+page.svelte` + `frontend/src/lib/components/` |

@@ -26,7 +26,7 @@ GPU             ?= 2
 	transcribe detect-language thumbnail \
 	ingest ingest-with-media ingest-full reindex-fts \
 	pipeline pipeline-sharded pipeline-multimodal \
-	embed-server rerank-server embed-server-docker rerank-server-docker vllm-stop kernels-prepare embed-chunks extract-chunk-frames embed-chunk-frames \
+	embed-server rerank-server embed-server-docker rerank-server-docker vllm-stop kernels-prepare embed-chunks extract-chunk-frames embed-chunk-frames speaker-turns \
 	caption-chunk-frames embed-captions captions topics \
 	atlas atlas-visual atlas-caption atlas-all features-all stack-up stack-down \
 	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
@@ -352,6 +352,9 @@ extract-chunk-frames: ## ffmpeg → one JPEG per chunk.start into the chunk_fram
 embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ index.
 	uv run --extra multimodal raudio --db $(DB) feature frame_embedding --url $(EMBED_URL)
 
+speaker-turns:        ## Diarize each video → speaker_turns.lance (who-spoke-when; needs pyannote + cached HF token).
+	uv run raudio --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+
 caption-chunk-frames: ## Caption EXISTING frames → chunk_frames.caption (resumable; uses your Gemma at $(CAPTION_URL)).
 	uv run --extra multimodal raudio --db $(DB) feature caption \
 		--url $(CAPTION_URL) --model $(CAPTION_MODEL) --checkpoint $(CAPTION_CKPT)
@@ -383,7 +386,7 @@ topics:               ## Build Swedish topic layers (Toponymy, isolated env; nee
 # `ingest-full` already ran and the embed server (:8001) + your Gemma (:8003) are
 # up. Each stage is resumable (skips populated rows). Hours of GPU for 145k rows.
 # This is what `pipeline-multimodal` was missing (captions, atlas, topics).
-features-all: embed-chunks extract-chunk-frames embed-chunk-frames captions atlas-all topics compact  ## Build every derived column on $(DB).
+features-all: embed-chunks extract-chunk-frames embed-chunk-frames speaker-turns captions atlas-all topics compact  ## Build every derived column on $(DB).
 
 # Full multimodal indexing chain. Existing `pipeline` runs first, then the
 # three new stages add the multimodal columns + indexes. Resumable: each

@@ -27,6 +27,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.atlas.router import router as atlas_router
+from backend.diarization.router import router as diarization_router
 from backend.media.router import router as media_router
 from backend.search.router import router as search_router
 from backend.state import open_resources
@@ -67,6 +68,7 @@ def create_app(db_path: str | Path) -> FastAPI:
     app.include_router(system_router)
     app.include_router(atlas_router)
     app.include_router(topics_router)
+    app.include_router(diarization_router)
 
     # API-only — the Bun frontend serves assets and proxies /api/*. Default "*"
     # is fine behind that local proxy; set RAUDIO_CORS_ORIGINS=https://a,https://b

@@ -236,7 +236,36 @@ and adds the scene leg to `mode=all`. Until captions are built, both scene modes
 return empty. (On the live DB this is the genuinely-open piece —
 `frame_embedding` is already built end-to-end and indexed.)
 
-### 6. Reranking (optional)
+### 6. Add speaker diarization (optional)
+
+Per-video **who-spoke-when** via `pyannote/speaker-diarization-community-1`. Runs
+**offline, in-process** (no vLLM server, no isolated worker — `pyannote.audio`
+already lives in the main venv), GPU-accelerated if available (~90 s/video) and
+crash-resumable. Needs a cached HF token (`hf auth login`) and the community-1
+model terms accepted on the Hub.
+
+```bash
+make speaker-turns                 # diarize each video → speaker_turns.lance
+                                   # (wraps `raudio extract-speaker-turns --audio-root input/sv`)
+```
+
+Writes a new `speaker_turns.lance` table (`doc_id, turn_id, speaker_label,
+start, end` in absolute video seconds), separate from `chunks` for the same
+reason as `chunk_frames`. It is append-only, one video at a time, and
+`--only-null` (the default) skips already-diarized videos; pass `--all` to redo
+everything. There is no embedding/vector column, so **no vector reindex is
+needed**. Optional hygiene at corpus scale: a scalar BTREE index on
+`speaker_turns.doc_id` speeds per-video lookup, and `raudio compact --table
+speaker_turns` consolidates the per-video append fragments.
+
+**`raudio serve` has no auto-reload — RESTART the backend after building** so it
+opens `speaker_turns.lance` and serves `GET /api/diarization/{doc_id}`. The
+player then shows a **Speakers** tab (per-speaker lanes + a playhead synced to
+the video, click-to-seek); until the table is built it reads "Diarization not
+built for this video." Labels (`SPEAKER_00…`) are anonymous and stable only
+within one video.
+
+### 7. Reranking (optional)
 
 ```bash
 make rerank-server-docker          # Qwen3-VL-Reranker-2B on :8002
@@ -416,8 +445,11 @@ commands (the HF kernels API changed); the bundled FlashAttention 2 works.
 
 - **Image search is frame similarity, not face/identity recognition.** It finds
   visually similar video frames; it does not identify who is in them.
-- **No speaker diarization** — there is no link between who is on screen and who
-  is speaking.
+- **Speakers are anonymous per-video** — per-video speaker diarization exists
+  (who-spoke-when; the **Speakers** tab in the player, `speaker_turns.lance`,
+  `GET /api/diarization`), but labels (`SPEAKER_00…`) are stable only *within*
+  one video. There is no cross-video speaker identity and no link between who is
+  on screen and who is speaking.
 - **The reranker is text-only** — it scores transcript text against the query
   and ignores the image and the vectors.
 - **`all` fusion (up to 4 legs) is equal-weight RRF** — there is no per-leg

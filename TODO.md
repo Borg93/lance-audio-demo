@@ -153,7 +153,34 @@ roll-up-by-`doc_id` pattern as `doc_topic`:
   prompt — the chunk-level `summary` feature is the natural first stage.
   (`FEATURES["doc_summary"]`, `table="documents"`.)
 
-### 📋 Voice / speaker search (ECAPA x-vectors)
+### ✅ Speaker diarization (who-spoke-when) — shipped
+Per-video diarization via `pyannote/speaker-diarization-community-1`, run
+**offline in-process** (no vLLM server, no isolated worker — `pyannote.audio` is
+already in the main venv), GPU-accelerated if available (~90 s/video) and
+crash-resumable. Built with `raudio extract-speaker-turns --audio-root input/sv`
+(`make speaker-turns`; `--only-null` skips already-diarized videos). Writes a new
+`speaker_turns.lance` table (`doc_id, turn_id, speaker_label, start, end` in
+absolute video seconds) — separate from `chunks`, no embedding/vector column, so
+**no IVF/vector index** (optional scalar BTREE on `doc_id` + `raudio compact
+--table speaker_turns` are hygiene only). Backend serves `GET
+/api/diarization/{doc_id}` (`backend/diarization/router.py`, registered in
+`backend/app.py`) — RESTART the backend after building since `raudio serve` has
+no auto-reload. The player has a **Speakers** tab
+(`diarization-timeline.svelte`): per-speaker lanes + a playhead synced to the
+video, click-to-seek, fetched via `getDiarization()`.
+
+> **Distinct from the voice-search axis below.** Diarization labels
+> (`SPEAKER_00…`) are anonymous and stable only *within* one video — there is no
+> cross-video speaker identity. Cross-video voice matching is the separate,
+> still-parked ECAPA item.
+
+### 📋 Voice / speaker search (ECAPA x-vectors) — parked (AMBER)
+**De-risk verdict: AMBER, not built.** Standalone de-risk found cross-video
+speaker matching only ~0.74 AUC (channel-inflated within-session; label-noisy
+across videos) — not yet good enough to ship. Needs diarization-clean labels +
+PLDA before wiring the pipeline. This is the *cross-video voice identity* axis,
+**separate from the per-video diarization that already shipped above.**
+
 Add an **audio** embedding axis: a per-chunk 1024-d speaker embedding so you can
 upload a voice clip and find chunks where a similar-sounding voice speaks (and
 cluster the corpus *by speaker*). Encoder:
@@ -175,9 +202,10 @@ extracted from Qwen3-TTS-0.6B-**Base** (Apache-2.0, ~6.3M params, 24 kHz mono �
 - **Atlas** — a `--space voice` projection → speaker clusters spatially.
 
 Caveats: x-vectors assume one speaker per clip (overlap/applause muddy them);
-need ~1.5–3 s+ of audio per clip; normalize → cosine. **De-risk first** by
-loading the model in isolation and confirming same- vs different-speaker cosine
-separates, before wiring the pipeline.
+need ~1.5–3 s+ of audio per clip; normalize → cosine. **De-risk already done**
+(`scripts/derisk_voice_*.py`): same-session cosine separates well but is
+channel-inflated; cross-video matching only ~0.74 AUC — so this stays parked
+until diarization-clean labels + PLDA close that gap.
 
 ### 📋 Studio desktop merge (ranymizer + raudio + multimodal-webgpu-demo → Tauri)
 Fold the three SvelteKit apps into one Tauri 2 **"Studio"** shell, where raudio

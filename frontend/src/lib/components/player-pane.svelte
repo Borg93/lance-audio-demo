@@ -1,9 +1,17 @@
 <script lang="ts">
-  import { type Hit, type DocTranscriptChunk, getDocTranscript, mediaUrl } from '$lib/api';
+  import {
+    type Hit,
+    type DocTranscriptChunk,
+    type DiarTurn,
+    getDocTranscript,
+    getDiarization,
+    mediaUrl,
+  } from '$lib/api';
   import { fmtTime } from '$lib/utils';
   import { ChevronRight, Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptWindow from './transcript-window.svelte';
   import ChunkTimeline from './chunk-timeline.svelte';
+  import DiarizationTimeline from './diarization-timeline.svelte';
 
   type Props = {
     hit: Hit | null;
@@ -25,6 +33,12 @@
   let currentTime = $state(0);
   let duration = $state(0);
   let docChunks = $state<DocTranscriptChunk[]>([]);
+
+  // Bridge-bar tab: which sync view is shown under the video. Default
+  // 'transcript' so existing behaviour (the karaoke window) is unchanged; the
+  // <video> stays mounted across tabs so playback/seek never resets.
+  let tab = $state<'transcript' | 'speakers'>('transcript');
+  let diarTurns = $state<DiarTurn[]>([]);
 
   // Search hits ship `alignments: []` (the per-word timing blob is ~80% of a
   // search payload and only the player needs it). On opening a hit we lazy-fetch
@@ -48,6 +62,30 @@
       })
       .catch(() => {
         /* leave empty — the video still plays, just no karaoke */
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  // Lazy-fetch speaker turns for the Speakers tab, mirroring the transcript
+  // fetch above. Keyed on doc_id; `built: false` (table/doc absent) yields an
+  // empty list and the tab shows a muted "not built" note. The <video> plays
+  // regardless — this is purely the timeline overlay.
+  $effect(() => {
+    const h = hit;
+    if (!h) {
+      diarTurns = [];
+      return;
+    }
+    diarTurns = [];
+    let cancelled = false; // supersede guard + leak guard
+    getDiarization(h.doc_id)
+      .then((d) => {
+        if (!cancelled) diarTurns = d.turns;
+      })
+      .catch(() => {
+        /* leave empty — the video still plays, just no speaker timeline */
       });
     return () => {
       cancelled = true;
@@ -98,6 +136,12 @@
 
   // "<speech_id>:<chunk_id>" of the opened hit → highlights its segment.
   const activeKey = $derived(hit ? `${hit.speech_id}:${hit.chunk_id}` : null);
+
+  // The playing chunk's [start,end] → feeds the diarization timeline's "Chunk"
+  // zoom. Falls back to the opened hit's span before the doc transcript loads.
+  const currentChunk = $derived(docChunks[currentChunkIdx]);
+  const chunkStart = $derived(currentChunk?.start ?? hit?.start ?? 0);
+  const chunkEnd = $derived(currentChunk?.end ?? hit?.end ?? 0);
 
   // Timeline click → jump there and play. Mirrors the hit-seek $effect; here
   // the doc is already loaded so we seek immediately.
@@ -285,37 +329,95 @@
           {currentChunkIdx}
           onSeek={seekTo}
         />
-        <!-- Bridge bar: ties the video to its transcript and holds the
-             fullscreen toggle (kept off the video so nothing covers it). -->
+        <!-- Bridge bar: ties the video to its synced views (a 2-tab switch
+             between the karaoke transcript and the speaker timeline) and holds
+             the fullscreen toggle (kept off the video so nothing covers it). -->
         <div
           class="flex items-center gap-1.5 border-t border-border/70 px-3 py-1.5 text-xs font-medium text-muted-foreground"
         >
-          <span>Transcript</span>
+          <button
+            type="button"
+            onclick={() => (tab = 'transcript')}
+            aria-pressed={tab === 'transcript'}
+            class="rounded px-2 py-0.5 transition-colors {tab === 'transcript'
+              ? 'bg-secondary text-foreground'
+              : 'hover:bg-secondary hover:text-foreground'}"
+          >
+            Transcript
+          </button>
+          <button
+            type="button"
+            onclick={() => (tab = 'speakers')}
+            aria-pressed={tab === 'speakers'}
+            class="rounded px-2 py-0.5 transition-colors {tab === 'speakers'
+              ? 'bg-secondary text-foreground'
+              : 'hover:bg-secondary hover:text-foreground'}"
+          >
+            Speakers
+          </button>
           {@render fsToggle(
             'ml-auto rounded p-1 transition-colors hover:bg-secondary hover:text-foreground',
           )}
         </div>
       {/if}
 
-      <!-- Transcript body. Normal: scrolls below the bar inside the card with a
+      <!-- Sync body. Normal: scrolls below the bar inside the card with a
            guaranteed min-height floor so it never collapses to 0 in a short pane
            (the map view's right column is wide-but-short, which used to squeeze
            the flex-1 transcript to nothing). Fullscreen: a centred caption band
            lifted ABOVE the native control bar (bottom-20) so it never covers the
-           play button — only the ≤3 windowed chunks render, so it stays small. -->
+           play button — only the ≤3 windowed chunks render, so it stays small.
+           Fullscreen always shows the transcript overlay (the tab switch lives
+           on the bridge bar, which is hidden in fullscreen). -->
       <div
         class={isFullscreen
           ? 'absolute inset-x-0 bottom-20 mx-auto max-h-[32%] w-[min(92%,60rem)] overflow-y-auto rounded-xl bg-black/55 px-6 py-4 text-lg leading-8 text-white backdrop-blur-sm'
-          : 'min-h-[8rem] flex-1 overflow-y-auto text-sm leading-7'}
+          : tab === 'speakers'
+            ? 'flex min-h-[10rem] flex-1 flex-col overflow-hidden'
+            : 'min-h-[8rem] flex-1 overflow-y-auto text-sm leading-7'}
       >
-        <TranscriptWindow
-          chunks={windowChunks}
-          {currentChunkIdx}
-          {windowStartIdx}
-          media={mediaEl}
-          {query}
-          variant={isFullscreen ? 'overlay' : 'panel'}
-        />
+        {#if !isFullscreen && tab === 'speakers'}
+          {#if diarTurns.length > 0}
+            <!-- Compact speaker lanes (Chunk⇄Video zoom) pinned on top; the karaoke
+                 transcript fills the rest and is the only part that scrolls, so the
+                 video + lanes + transcript all stay in view. Both synced to <video>. -->
+            <div class="flex h-full min-h-0 flex-col">
+              <div class="shrink-0">
+                <DiarizationTimeline
+                  turns={diarTurns}
+                  {currentTime}
+                  {duration}
+                  {chunkStart}
+                  {chunkEnd}
+                  onSeek={seekTo}
+                />
+              </div>
+              <div class="min-h-0 flex-1 overflow-y-auto border-t border-border/70 text-sm leading-7">
+                <TranscriptWindow
+                  chunks={windowChunks}
+                  {currentChunkIdx}
+                  {windowStartIdx}
+                  media={mediaEl}
+                  {query}
+                  variant="panel"
+                />
+              </div>
+            </div>
+          {:else}
+            <div class="p-3 text-xs text-muted-foreground">
+              Diarization not built for this video.
+            </div>
+          {/if}
+        {:else}
+          <TranscriptWindow
+            chunks={windowChunks}
+            {currentChunkIdx}
+            {windowStartIdx}
+            media={mediaEl}
+            {query}
+            variant={isFullscreen ? 'overlay' : 'panel'}
+          />
+        {/if}
       </div>
     </div>
 

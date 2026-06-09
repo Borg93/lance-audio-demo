@@ -4,7 +4,7 @@
 > `raudio ingest` can load. This is the **upstream half** of the write side
 > sketched in the [Architecture Guide](../GUIDE.md) §5 — everything that
 > happens *before* a Lance table exists. For the schema those JSONs land in,
-> see [GUIDE.md §4](../GUIDE.md#4-the-data-model--three-lance-tables); for the
+> see [GUIDE.md §4](../GUIDE.md#4-the-data-model--four-lance-tables); for the
 > running task list see [TODO.md](../TODO.md).
 
 `raudio` does **not** implement ASR. It is a thin operator wrapper around two
@@ -351,7 +351,7 @@ The handoff is purely by convention:
 - **FTS language.** `ingest` builds the Tantivy index with `--fts-language`
   (default `English`, but **use `Swedish`** for this corpus — the English
   stemmer can't reduce forms like `ministern` / `vägen` / `ansåg`). See
-  [GUIDE.md §4](../GUIDE.md#4-the-data-model--three-lance-tables) and
+  [GUIDE.md §4](../GUIDE.md#4-the-data-model--four-lance-tables) and
   `raudio reindex-fts` for fixing the stemmer after the fact.
 - **What the words are for.** The per-word `start`/`end` preserved in
   `alignments_json` is what the search API surfaces as exact word timestamps
@@ -363,3 +363,74 @@ In short: **`transcribe` (4 models) → alignment JSON (`AudioMetadata`) →
 `ingest` (Lance `chunks`/`documents`)**. Everything downstream — embeddings,
 frames, FTS, semantic and visual search — operates on the rows `ingest`
 materializes from these JSONs.
+
+---
+
+## 7. Speaker diarization (a separate per-video build stage)
+
+Diarization — **"who spoke when"** — is an independent offline stage that runs
+**after `ingest`** but does *not* touch the ASR/alignment chain above: it reads
+the **source MP4** again (not the alignment JSON) and writes a brand-new
+[`speaker_turns`](../GUIDE.md#4-the-data-model--four-lance-tables) Lance table.
+Unlike the embedding stages, it needs **no vLLM server** — `pyannote.audio` is in
+the main venv and runs **in-process** (no isolated worker), GPU-accelerated when a
+CUDA device is present.
+
+| Module | Subcommand | Make target | What it does |
+|---|---|---|---|
+| [`src/raudio/media/diarize.py`](../src/raudio/media/diarize.py) | `raudio extract-speaker-turns` | `make speaker-turns` | pyannote diarization per video → `speaker_turns.lance` |
+
+```mermaid
+flowchart TD
+    DOCS["chunks table → distinct (doc_id, audio_path)"] --> RES["resolve_source under --audio-root"]
+    RES --> WAV["ffmpeg → temp 16 kHz mono WAV"]
+    WAV --> PIPE["pyannote/speaker-diarization-community-1<br/>(loaded once, reused; GPU if available)"]
+    PIPE --> TURNS["SpeakerTurn[] (sorted by start, absolute seconds)"]
+    TURNS --> ST["append → speaker_turns.lance<br/>(doc_id, turn_id, speaker_label, start, end)"]
+```
+
+```bash
+# default model + audio root (input/sv); resumable, one video at a time
+raudio --db transcripts_v2.lance extract-speaker-turns --audio-root ./input/sv
+#   or, equivalently, the Make target (honours LIMIT=N for a debug subset):
+make speaker-turns DB=transcripts_v2.lance
+```
+
+Grounded details from [`diarize.py`](../src/raudio/media/diarize.py) /
+[`cli/media.py`](../src/raudio/cli/media.py):
+
+- **In-process, no server.** A `Diarizer` loads
+  `pyannote/speaker-diarization-community-1` (the `--model` default) once and
+  moves it onto `cuda` if available (else CPU), then reuses it across all videos —
+  loading per video would dominate the wall-clock (~90 s/video). Each video is
+  first transcoded to a temp **16 kHz mono WAV** (what the pyannote models expect)
+  that is deleted after inference.
+- **HF token + gated model.** The token is read from the **ambient cached
+  credentials** (`hf auth login` / `HF_TOKEN`) — the module never takes a token
+  argument — and the `speaker-diarization-community-1` **model terms must be
+  accepted** on the Hub, or `Pipeline.from_pretrained` returns `None` and the
+  command raises with that exact hint.
+- **Resumable at video granularity.** The default `--only-null` skips any
+  `doc_id` already present in `speaker_turns`; `--all` drops the table for a clean
+  rebuild. `--limit N` diarizes only the first N videos (use it — the full corpus
+  is slow). `--jobs` is **reserved/ignored**: diarization runs one video at a time
+  on the GPU. One bad video is logged and skipped, never killing the batch.
+- **Anonymous, per-video labels.** `speaker_label` is pyannote's local
+  `SPEAKER_00` / `SPEAKER_01` / … — stable only *within* one recording, **never**
+  across videos. `start`/`end` are **absolute video seconds**, `turn_id` the
+  per-video enumerate index over turns sorted by `start`.
+- **Append-only, no vector index.** `write_speaker_turns` mirrors
+  `write_chunk_frames` (one `lance.write_dataset` append per video). The table has
+  no embedding/blob column, so there is **no** IVF/vector index to build; an
+  optional scalar BTREE on `doc_id` is the only useful index.
+
+The read side serves this via `GET /api/diarization/{doc_id}` into the player's
+**Speakers** tab — see [GUIDE.md §5](../GUIDE.md#5-end-to-end-information-flow).
+**`raudio serve` has no auto-reload: restart the backend after building the table**
+so it serves the route (the [REPRODUCE.md](REPRODUCE.md) runbook calls this out).
+
+> This is **diarization only** (segment the audio by speaker turn). The separate
+> cross-video *voice search* / speaker-embedding axis (matching the *same* person
+> across recordings) is **not shipped** — de-risking found it only ~0.74 AUC
+> cross-video (AMBER); see [TODO.md](../TODO.md). The anonymous per-video labels
+> here deliberately make no cross-video identity claim.
