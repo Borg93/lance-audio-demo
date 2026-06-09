@@ -14,7 +14,7 @@
 > Every claim is cited to a file you can open and check.
 >
 > See also: [GUIDE.md](../GUIDE.md) (architecture & data flow),
-> [../README.md](../README.md) (quickstart), [../TODO.md](../TODO.md) (live blockers).
+> [../README.md](../README.md) (quickstart), [TODO.md](TODO.md) (live blockers).
 
 ---
 

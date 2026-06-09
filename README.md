@@ -12,7 +12,7 @@ cross-encoder reranker.
 
 > 📐 **New to the codebase?** Read **[GUIDE.md](GUIDE.md)** — architecture, data
 > flow, design rationale, and the developer workflow. Running task list:
-> **[TODO.md](TODO.md)**.
+> **[TODO.md](docs/TODO.md)**.
 
 ---
 

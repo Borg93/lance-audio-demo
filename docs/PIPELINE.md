@@ -5,7 +5,7 @@
 > sketched in the [Architecture Guide](../GUIDE.md) §5 — everything that
 > happens *before* a Lance table exists. For the schema those JSONs land in,
 > see [GUIDE.md §4](../GUIDE.md#4-the-data-model--four-lance-tables); for the
-> running task list see [TODO.md](../TODO.md).
+> running task list see [TODO.md](TODO.md).
 
 `raudio` does **not** implement ASR. It is a thin operator wrapper around two
 KBLab libraries — [`easytranscriber`](https://github.com/kb-labb/easytranscriber)
@@ -432,5 +432,5 @@ so it serves the route (the [REPRODUCE.md](REPRODUCE.md) runbook calls this out)
 > This is **diarization only** (segment the audio by speaker turn). The separate
 > cross-video *voice search* / speaker-embedding axis (matching the *same* person
 > across recordings) is **not shipped** — de-risking found it only ~0.74 AUC
-> cross-video (AMBER); see [TODO.md](../TODO.md). The anonymous per-video labels
+> cross-video (AMBER); see [TODO.md](TODO.md). The anonymous per-video labels
 > here deliberately make no cross-video identity claim.

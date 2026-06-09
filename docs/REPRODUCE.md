@@ -138,6 +138,62 @@ flowchart TD
     ST --> CO
 ```
 
+### Provenance — what produces every table & column
+
+> **Source-of-truth chain:** `video_batcher.csv` (in-repo seed) + the Riksarkivet
+> **MP4s** → `transcribe` (alignment JSON) → `ingest` (`chunks` + `documents`) →
+> feature/CLI steps (everything else). If you lose the Lance dataset, replay Path B
+> from those two inputs to regenerate all of the below. This is the exact map of
+> *what writes which column, from where*.
+
+**`chunks.lance`** — one row per transcript chunk. Identity + payload written at **ingest**; vectors/derived columns **added later** via `add_columns`.
+
+| Column(s) | Written by | From |
+|---|---|---|
+| `doc_id · speech_id · chunk_id · audio_path · start · end · duration · text · sample_rate · audio_duration · audio_frames · num_logits · language · language_prob · alignments_json · metadata` | `make ingest-full` (`raudio ingest`) | the per-video **alignment JSON** from `make transcribe` (VAD→Whisper→forced-align). `doc_id`=SHA1(audio_path); `text` is Swedish-FTS-indexed; `alignments_json` is word-level JSONB |
+| `referenskod · namn · bildid · extraid` | `make ingest-full` | **`video_batcher.csv`**, keyed by `bildid` (= `audio_path` stem) |
+| `text_embedding` (2048-d) | `make embed-chunks` (`feature text_embedding`) | `chunks.text` → embed server `:8001` (Qwen3-VL-Embedding-2B) |
+| `frame_embedding` (2048-d) | `make atlas-visual` (join) | `chunk_frames.frame_embedding` @ frame_idx=0 |
+| `caption_embedding` (2048-d) | `make atlas-caption` (join) | `chunk_frames.caption_embedding` @ frame_idx=0 |
+| `atlas_x/y/cluster` | `make atlas` | EVōC 2-D over `text_embedding` |
+| `atlas_img_x/y/cluster` | `make atlas-visual` | EVōC over `frame_embedding` |
+| `atlas_cap_x/y/cluster` | `make atlas-caption` | EVōC over `caption_embedding` |
+| `topic_l0…topic_l{N} · doc_topic` | `make topics` (`feature topics`) | Toponymy clusters over the atlas map, named by Gemma `:8003` (isolated PEP-723 worker) |
+| `summary` *(not built on live DB)* | `raudio feature summary` | `chunks.text` → instruct LLM |
+
+**`chunk_frames.lance`** — one representative frame per chunk (append-only, separate table).
+
+| Column(s) | Written by | From |
+|---|---|---|
+| `doc_id · speech_id · chunk_id · frame_idx · frame_blob · frame_mime · frame_width · frame_height` | `make extract-chunk-frames` | one JPEG/chunk via **ffmpeg** fast-seek from the source MP4 (`--audio-root`) |
+| `frame_embedding` (2048-d) | `make embed-chunk-frames` (`feature frame_embedding`) | `frame_blob` → embed server `:8001` |
+| `caption` | `make captions` (`feature caption`) | `frame_blob` → **your** Gemma `:8003` |
+| `caption_embedding` (2048-d) | `make captions` (`feature caption_embedding`) | `caption` → embed server `:8001` |
+
+**`documents.lance`** — one row per source media file.
+
+| Column(s) | Written by | From |
+|---|---|---|
+| `doc_id · media metadata · media_blob (URI, Blob V2 External) · thumbnail` | `make ingest-full` (`--audio-root`/`--media-base-uri`) | `audio_path` → `file://`/`hf://` URI; `thumbnail` from `make thumbnail` (`thumbnails/<stem>.jpg`) |
+
+**`topics.lance`** — single row.
+
+| Column(s) | Written by | From |
+|---|---|---|
+| `layers · n_chunks · hierarchy` (JSONB) | `make topics` (`build_topic_tree`) | the per-chunk `topic_l*` columns folded into a nested tree |
+
+**`speaker_turns.lance`** — diarization, one set of rows per video (append-only).
+
+| Column(s) | Written by | From |
+|---|---|---|
+| `doc_id · turn_id · speaker_label · start · end` | `make speaker-turns` (`raudio extract-speaker-turns`) | source MP4 (`--audio-root`) → **pyannote** `speaker-diarization-community-1`, in-process. `speaker_label` is anonymous & **per-video only**. No vector column → no IVF index (optional `doc_id` BTREE) |
+
+> **`video_batcher.csv`** (in-repo — the one human-curated bootstrap input) is
+> **semicolon-separated**: `referenskod;namn;extraid;bildid` (~1154 rows). `ingest`
+> keys it by `bildid` (= the `audio_path` stem, e.g. `T0001641_00001`) to fill the
+> four `chunks`/`documents` metadata columns; `make download` uses it to fetch the
+> MP4s. Keep it under version control — everything else is regenerable from it + the videos.
+
 ### B.1 — Acquire + transcribe (CPU/GPU, hours)
 
 ```bash

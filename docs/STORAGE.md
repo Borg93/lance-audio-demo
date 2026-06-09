@@ -430,7 +430,7 @@ A third operational fact:
 > **`IVF_HNSW_SQ` as an option** — for the frame-embedding index, Lance's
 > `IVF_HNSW_SQ` ("better recall at the cost of more memory") is a candidate swap;
 > better recall could let `nprobes` stay low. Tracked as a stretch item in
-> [TODO.md](../TODO.md).
+> [TODO.md](TODO.md).
 
 ### Query-time recall (`nprobes` + `refine_factor`)
 

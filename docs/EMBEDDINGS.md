@@ -4,7 +4,7 @@
 > vectors in one shared space, and how it cross-encodes query/document pairs for
 > reranking. This is the "shared seam" of the project — read
 > [GUIDE.md §7](../GUIDE.md#7-the-shared-seam-vllm-clients) for where it sits in
-> the wider architecture, and [TODO.md](../TODO.md) for open blockers. The
+> the wider architecture, and [TODO.md](TODO.md) for open blockers. The
 > image-embed resolution mismatch that historically gated frame embedding has its
 > own deep-dive in **[INVESTIGATION.md](INVESTIGATION.md)** (Part B) — read that
 > before you touch image resolution or vLLM warmup.
@@ -573,4 +573,4 @@ rebuilding the indexes after the bulk writes.
 | Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/raudio/vllm/) satisfying `EmbeddingClient`, wire it via `backend/clients.py` / `features/columns.py` |
 | Add a new derived column | one entry in `FEATURES` in [`features/columns.py`](../src/raudio/features/columns.py) |
 | Run the offline embed passes | `raudio feature text_embedding` / `frame_embedding` / `caption` / `caption_embedding` ([`cli/features.py`](../src/raudio/cli/features.py)) |
-| Understand the open blockers | [TODO.md](../TODO.md) and [INVESTIGATION.md](INVESTIGATION.md) |
+| Understand the open blockers | [TODO.md](TODO.md) and [INVESTIGATION.md](INVESTIGATION.md) |
