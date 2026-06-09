@@ -61,6 +61,13 @@ _CAPTION_COLUMN = "caption"
 # candidates with full-precision vectors restores it at a small latency cost
 # (see docs/INVESTIGATION.md §A3). Ignored when the column has no IVF index.
 _VECTOR_NPROBES = 20
+# Adaptive probing: scan _VECTOR_NPROBES partitions, extending toward all of them
+# only when a *selective* prefilter leaves the first pass short of `limit`. Pinning
+# nprobes (min == max) instead makes a selective scope silently drop rows — the
+# index probes too few partitions to contain them (a 20-chunk scope returned 1/20
+# before this). 0 = uncapped, cheap here (~35 IVF partitions at 145k rows → worst
+# case a full-index scan of a few ms); cap it if the corpus grows ~100x.
+_VECTOR_MAX_NPROBES = 0
 _VECTOR_REFINE_FACTOR = 3
 
 
@@ -106,7 +113,9 @@ def _attach_captions(chunk_frames, hits: list[dict[str, Any]]) -> None:
     try:
         rows = (
             chunk_frames.to_lance()
-            .to_table(columns=["doc_id", "speech_id", "chunk_id", _CAPTION_COLUMN], filter=key_filter)
+            .to_table(
+                columns=["doc_id", "speech_id", "chunk_id", _CAPTION_COLUMN], filter=key_filter
+            )
             .to_pylist()
         )
     except Exception:  # noqa: BLE001 — caption is decorative; never fail a search over it
@@ -273,7 +282,9 @@ def run_search(
 
     # ── Scene keyword (BM25 over chunk_frames.caption) — also embedding-free ──
     if spec.mode == "scene_fts":
-        hits = _frame_fts_search(chunk_frames, chunks, spec.q, spec.n, where)
+        hits = _frame_fts_search(
+            chunk_frames, chunks, spec.q, spec.n, where, scope_where=spec.where
+        )
         if spec.rerank:
             hits = _rerank_by_text(get_reranker, rerank_query, hits, spec.rerank_n, spec.n)
         return _postprocess_hits(hits, chunk_frames)
@@ -312,7 +323,9 @@ def run_search(
                 detail="text embeddings not built yet — run `raudio feature text_embedding` (make embed-chunks)",
             )
         vec = text_vec if text_vec is not None else image_vec
-        hits = _vector_search(chunks, vec, "text_embedding", spec.n, where, prefilter=spec.prefilter)
+        hits = _vector_search(
+            chunks, vec, "text_embedding", spec.n, where, prefilter=spec.prefilter
+        )
         if spec.rerank:
             hits = _rerank_by_text(get_reranker, rerank_query, hits, spec.rerank_n, spec.n)
         return _postprocess_hits(hits, chunk_frames)
@@ -320,7 +333,10 @@ def run_search(
         # Image-only: the text reranker has no query text to score, so results
         # keep their frame-similarity order regardless of the rerank toggle.
         vec = image_vec if image_vec is not None else text_vec
-        return _postprocess_hits(_frame_search(chunk_frames, chunks, vec, spec.n, where), chunk_frames)
+        return _postprocess_hits(
+            _frame_search(chunk_frames, chunks, vec, spec.n, where, scope_where=spec.where),
+            chunk_frames,
+        )
     if spec.mode == "scene":
         # Rank frames by how well their Swedish caption matches the query, in the
         # shared text-embedding space. Falls back to the image vector if that's
@@ -328,7 +344,15 @@ def run_search(
         vec = text_vec if text_vec is not None else image_vec
         if vec is None:
             raise HTTPException(status_code=400, detail="scene search requires a query")
-        hits = _frame_search(chunk_frames, chunks, vec, spec.n, where, column=_CAPTION_EMBED_COLUMN)
+        hits = _frame_search(
+            chunk_frames,
+            chunks,
+            vec,
+            spec.n,
+            where,
+            column=_CAPTION_EMBED_COLUMN,
+            scope_where=spec.where,
+        )
         if spec.rerank:
             hits = _rerank_by_text(get_reranker, rerank_query, hits, spec.rerank_n, spec.n)
         return _postprocess_hits(hits, chunk_frames)
@@ -368,7 +392,8 @@ def run_search(
                 .vector(text_vec.tolist())
                 .text(fts_query)
                 .rerank(fusion)
-                .nprobes(_VECTOR_NPROBES)
+                .minimum_nprobes(_VECTOR_NPROBES)
+                .maximum_nprobes(_VECTOR_MAX_NPROBES)
                 .refine_factor(_VECTOR_REFINE_FACTOR)
                 .select(_PAYLOAD_COLUMNS)
                 .limit(spec.n)
@@ -412,14 +437,24 @@ def run_search(
         # 2048-d space), joined back to chunks. Empty until frames are embedded.
         vec_for_frames = image_vec if image_vec is not None else text_vec
         if vec_for_frames is not None:
-            rankings.append(_frame_search(chunk_frames, chunks, vec_for_frames, spec.n * 3, where))
+            rankings.append(
+                _frame_search(
+                    chunk_frames, chunks, vec_for_frames, spec.n * 3, where, scope_where=spec.where
+                )
+            )
         # Caption (scene) vector branch — frames whose Swedish caption matches the
         # query text. Text-only (captions live in the text-embedding space); empty
         # until caption_embedding is built.
         if text_vec is not None:
             rankings.append(
                 _frame_search(
-                    chunk_frames, chunks, text_vec, spec.n * 3, where, column=_CAPTION_EMBED_COLUMN
+                    chunk_frames,
+                    chunks,
+                    text_vec,
+                    spec.n * 3,
+                    where,
+                    column=_CAPTION_EMBED_COLUMN,
+                    scope_where=spec.where,
                 )
             )
 
@@ -457,7 +492,8 @@ def _vector_search(
         qb = (
             table.search(vec.tolist(), vector_column_name=column)
             .distance_type("cosine")
-            .nprobes(_VECTOR_NPROBES)
+            .minimum_nprobes(_VECTOR_NPROBES)
+            .maximum_nprobes(_VECTOR_MAX_NPROBES)
             .refine_factor(_VECTOR_REFINE_FACTOR)
             .select([*_PAYLOAD_COLUMNS, "_distance"])
             .limit(n)
@@ -469,6 +505,23 @@ def _vector_search(
         raise HTTPException(status_code=400, detail=f"vector search failed: {e}") from e
 
 
+def _ranked_or_fallback(
+    rank: Callable[..., list[dict[str, Any]]], *, scoped: bool
+) -> list[dict[str, Any]]:
+    """Run ``rank(scoped=True)``; if the scope prefilter references a column the
+    frame table lacks (a metadata filter, which stays on the chunks join), retry
+    unscoped. ``[]`` if even the unscoped rank fails (no vector/FTS index yet)."""
+    if scoped:
+        try:
+            return rank(scoped=True)
+        except Exception:  # noqa: BLE001 — scope hit a non-frame column → retry unscoped
+            pass
+    try:
+        return rank(scoped=False)
+    except Exception:  # noqa: BLE001 — no vector/FTS index yet → no frame hits
+        return []
+
+
 def _frame_search(
     chunk_frames,
     chunks,
@@ -477,6 +530,7 @@ def _frame_search(
     where: str | None,
     *,
     column: str = _FRAME_EMBED_COLUMN,
+    scope_where: str | None = None,
 ) -> list[dict[str, Any]]:
     """Rank `chunk_frames` by a vector ``column``, then fetch the matching `chunks`
     rows (where the hit payload lives) and re-order to match.
@@ -485,24 +539,34 @@ def _frame_search(
     search (``caption_embedding`` — the Swedish caption's text vector); the join
     back to `chunks` is identical, only the ranked column differs.
 
+    ``scope_where`` is an upstream result scope (doc/chunk ids) pushed down as a
+    *prefilter* so a refine ranks WITHIN the scope instead of post-filtering the
+    global top-n (which returned ~0). It only references columns `chunk_frames`
+    has; a non-frame predicate (e.g. a metadata filter, which stays on the chunks
+    join via ``where``) falls back to an unscoped rank.
+
     Returns ``[]`` when frames haven't been extracted/embedded yet — the frame
     pipeline is optional, so visual/scene/all search degrades to empty rather
     than erroring.
     """
     if vec is None or chunk_frames is None or column not in chunk_frames.schema.names:
         return []
-    try:
-        ranked = (
+
+    def rank(*, scoped: bool) -> list[dict[str, Any]]:
+        qb = (
             chunk_frames.search(vec.tolist(), vector_column_name=column)
             .distance_type("cosine")
-            .nprobes(_VECTOR_NPROBES)
+            .minimum_nprobes(_VECTOR_NPROBES)
+            .maximum_nprobes(_VECTOR_MAX_NPROBES)
             .refine_factor(_VECTOR_REFINE_FACTOR)
             .select(["doc_id", "speech_id", "chunk_id", "_distance"])
             .limit(n)
-            .to_list()
         )
-    except Exception:  # noqa: BLE001 — no vector column/index yet → no frame hits
-        return []
+        if scoped and scope_where:
+            qb = qb.where(scope_where, prefilter=True)
+        return qb.to_list()
+
+    ranked = _ranked_or_fallback(rank, scoped=bool(scope_where))
     return _frames_to_chunk_hits(chunks, ranked, where)
 
 
@@ -512,26 +576,31 @@ def _frame_fts_search(
     query: str,
     n: int,
     where: str | None,
+    *,
+    scope_where: str | None = None,
 ) -> list[dict[str, Any]]:
     """BM25 keyword search over `chunk_frames.caption`, joined back to `chunks`.
 
     The keyword counterpart to scene-vector search: same frame→chunk join as
     :func:`_frame_search`, only the ranking is Tantivy BM25 instead of cosine.
+    ``scope_where`` prefilters to an upstream scope (see :func:`_frame_search`).
     Returns ``[]`` when captions / their FTS index aren't built yet.
     """
     if not query or chunk_frames is None or _CAPTION_COLUMN not in chunk_frames.schema.names:
         return []
     from lancedb.query import MatchQuery
 
-    try:
-        ranked = (
+    def rank(*, scoped: bool) -> list[dict[str, Any]]:
+        qb = (
             chunk_frames.search(MatchQuery(query, _CAPTION_COLUMN), query_type="fts")
             .select(["doc_id", "speech_id", "chunk_id", "_score"])
             .limit(n)
-            .to_list()
         )
-    except Exception:  # noqa: BLE001 — no FTS index on caption yet → no hits
-        return []
+        if scoped and scope_where:
+            qb = qb.where(scope_where, prefilter=True)
+        return qb.to_list()
+
+    ranked = _ranked_or_fallback(rank, scoped=bool(scope_where))
     return _frames_to_chunk_hits(chunks, ranked, where)
 
 
