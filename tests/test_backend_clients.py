@@ -13,8 +13,8 @@ from unittest.mock import Mock
 
 import pytest
 from backend import clients, deps
+from backend.core.exceptions import ServiceUnavailableError
 from backend.state import AppState
-from fastapi import HTTPException
 
 import raudio.vllm.embedding as embeddings_mod
 import raudio.vllm.reranker as reranker_mod
@@ -24,7 +24,7 @@ def _state() -> AppState:
     return AppState(db_path=Path("x"), names=["chunks"], chunks=object())
 
 
-def _boom() -> Never:
+def _boom(*_args: object, **_kwargs: object) -> Never:
     raise RuntimeError("server down")
 
 
@@ -40,14 +40,14 @@ class TestEnsureEmbedder:
     def test_constructs_and_caches_on_miss(self, monkeypatch) -> None:
         state = _state()
         made = object()
-        monkeypatch.setattr(embeddings_mod, "VLLMEmbeddingClient", lambda: made)
+        monkeypatch.setattr(embeddings_mod, "VLLMEmbeddingClient", lambda **_: made)
         assert clients.ensure_embedder(state) is made
         assert state.embedder is made  # written back for reuse
 
     def test_construction_failure_maps_to_503(self, monkeypatch) -> None:
         state = _state()
         monkeypatch.setattr(embeddings_mod, "VLLMEmbeddingClient", _boom)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceUnavailableError) as exc:
             clients.ensure_embedder(state)
         assert exc.value.status_code == 503
 
@@ -63,14 +63,14 @@ class TestEnsureReranker:
     def test_constructs_and_caches_on_miss(self, monkeypatch) -> None:
         state = _state()
         made = object()
-        monkeypatch.setattr(reranker_mod, "VLLMReranker", lambda: made)
+        monkeypatch.setattr(reranker_mod, "VLLMReranker", lambda **_: made)
         assert clients.ensure_reranker(state) is made
         assert state.reranker is made
 
     def test_construction_failure_maps_to_503(self, monkeypatch) -> None:
         state = _state()
         monkeypatch.setattr(reranker_mod, "VLLMReranker", _boom)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ServiceUnavailableError) as exc:
             clients.ensure_reranker(state)
         assert exc.value.status_code == 503
 

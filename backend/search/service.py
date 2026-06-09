@@ -1,212 +1,65 @@
-"""Framework-free search business logic — the mode-aware retrieval core.
+"""Decoupled search business logic — the mode-aware retrieval core.
 
 ``run_search`` routes a :class:`~backend.search.spec.SearchSpec` across the seven
-modes (fts / semantic / visual / scene / scene_fts / hybrid / all) and returns a uniform hit
-shape. It takes the two vLLM client getters as plain callables, so this module
-never imports the FastAPI app or app state — only :class:`HTTPException` for
-error mapping. The HTTP routers wire it to the request via dependency injection.
+modes (fts / semantic / visual / scene / scene_fts / hybrid / all) and returns a
+uniform hit shape. It takes the two vLLM client getters as plain callables, so
+this module never imports the FastAPI app or app state — only domain exceptions
+from :mod:`backend.core.exceptions` for error mapping. The HTTP routers wire it to
+the request via dependency injection.
+
+The retrieval mechanics are split into cohesive sibling modules
+(``constants`` / ``filters`` / ``postprocess`` / ``rerank`` / ``vector`` /
+``frames``); this module owns ONLY the mode dispatch and re-exports the public +
+test-facing names (so external imports of ``_build_where_clause``, ``_rrf_fuse``,
+``_frame_search``, ``_postprocess_hits``, ``_vector_search``, ``_attach_captions``
+keep resolving from here).
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from fastapi import HTTPException
+from backend.core.exceptions import ServiceUnavailableError, ValidationError
+from backend.search.constants import (
+    _CAPTION_EMBED_COLUMN,
+    _HIT_COLUMNS,
+    _PAYLOAD_COLUMNS,
+    _VECTOR_MAX_NPROBES,
+    _VECTOR_NPROBES,
+    _VECTOR_REFINE_FACTOR,
+)
 
+# Re-export block: tests + atlas/router import a few private helpers by name from
+# this module; they live in the split sibling modules now, so we import and list
+# them in __all__ to keep those imports resolving. (`_frame_fts_search` and
+# `_rerank_by_text` below are ordinary body-used imports, not re-exports.)
+from backend.search.filters import _build_where_clause
+from backend.search.frames import _frame_fts_search, _frame_search
+from backend.search.postprocess import _attach_captions, _postprocess_hits, _rrf_fuse
+from backend.search.rerank import _rerank_by_text
 from backend.search.spec import SearchSpec
+from backend.search.vector import _vector_search
 from raudio.features.topic_tree import topic_layer_columns
 
 if TYPE_CHECKING:
     from raudio.vllm.embedding import VLLMEmbeddingClient
     from raudio.vllm.reranker import VLLMReranker
 
-_HIT_COLUMNS = [
-    "_score",
-    "doc_id",
-    "audio_path",
-    "speech_id",
-    "chunk_id",
-    "start",
-    "end",
-    "duration",
-    "text",
-    "language",
-    "namn",
-    "referenskod",
-    "bildid",
-    "extraid",
+logger = logging.getLogger(__name__)
+
+# `run_search` is the public entrypoint; the underscore names are test/atlas-facing
+# re-exports (external imports depend on them — do not remove).
+__all__ = [
+    "_attach_captions",
+    "_build_where_clause",
+    "_frame_search",
+    "_postprocess_hits",
+    "_rrf_fuse",
+    "_vector_search",
+    "run_search",
 ]
-# `alignments_json` is intentionally NOT projected here: it's a multi-KB per-word
-# timing blob (~93% of a search response's bytes) that only the *player* renders,
-# for the ONE selected hit. Search hits ship `alignments: []`; the player
-# lazy-fetches the real array via GET /api/chunk-alignments/{doc}/{speech}/{chunk}.
-
-# Hit columns without the FTS-only BM25 `_score`. Vector and hybrid searches
-# surface `_distance` / `_relevance_score` instead, so selecting `_score` there
-# would fail.
-_PAYLOAD_COLUMNS = [c for c in _HIT_COLUMNS if c != "_score"]
-
-# Vector columns on chunk_frames that a query can rank against (must match the
-# names the feature engine writes — see raudio.features.columns). frame = raw
-# image similarity; caption = text-embedding of the Swedish caption (scene).
-_FRAME_EMBED_COLUMN = "frame_embedding"
-_CAPTION_EMBED_COLUMN = "caption_embedding"
-# Plain-text caption column on chunk_frames (the Gemma Swedish caption). Surfaced
-# on every hit for the list/table views — see _attach_captions.
-_CAPTION_COLUMN = "caption"
-
-# IVF_PQ recall knobs. Lance's default probes too few partitions for good recall;
-# ~√(num_partitions) partitions plus a refine pass that re-scores the top
-# candidates with full-precision vectors restores it at a small latency cost
-# (see docs/INVESTIGATION.md §A3). Ignored when the column has no IVF index.
-_VECTOR_NPROBES = 20
-# Adaptive probing: scan _VECTOR_NPROBES partitions, extending toward all of them
-# only when a *selective* prefilter leaves the first pass short of `limit`. Pinning
-# nprobes (min == max) instead makes a selective scope silently drop rows — the
-# index probes too few partitions to contain them (a 20-chunk scope returned 1/20
-# before this). 0 = uncapped, cheap here (~35 IVF partitions at 145k rows → worst
-# case a full-index scan of a few ms); cap it if the corpus grows ~100x.
-_VECTOR_MAX_NPROBES = 0
-_VECTOR_REFINE_FACTOR = 3
-
-
-def _postprocess_hits(raw: list[dict[str, Any]], chunk_frames: Any = None) -> list[dict[str, Any]]:
-    """Finalize hits for the API: parse alignments + attach each frame's caption.
-
-    ``chunk_frames`` is optional so unit tests can call this with parsed rows
-    alone; ``run_search`` always passes it so list/table views get the caption.
-    """
-    from raudio.retrieval.search import parse_alignments_json
-
-    for h in raw:
-        h["alignments"] = parse_alignments_json(h.pop("alignments_json", None))
-    _attach_captions(chunk_frames, raw)
-    return raw
-
-
-def _chunk_key(hit: dict[str, Any]) -> tuple[Any, int, int]:
-    """The (doc_id, speech_id, chunk_id) identity shared by chunks and frames."""
-    return (hit["doc_id"], int(hit["speech_id"]), int(hit["chunk_id"]))
-
-
-def _attach_captions(chunk_frames, hits: list[dict[str, Any]]) -> None:
-    """Set ``hit['caption']`` from each chunk's representative frame (frame_idx=0).
-
-    Captions live on ``chunk_frames``, not ``chunks``, so this one filtered scan
-    is how the list/table views learn the scene description for every mode. A
-    no-op (leaves no ``caption`` key) when frames or the caption column are
-    absent — captions are a nice-to-have, never a reason to fail a search.
-    """
-    if not hits or chunk_frames is None or _CAPTION_COLUMN not in chunk_frames.schema.names:
-        return
-    keys = {_chunk_key(h) for h in hits}
-    # One `doc_id IN (...)` scan, not a per-hit OR-of-ANDs: DataFusion evaluates a
-    # ~100-branch OR predicate row-by-row over all 145k frames (~180ms for a
-    # diverse search), whereas IN is a hash-membership scan (~75ms, 2.4x faster,
-    # verified identical output). We over-fetch the matched docs' frame-0 rows and
-    # pick out the exact chunks in Python below. frame_idx=0 = the representative
-    # caption frame.
-    docs = {_sql_quote(d) for d, _, _ in keys}
-    doc_list = ",".join(f"'{d}'" for d in docs)
-    key_filter = f"doc_id IN ({doc_list}) AND frame_idx = 0"
-    try:
-        rows = (
-            chunk_frames.to_lance()
-            .to_table(
-                columns=["doc_id", "speech_id", "chunk_id", _CAPTION_COLUMN], filter=key_filter
-            )
-            .to_pylist()
-        )
-    except Exception:  # noqa: BLE001 — caption is decorative; never fail a search over it
-        return
-    by_key = {_chunk_key(r): r.get(_CAPTION_COLUMN) for r in rows}
-    for h in hits:
-        h["caption"] = by_key.get(_chunk_key(h))
-
-
-def _sql_quote(value: str) -> str:
-    """Escape single quotes for inlining a value in a SQL string literal."""
-    return value.replace("'", "''")
-
-
-def _build_where_clause(
-    *,
-    language: str | None,
-    namn: str | None,
-    referenskod: str | None,
-    extraid: str | None,
-    topic: str | None = None,
-    topic_columns: list[str] | None = None,
-    raw: str | None = None,
-) -> str | None:
-    """Compose the SQL WHERE clause for metadata filters.
-
-    ``raw`` is a user-typed SQL expression ANDed in verbatim (wrapped in parens)
-    — intentionally *not* quoted, since it is meant to be SQL, not a value.
-    ``topic`` exact-matches any of ``topic_columns`` (the nested topic_l* layers),
-    so a treemap node at any depth filters the chunks tagged with that name.
-    """
-    clauses: list[str] = []
-    if language:
-        clauses.append(f"language = '{_sql_quote(language)}'")
-    if namn:
-        clauses.append(f"namn LIKE '%{_sql_quote(namn)}%'")
-    if referenskod:
-        clauses.append(f"referenskod LIKE '%{_sql_quote(referenskod)}%'")
-    if extraid:
-        clauses.append(f"extraid = '{_sql_quote(extraid)}'")
-    if topic and topic_columns:
-        ors = " OR ".join(f"{col} = '{_sql_quote(topic)}'" for col in topic_columns)
-        clauses.append(f"({ors})")
-    if raw and raw.strip():
-        clauses.append(f"({raw})")
-    return " AND ".join(clauses) if clauses else None
-
-
-def _rrf_fuse(rankings: list[list[dict[str, Any]]], k: int = 60) -> list[dict[str, Any]]:
-    """Reciprocal-rank fusion across N ranked lists keyed on (doc_id, chunk_id).
-
-    Lance's hybrid query handles RRF natively when both FTS and vector are in
-    play; we use this helper for the multi-column case (text_embedding +
-    frame_embedding) where we issue two distinct vector queries and need to
-    merge them ourselves.
-    """
-    scored: dict[tuple[Any, Any], float] = {}
-    rep: dict[tuple[Any, Any], dict[str, Any]] = {}
-    for ranking in rankings:
-        for rank, hit in enumerate(ranking):
-            key = (hit.get("doc_id"), hit.get("chunk_id"))
-            scored[key] = scored.get(key, 0.0) + 1.0 / (k + rank)
-            # Keep the first occurrence (highest-ranked) as the canonical row.
-            rep.setdefault(key, hit)
-    fused = sorted(rep.values(), key=lambda h: -scored[(h["doc_id"], h["chunk_id"])])
-    return fused
-
-
-def _rerank_by_text(
-    get_reranker: Callable[[], VLLMReranker],
-    query: str,
-    hits: list[dict[str, Any]],
-    rerank_n: int,
-    n: int,
-) -> list[dict[str, Any]]:
-    """Cross-encoder rerank the top ``rerank_n`` of ``hits``, then return ``n``
-    results: the reranked head followed by the remaining first-stage hits.
-
-    Reranking only the head bounds the (slow) cross-encoder cost while letting
-    the result list be longer than the reranked window. The reranker is
-    text-only — it scores ``query`` jointly with each candidate's transcript and
-    ignores vectors/images, so with no query text (image-only search) or no hits
-    it's a plain top-``n`` and the first-stage order is preserved.
-    """
-    if not query or not hits:
-        return hits[:n]
-    head = hits[:rerank_n]
-    tail = hits[rerank_n:]
-    scores = get_reranker().rerank(query, [h["text"] for h in head])
-    head = [h for _, h in sorted(zip(scores, head, strict=False), key=lambda p: -p[0])]
-    return (head + tail)[:n]
 
 
 def run_search(
@@ -214,10 +67,10 @@ def run_search(
     chunk_frames,  # lancedb Table for frame vectors, or None if frames not extracted
     get_embedder: Callable[
         [], VLLMEmbeddingClient
-    ],  # raises HTTPException(503) if the embed server is unreachable
+    ],  # raises ServiceUnavailableError (HTTP 503) if the embed server is unreachable
     get_reranker: Callable[
         [], VLLMReranker
-    ],  # raises HTTPException(503) if the rerank server is unreachable
+    ],  # raises ServiceUnavailableError (HTTP 503) if the rerank server is unreachable
     spec: SearchSpec,
     *,
     image_bytes: bytes | None,
@@ -258,7 +111,8 @@ def run_search(
                 .to_pylist()
             )
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"browse failed: {e}") from e
+            logger.warning("browse scan failed", exc_info=True)
+            raise ValidationError("browse failed") from e
         return _postprocess_hits(raw, chunk_frames)
 
     # ── FTS ───────────────────────────────────────────────────────
@@ -275,7 +129,8 @@ def run_search(
                 qb = qb.where(where, prefilter=spec.prefilter)
             raw = qb.to_list()
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"search failed: {e}") from e
+            logger.warning("fts search failed", exc_info=True)
+            raise ValidationError("search failed") from e
         if spec.rerank:
             raw = _rerank_by_text(get_reranker, rerank_query, raw, spec.rerank_n, spec.n)
         return _postprocess_hits(raw, chunk_frames)
@@ -308,19 +163,14 @@ def run_search(
     except Exception as e:
         # httpx.ConnectError / httpx.HTTPError / etc. all collapse to one
         # 503 here — the user-actionable message is "vLLM isn't up".
-        msg = type(e).__name__
-        detail = str(e).splitlines()[0] if str(e) else ""
-        raise HTTPException(
-            status_code=503,
-            detail=f"embedding service unavailable ({msg}): {detail}",
-        ) from e
+        logger.warning("embedding request failed", exc_info=True)
+        raise ServiceUnavailableError("embedding service unavailable") from e
 
     # ── single-column vector modes ────────────────────────────────
     if spec.mode == "semantic":
         if "text_embedding" not in chunks.schema.names:
-            raise HTTPException(
-                status_code=400,
-                detail="text embeddings not built yet — run `raudio feature text_embedding` (make embed-chunks)",
+            raise ValidationError(
+                "text embeddings not built yet — run `raudio feature text_embedding` (make embed-chunks)"
             )
         vec = text_vec if text_vec is not None else image_vec
         hits = _vector_search(
@@ -343,7 +193,7 @@ def run_search(
         # all we got. Degrades to [] when caption_embedding hasn't been built.
         vec = text_vec if text_vec is not None else image_vec
         if vec is None:
-            raise HTTPException(status_code=400, detail="scene search requires a query")
+            raise ValidationError("scene search requires a query")
         hits = _frame_search(
             chunk_frames,
             chunks,
@@ -360,11 +210,10 @@ def run_search(
     # ── hybrid (Lance native FTS + text vector, fused by RRF/Linear) ─────
     if spec.mode == "hybrid":
         if text_vec is None:
-            raise HTTPException(status_code=400, detail="hybrid requires text query")
+            raise ValidationError("hybrid requires text query")
         if "text_embedding" not in chunks.schema.names:
-            raise HTTPException(
-                status_code=400,
-                detail="text embeddings not built yet — run `raudio feature text_embedding` (make embed-chunks)",
+            raise ValidationError(
+                "text embeddings not built yet — run `raudio feature text_embedding` (make embed-chunks)"
             )
         try:
             from lancedb.query import MatchQuery, PhraseQuery
@@ -402,7 +251,8 @@ def run_search(
                 qb = qb.where(where, prefilter=spec.prefilter)
             raw = qb.to_list()
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"hybrid search failed: {e}") from e
+            logger.warning("hybrid search failed", exc_info=True)
+            raise ValidationError("hybrid search failed") from e
         if spec.rerank:
             raw = _rerank_by_text(get_reranker, rerank_query, raw, spec.rerank_n, spec.n)
         return _postprocess_hits(raw, chunk_frames)
@@ -469,170 +319,3 @@ def run_search(
 
     # Unreachable — SearchSpec validation rejects unknown modes up-front.
     raise AssertionError(f"unhandled mode: {spec.mode!r}")
-
-
-def _vector_search(
-    table,
-    vec: Any,
-    column: str,
-    n: int,
-    where: str | None,
-    *,
-    prefilter: bool = True,
-) -> list[dict[str, Any]]:
-    """Run a cosine vector search on ``column``; returns raw list of dicts.
-
-    Returns ``[]`` when the embedding column doesn't exist yet (embeddings are
-    attached post-ingest by ``embed-chunks``), so fusion modes degrade to the
-    other rankings instead of erroring.
-    """
-    if vec is None or column not in table.schema.names:
-        return []
-    try:
-        qb = (
-            table.search(vec.tolist(), vector_column_name=column)
-            .distance_type("cosine")
-            .minimum_nprobes(_VECTOR_NPROBES)
-            .maximum_nprobes(_VECTOR_MAX_NPROBES)
-            .refine_factor(_VECTOR_REFINE_FACTOR)
-            .select([*_PAYLOAD_COLUMNS, "_distance"])
-            .limit(n)
-        )
-        if where:
-            qb = qb.where(where, prefilter=prefilter)
-        return qb.to_list()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"vector search failed: {e}") from e
-
-
-def _ranked_or_fallback(
-    rank: Callable[..., list[dict[str, Any]]], *, scoped: bool
-) -> list[dict[str, Any]]:
-    """Run ``rank(scoped=True)``; if the scope prefilter references a column the
-    frame table lacks (a metadata filter, which stays on the chunks join), retry
-    unscoped. ``[]`` if even the unscoped rank fails (no vector/FTS index yet)."""
-    if scoped:
-        try:
-            return rank(scoped=True)
-        except Exception:  # noqa: BLE001 — scope hit a non-frame column → retry unscoped
-            pass
-    try:
-        return rank(scoped=False)
-    except Exception:  # noqa: BLE001 — no vector/FTS index yet → no frame hits
-        return []
-
-
-def _frame_search(
-    chunk_frames,
-    chunks,
-    vec: Any,
-    n: int,
-    where: str | None,
-    *,
-    column: str = _FRAME_EMBED_COLUMN,
-    scope_where: str | None = None,
-) -> list[dict[str, Any]]:
-    """Rank `chunk_frames` by a vector ``column``, then fetch the matching `chunks`
-    rows (where the hit payload lives) and re-order to match.
-
-    Backs both visual search (``frame_embedding`` — image similarity) and scene
-    search (``caption_embedding`` — the Swedish caption's text vector); the join
-    back to `chunks` is identical, only the ranked column differs.
-
-    ``scope_where`` is an upstream result scope (doc/chunk ids) pushed down as a
-    *prefilter* so a refine ranks WITHIN the scope instead of post-filtering the
-    global top-n (which returned ~0). It only references columns `chunk_frames`
-    has; a non-frame predicate (e.g. a metadata filter, which stays on the chunks
-    join via ``where``) falls back to an unscoped rank.
-
-    Returns ``[]`` when frames haven't been extracted/embedded yet — the frame
-    pipeline is optional, so visual/scene/all search degrades to empty rather
-    than erroring.
-    """
-    if vec is None or chunk_frames is None or column not in chunk_frames.schema.names:
-        return []
-
-    def rank(*, scoped: bool) -> list[dict[str, Any]]:
-        qb = (
-            chunk_frames.search(vec.tolist(), vector_column_name=column)
-            .distance_type("cosine")
-            .minimum_nprobes(_VECTOR_NPROBES)
-            .maximum_nprobes(_VECTOR_MAX_NPROBES)
-            .refine_factor(_VECTOR_REFINE_FACTOR)
-            .select(["doc_id", "speech_id", "chunk_id", "_distance"])
-            .limit(n)
-        )
-        if scoped and scope_where:
-            qb = qb.where(scope_where, prefilter=True)
-        return qb.to_list()
-
-    ranked = _ranked_or_fallback(rank, scoped=bool(scope_where))
-    return _frames_to_chunk_hits(chunks, ranked, where)
-
-
-def _frame_fts_search(
-    chunk_frames,
-    chunks,
-    query: str,
-    n: int,
-    where: str | None,
-    *,
-    scope_where: str | None = None,
-) -> list[dict[str, Any]]:
-    """BM25 keyword search over `chunk_frames.caption`, joined back to `chunks`.
-
-    The keyword counterpart to scene-vector search: same frame→chunk join as
-    :func:`_frame_search`, only the ranking is Tantivy BM25 instead of cosine.
-    ``scope_where`` prefilters to an upstream scope (see :func:`_frame_search`).
-    Returns ``[]`` when captions / their FTS index aren't built yet.
-    """
-    if not query or chunk_frames is None or _CAPTION_COLUMN not in chunk_frames.schema.names:
-        return []
-    from lancedb.query import MatchQuery
-
-    def rank(*, scoped: bool) -> list[dict[str, Any]]:
-        qb = (
-            chunk_frames.search(MatchQuery(query, _CAPTION_COLUMN), query_type="fts")
-            .select(["doc_id", "speech_id", "chunk_id", "_score"])
-            .limit(n)
-        )
-        if scoped and scope_where:
-            qb = qb.where(scope_where, prefilter=True)
-        return qb.to_list()
-
-    ranked = _ranked_or_fallback(rank, scoped=bool(scope_where))
-    return _frames_to_chunk_hits(chunks, ranked, where)
-
-
-def _frames_to_chunk_hits(
-    chunks, ranked: list[dict[str, Any]], where: str | None
-) -> list[dict[str, Any]]:
-    """Dedup ranked frame rows to one best frame per chunk (ranking is best-first,
-    so the first occurrence wins), then fetch the matching `chunks` payload rows in
-    one scan and re-order them to the frame ranking.
-
-    Shared by vector (visual/scene) and FTS (scene keyword) frame search — only the
-    upstream ranking differs, the join is identical.
-    """
-    keys: list[tuple[Any, int, int]] = []
-    seen: set[tuple[Any, int, int]] = set()
-    for r in ranked:
-        key = _chunk_key(r)
-        if key not in seen:
-            seen.add(key)
-            keys.append(key)
-    if not keys:
-        return []
-    # doc_id is a sha1 hex and the ids are ints, so the filter is safe. A pure
-    # metadata filter (no vector/FTS query) must go through the Lance dataset's
-    # filter scan — a no-query `table.search().where(...)` returns nothing.
-    key_filter = " OR ".join(
-        f"(doc_id = '{d}' AND speech_id = {s} AND chunk_id = {c})" for d, s, c in keys
-    )
-    full_filter = f"({key_filter})" + (f" AND ({where})" if where else "")
-    try:
-        rows = chunks.to_lance().to_table(columns=_PAYLOAD_COLUMNS, filter=full_filter).to_pylist()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"frame search join failed: {e}") from e
-    by_key = {_chunk_key(r): r for r in rows}
-    return [by_key[k] for k in keys if k in by_key]

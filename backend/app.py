@@ -16,53 +16,46 @@ Run:  raudio serve --db ./transcripts_v2.lance --port 8000
 
 from __future__ import annotations
 
-import logging
-import os
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.concurrency import run_in_threadpool
-from fastapi.middleware.cors import CORSMiddleware
 
 from backend.atlas.router import router as atlas_router
+from backend.core.config import get_settings
+from backend.core.handlers import register_handlers
+from backend.core.lifespan import lifespan
+from backend.core.middleware import register_middleware
+from backend.core.probes import router as probes_router
 from backend.diarization.router import router as diarization_router
 from backend.media.router import router as media_router
 from backend.search.router import router as search_router
 from backend.state import open_resources
 from backend.system.router import router as system_router
 from backend.topics.router import router as topics_router
-from backend.warmup import warm_caches
-
-
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Warm the Lance index + atlas-points caches on startup, off the event loop.
-
-    Resources are opened eagerly in the factory body (so a bare ``TestClient`` has
-    them); the lifespan only warms caches. It runs under ``raudio serve`` but not
-    under a context-manager-less ``TestClient`` — which is exactly where warmup
-    belongs (the real DB) and not (tiny test fixtures). Best-effort: a warmup
-    failure is logged, never fatal to startup.
-    """
-    try:
-        await run_in_threadpool(warm_caches, app.state.resources)
-    except Exception:  # noqa: BLE001 — warmup must never block the server coming up
-        logging.getLogger(__name__).warning("cache warmup failed", exc_info=True)
-    yield
 
 
 def create_app(db_path: str | Path) -> FastAPI:
-    """Build the API-only FastAPI app."""
-    app = FastAPI(title="raudio api", lifespan=_lifespan)
+    """Build the API-only FastAPI app.
 
-    # Open Lance handles once, synchronously, in the factory body — not the
-    # lifespan: TestClient(create_app(db)) is used without the context manager,
-    # so a lifespan would never run and app.state.resources would be unset.
-    # (The lifespan above only warms caches, which tests rightly skip.)
+    ``db_path`` is the single positional arg the CLI and tests pass; Lance
+    handles are opened eagerly here (not in the lifespan) so a bare
+    ``TestClient(create_app(db))`` — used without a context manager — still
+    has ``app.state.resources``. The lifespan only warms caches + flips the
+    readiness flags, which a lifespan-less TestClient rightly skips. We set
+    the readiness flags to False here so ``/readyz`` is well-defined even
+    without the lifespan.
+    """
+    settings = get_settings()
+    app = FastAPI(title="raudio api", lifespan=lifespan)
+
     app.state.resources = open_resources(db_path)
+    app.state.startup_complete = False
+    app.state.shutting_down = False
 
+    register_handlers(app)
+    register_middleware(app, settings)
+
+    app.include_router(probes_router)
     app.include_router(search_router)
     app.include_router(media_router)
     app.include_router(system_router)
@@ -70,23 +63,22 @@ def create_app(db_path: str | Path) -> FastAPI:
     app.include_router(topics_router)
     app.include_router(diarization_router)
 
-    # API-only — the Bun frontend serves assets and proxies /api/*. Default "*"
-    # is fine behind that local proxy; set RAUDIO_CORS_ORIGINS=https://a,https://b
-    # (comma-separated) to lock it down if the API is ever exposed directly.
-    # expose_headers is load-bearing for browser Range seeking.
-    origins = [o.strip() for o in os.getenv("RAUDIO_CORS_ORIGINS", "*").split(",") if o.strip()]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["*"],
-        expose_headers=["Content-Range", "Content-Length", "Accept-Ranges"],
-    )
     return app
 
 
-def run(db_path: str | Path, *, host: str = "127.0.0.1", port: int = 8000) -> None:
-    """Start the API with uvicorn."""
+def run(
+    db_path: str | Path,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+) -> None:
+    """Start the API with uvicorn. Host/port fall back to ``Settings`` (RAUDIO_HOST/PORT)."""
     import uvicorn
 
-    uvicorn.run(create_app(db_path), host=host, port=port, log_level="info")
+    settings = get_settings()
+    uvicorn.run(
+        create_app(db_path),
+        host=host or settings.host,
+        port=port or settings.port,
+        log_level="info",
+    )

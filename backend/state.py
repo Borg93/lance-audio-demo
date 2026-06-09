@@ -13,7 +13,9 @@ from typing import Any
 
 import lance
 import lancedb
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from backend.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,9 @@ class AppState(BaseModel):
 
     The Lance/lancedb handles aren't Pydantic-validatable, hence
     ``arbitrary_types_allowed``. ``embedder``/``reranker`` are mutable slots that
-    :mod:`backend.clients` fills on first use and reuses thereafter.
+    :mod:`backend.clients` fills on first use and reuses thereafter. ``settings``
+    carries the typed app config (vLLM URLs, host/port, CORS); it defaults via
+    ``get_settings()`` so bare constructions in tests still work.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -33,10 +37,13 @@ class AppState(BaseModel):
     chunks: Any  # lancedb.table.Table — the abstract stub omits .search()/.to_lance()
     # `chunks_ds` is `chunks.to_lance()` resolved once at startup. Re-wrapping per
     # request re-seeds the dataset's metadata/index cache, so we share one handle.
-    chunks_ds: Any  # lance.LanceDataset — typed Any to match the `chunks` stub
+    # Defaults to None (like the other Lance handles) so a bare 3-arg construction
+    # in tests still validates; ``open_resources`` always sets it in production.
+    chunks_ds: Any = None  # lance.LanceDataset — typed Any to match the `chunks` stub
     docs_ds: lance.LanceDataset | None = None
     chunk_frames_tbl: Any | None = None  # lancedb.table.Table
     chunk_frames_ds: lance.LanceDataset | None = None
+    settings: Settings = Field(default_factory=get_settings)
     embedder: Any | None = None  # raudio.vllm.embedding.VLLMEmbeddingClient
     reranker: Any | None = None  # raudio.vllm.reranker.VLLMReranker
 
@@ -80,4 +87,5 @@ def open_resources(db_path: str | Path) -> AppState:
         docs_ds=docs_ds,
         chunk_frames_tbl=chunk_frames_tbl,
         chunk_frames_ds=chunk_frames_ds,
+        settings=get_settings(),
     )

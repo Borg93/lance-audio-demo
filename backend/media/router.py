@@ -5,11 +5,13 @@ honours HTTP Range so the browser can seek video without downloading the whole
 file; ``thumbnail`` / ``chunk_frame`` return small inline JPEGs.
 """
 
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
+from backend.core.exceptions import NotFoundError
 from backend.deps import StateDep
 from backend.media.blobs import (
     doc_blob_size,
@@ -19,6 +21,8 @@ from backend.media.blobs import (
     valid_doc_id,
 )
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(tags=["media"])
 
 
@@ -26,10 +30,10 @@ router = APIRouter(tags=["media"])
 def thumbnail(doc_id: str, state: StateDep) -> Response:
     valid_doc_id(doc_id)
     if state.docs_ds is None:
-        raise HTTPException(status_code=404, detail="documents table missing")
+        raise NotFoundError("documents table missing")
     rowid = rowid_for_doc_id(state.docs_ds, doc_id)
     if rowid is None:
-        raise HTTPException(status_code=404, detail="doc_id not found")
+        raise NotFoundError("doc_id not found")
     mime_row = state.docs_ds.to_table(
         columns=["thumbnail_mime"], filter=f"doc_id = '{doc_id}'", limit=1
     )
@@ -40,7 +44,7 @@ def thumbnail(doc_id: str, state: StateDep) -> Response:
     with blob as f:
         data = f.read()
     if not data:
-        raise HTTPException(status_code=404, detail="no thumbnail for doc_id")
+        raise NotFoundError("no thumbnail for doc_id")
     return Response(
         content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"}
     )
@@ -59,7 +63,7 @@ def chunk_frame(
     chunk was sampled multiple times (0 = the representative frame)."""
     valid_doc_id(doc_id)
     if state.chunk_frames_ds is None:
-        raise HTTPException(status_code=404, detail="frame not extracted yet")
+        raise NotFoundError("frame not extracted yet")
 
     # frame_idx is matched in Python, NOT in the SQL predicate. With a scalar
     # (BTREE) index on chunk_frames.doc_id, the combination of `with_row_id=True`
@@ -84,18 +88,19 @@ def chunk_frame(
         None,
     )
     if row is None:
-        raise HTTPException(status_code=404, detail="frame not extracted yet")
+        raise NotFoundError("frame not extracted yet")
     rowid = keyed.column("_rowid")[row].as_py()
     mime_cell = keyed.column("frame_mime")[row]
     mime = mime_cell.as_py() if mime_cell.is_valid else "image/jpeg"
     try:
         blob = state.chunk_frames_ds.take_blobs("frame_blob", ids=[rowid])[0]
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"no frame: {e}") from e
+        log.warning("frame blob read failed", exc_info=True)
+        raise NotFoundError("no frame for chunk") from e
     with blob as f:
         data = f.read()
     if not data:
-        raise HTTPException(status_code=404, detail="frame body empty")
+        raise NotFoundError("frame body empty")
     return Response(
         content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"}
     )
@@ -105,10 +110,10 @@ def chunk_frame(
 def media(doc_id: str, request: Request, state: StateDep) -> Response:
     valid_doc_id(doc_id)
     if state.docs_ds is None:
-        raise HTTPException(status_code=404, detail="documents table missing")
+        raise NotFoundError("documents table missing")
     rowid = rowid_for_doc_id(state.docs_ds, doc_id)
     if rowid is None:
-        raise HTTPException(status_code=404, detail="doc_id not found")
+        raise NotFoundError("doc_id not found")
 
     mime_row = state.docs_ds.to_table(
         columns=["media_mime"], filter=f"doc_id = '{doc_id}'", limit=1

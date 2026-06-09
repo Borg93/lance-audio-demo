@@ -9,9 +9,11 @@ compaction; positional ``indices`` are not, so they are never used here.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 import lance
-from fastapi import HTTPException
+
+from backend.core.exceptions import ValidationError
 
 _DOC_ID_RE = re.compile(r"^[a-f0-9]{16}$")
 _STREAM_CHUNK = 1 << 20  # 1 MiB: amortizes seek cost, bounds per-stream memory
@@ -19,7 +21,7 @@ _STREAM_CHUNK = 1 << 20  # 1 MiB: amortizes seek cost, bounds per-stream memory
 
 def valid_doc_id(doc_id: str) -> None:
     if not _DOC_ID_RE.match(doc_id):
-        raise HTTPException(status_code=400, detail="invalid doc_id")
+        raise ValidationError("invalid doc_id")
 
 
 def _rowid_for_filter(ds: lance.LanceDataset, filter_expr: str) -> int | None:
@@ -38,7 +40,9 @@ def rowid_for_doc_id(ds: lance.LanceDataset, doc_id: str) -> int | None:
     return _rowid_for_filter(ds, f"doc_id = '{doc_id}'")
 
 
-def stream_blob_range(ds: lance.LanceDataset, column: str, rowid: int, start: int, end: int):
+def stream_blob_range(
+    ds: lance.LanceDataset, column: str, rowid: int, start: int, end: int
+) -> Iterator[bytes]:
     """Yield bytes of the inclusive ``[start, end]`` range from a blob column."""
     blob = ds.take_blobs(column, ids=[rowid])[0]
     with blob as f:

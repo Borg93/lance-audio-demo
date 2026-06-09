@@ -72,8 +72,8 @@ def cmd_search(
 @app.command("serve")
 def cmd_serve(
     ctx: typer.Context,
-    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port")] = 8000,
+    host: Annotated[str | None, typer.Option("--host")] = None,
+    port: Annotated[int | None, typer.Option("--port")] = None,
 ) -> None:
     """Launch the API-only FastAPI backend against the Lance DB.
 

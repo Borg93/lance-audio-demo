@@ -17,8 +17,6 @@ router = APIRouter(tags=["system"])
 @router.get("/api/health")
 def health(state: StateDep) -> dict[str, Any]:
     """Frontend status badge: pings vLLM embed/rerank, reports DB facts."""
-    from raudio.vllm.embedding import DEFAULT_EMBED_URL
-    from raudio.vllm.reranker import DEFAULT_RERANK_URL
 
     def _ping(url: str) -> dict[str, Any]:
         import httpx
@@ -36,8 +34,8 @@ def health(state: StateDep) -> dict[str, Any]:
             "chunks": state.chunks.count_rows(),
             "documents": state.docs_ds.count_rows() if state.docs_ds is not None else 0,
         },
-        "embed": _ping(DEFAULT_EMBED_URL),
-        "rerank": _ping(DEFAULT_RERANK_URL),
+        "embed": _ping(state.settings.embed_url),
+        "rerank": _ping(state.settings.rerank_url),
     }
 
 

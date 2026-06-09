@@ -42,7 +42,7 @@ def _warm_fts(table: Any, column: str) -> None:
 
 def _warm_atlas_points(state: Any) -> int:
     """Precompute the /points payload for every built space into its module cache."""
-    from backend.atlas.router import (
+    from backend.atlas.points import (
         _POINTS_CACHE,
         _SPACES,
         _build_points,

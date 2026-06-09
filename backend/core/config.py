@@ -1,0 +1,44 @@
+"""Typed application settings (pydantic-settings).
+
+Read once via :func:`get_settings`; routers read it off ``state.settings`` (the
+injected :class:`~backend.state.AppState`). Only env-varying values live here —
+algorithmic constants (RRF k, probe tokens, column-exclude sets) stay as module
+constants in their feature packages.
+
+Env vars are ``RAUDIO_*`` (see aliases). ``cors_origins`` accepts either a JSON
+list or a bare comma-separated string (``RAUDIO_CORS_ORIGINS=https://a,https://b``).
+"""
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    embed_url: str = Field(default="http://127.0.0.1:8001", alias="RAUDIO_EMBED_URL")
+    rerank_url: str = Field(default="http://127.0.0.1:8002", alias="RAUDIO_RERANK_URL")
+    host: str = Field(default="127.0.0.1", alias="RAUDIO_HOST")
+    port: int = Field(default=8000, ge=1, le=65535, alias="RAUDIO_PORT")
+    db_path: Path = Field(default=Path("transcripts_v2.lance"), alias="RAUDIO_DB")
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"], alias="RAUDIO_CORS_ORIGINS")
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_csv(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
