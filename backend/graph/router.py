@@ -59,6 +59,26 @@ _ENTITY_ID = re.compile(r"^[0-9a-f]{16}$")
 _DEFAULT_LIMIT = 200
 _MAX_LIMIT = 1000
 
+#: Trailing ``LIMIT <n>`` (the only place a LIMIT can legally sit in a single
+#: read statement). Matched case-insensitively at end-of-query.
+_TRAILING_LIMIT = re.compile(r"(?is)\blimit\s+(\d+)\s*$")
+
+
+def _enforce_limit(query: str, cap: int) -> str:
+    """Guarantee the query returns at most ``cap`` rows.
+
+    Clamps a user-supplied trailing ``LIMIT n`` down to ``cap`` (the old code
+    only *appended* a cap when the word ``limit`` was textually absent, so
+    ``LIMIT 999999`` — or any query merely containing the substring "limit",
+    e.g. in a string literal — escaped the cap entirely and could pull the
+    whole table). Appends ``LIMIT cap`` when no trailing LIMIT is present.
+    """
+    trailing = _TRAILING_LIMIT.search(query)
+    if trailing is None:
+        return f"{query} LIMIT {cap}"
+    n = min(int(trailing.group(1)), cap)
+    return _TRAILING_LIMIT.sub(f"LIMIT {n}", query)
+
 
 class _GraphResources(BaseModel):
     """Cached, request-shared graph handles + precomputed lookups.
@@ -198,9 +218,7 @@ def run_cypher(body: CypherRequest, state: StateDep) -> CypherResponse:
     if len(statements) > 1:
         return CypherResponse(built=True, error="Only a single statement is allowed.")
     query = statements[0].strip()
-    limit = max(1, min(body.limit, _MAX_LIMIT))
-    if "limit" not in query.lower():
-        query = f"{query} LIMIT {limit}"
+    query = _enforce_limit(query, max(1, min(body.limit, _MAX_LIMIT)))
     try:
         rows = _run_rows(res, query)
     except Exception as exc:  # noqa: BLE001 — surface the engine message in-band, REPL-style
