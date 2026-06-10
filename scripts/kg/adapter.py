@@ -35,21 +35,31 @@ STOPWORDS = {
     "jag", "vi", "man", "du", "ni", "han", "hon", "de", "dem", "det", "den",
     "alla", "andra", "många", "ingen", "någon", "folk", "talaren", "talare",
     "moderator", "moderatorn", "publiken", "deltagarna", "deltagare",
-    "åhörarna", "frågeställaren",
+    "åhörarna", "frågeställaren", "frågor", "frågan", "kronor", "procent",
 }
 
 _NUMERIC = re.compile(r"[\d\s.,:%–—-]+")
+# bare amounts ("55 Miljoner", "4 Procent", "106 År") — but NOT decades
+# ("1980-talet"), which are real discourse concepts
+_AMOUNT = re.compile(r"\d[\d\s.,]*\s*(procent|kronor|miljoner|miljarder|år|%)")
+_EDGE_PUNCT = " \t\n'\"«»“”*–—-,;:."
 
 
 def clean_name(raw: str) -> str:
-    """Strip extraction artifacts (angle brackets, stray backslashes) so
-    '<Chirac>' folds into the same entity as 'Chirac'."""
-    return raw.strip().strip("<>").replace("\\", "").strip()
+    """Strip extraction artifacts — angle brackets, backslashes, and stray
+    edge punctuation — so '<Chirac>', ',Kommuner' and '::Staten' fold into
+    the same entities as their clean forms."""
+    return raw.strip().strip("<>").replace("\\", "").strip(_EDGE_PUNCT)
 
 
 def is_junk(name: str) -> bool:
     low = name.lower()
-    return len(name) <= 1 or low in STOPWORDS or bool(_NUMERIC.fullmatch(name))
+    return (
+        len(name) <= 1
+        or low in STOPWORDS
+        or bool(_NUMERIC.fullmatch(name))
+        or bool(_AMOUNT.fullmatch(low))
+    )
 
 
 def slug(name: str) -> str:
@@ -144,7 +154,13 @@ def main() -> None:
             src_name, tgt_name = clean_name(str(src)), clean_name(str(tgt))
             if not src_name or not tgt_name or is_junk(src_name) or is_junk(tgt_name):
                 continue
-            s, t = slug(src_name), slug(tgt_name)
+            # LightRAG relations are undirected — canonicalize the pair order
+            # so the same relation never lands as BOTH a->b and b->a (which
+            # happens across shards and renders as double edges)
+            s, t = sorted((slug(src_name), slug(tgt_name)))
+            # merged descriptions are <SEP>-joined; keep the first fragment so
+            # the raw delimiter never leaks into the UI
+            desc = (data.get("description") or data.get("keywords") or "").split(SEP)[0][:120]
             cks = keys_of(data.get("source_id")) or {next(iter(ent_chunks[s]), "")}
             for ck in cks:
                 if not ck or (s, t, ck) in seen_rels:
@@ -157,9 +173,7 @@ def main() -> None:
                         "source_entity_id": s,
                         "target_entity_id": t,
                         "relationship_type": "RELATIONSHIP",
-                        "description": (data.get("description") or data.get("keywords") or "")[
-                            :120
-                        ],
+                        "description": desc,
                         "chunk_id": ck,
                         "doc_id": ck.split(":")[0],
                     }
@@ -231,7 +245,8 @@ def main() -> None:
         remapped: list[dict] = []
         seen_rels.clear()
         for r in rels:
-            s, t = resolve(r["source_entity_id"]), resolve(r["target_entity_id"])
+            # re-sort after alias resolution to keep the undirected canonical order
+            s, t = sorted((resolve(r["source_entity_id"]), resolve(r["target_entity_id"])))
             key = (s, t, r["chunk_id"])
             if s == t or key in seen_rels:
                 continue

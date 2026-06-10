@@ -1,11 +1,19 @@
-"""Post-build pass: demote generic "person" entities to OTHER.
+"""Post-build pass: demote generic "person" entities to OTHER — deterministically.
 
 LLM extraction tags person-CATEGORIES (Barn, Forskare, Kvinnor, Politiker) and
-even pronouns (Jag) as PERSON alongside real named individuals — a known
-weakness, amplified in first-person Swedish speech. Rather than re-extracting
-the corpus, this sends only the distinct PERSON *names* to gemma in batches
-and asks which are NOT specific named individuals; the result is an overrides
-file the adapter applies on a re-fold (``adapter.py --type-overrides``).
+pronouns as PERSON alongside real named individuals. Rather than re-extracting
+the corpus, this classifies only the distinct PERSON *names* and writes an
+overrides file the adapter applies on a re-fold (``adapter.py --type-overrides``).
+
+Determinism contract (re-running produces the same overrides):
+- a persistent **verdict cache** (``--cache``, name -> person|generic) is the
+  source of truth; only never-seen names reach the LLM, so prior decisions can
+  never flip on a re-run;
+- unknown names are classified in **sorted order** with ``temperature=0`` and a
+  fixed ``seed``;
+- a deterministic **stoplist** decides the obvious generic shapes (pronouns,
+  pure-lowercase-vocabulary plurals are still the LLM's job — the stoplist only
+  covers exact known offenders) before any model call.
 
 Runs in the PROJECT venv (lance + httpx only):
 
@@ -23,13 +31,33 @@ from pathlib import Path
 import httpx
 import lance
 
-PROMPT = """Du får en lista med entitetsnamn från svenska presskonferens-transkript.
-Vilka av namnen är INTE en specifik namngiven person? (t.ex. yrken/roller som
-"Forskare", grupper som "Barn" eller "Kvinnor", pronomen som "Jag", kategorier
-som "Högutbildade"). Riktiga personnamn som "Anna Lindberg" eller enstaka
-förnamn som "Ingegerd" ska INTE tas med.
+# Exact-name generic verdicts that never need a model call. Keep SMALL and
+# unambiguous — the LLM handles the long tail.
+STOPLIST_GENERIC = {
+    "barn", "barnen", "kvinnor", "kvinnorna", "män", "männen", "föräldrar",
+    "föräldrarna", "ungdomar", "ungdomarna", "människor", "medborgare",
+    "politiker", "forskare", "forskarna", "konsumenter", "konsumenterna",
+    "anställda", "läkare", "lärare", "elever", "studenter", "pensionärer",
+    "arbetare", "tjänstemän", "väljare", "svenskar", "invandrare", "flickor",
+    "pojkar", "boende", "talaren", "moderatorn", "jag", "vi", "man",
+}
 
-Svara ENBART med en JSON-lista av namnen som inte är specifika personer.
+PROMPT = """Du klassificerar entitetsnamn från svenska presskonferens-transkript.
+
+REGLER:
+- "generic" = INTE en specifik namngiven individ: yrken/roller (Forskare,
+  Statsministern), grupper (Barn, Kvinnor, Svenskar), pronomen (Jag, Vi),
+  kategorier (Högutbildade, Närstående).
+- "person" = en specifik namngiven individ: fullständiga namn (Anna Lindberg),
+  enstaka förnamn/efternamn (Ingegerd, Pettersson), historiska/fiktiva personer.
+
+EXEMPEL:
+- "Göran Persson" -> person
+- "Statsministern" -> generic
+- "Barn i Misshandelsfamiljer" -> generic
+- "Ingegerd" -> person
+
+SVAR: ENDAST en JSON-lista med namnen som är "generic". Ingen annan text.
 
 Namn:
 {names}"""
@@ -38,9 +66,12 @@ Namn:
 def classify_batch(client: httpx.Client, url: str, model: str, names: list[str]) -> set[str]:
     body = {
         "model": model,
-        "messages": [{"role": "user", "content": PROMPT.format(names="\n".join(f"- {n}" for n in names))}],
+        "messages": [
+            {"role": "user", "content": PROMPT.format(names="\n".join(f"- {n}" for n in names))}
+        ],
         "max_tokens": 2000,
         "temperature": 0.0,
+        "seed": 0,
     }
     resp = client.post(f"{url}/chat/completions", json=body, timeout=120)
     resp.raise_for_status()
@@ -51,46 +82,69 @@ def classify_batch(client: httpx.Client, url: str, model: str, names: list[str])
     generic = json.loads(match.group(0))
     # only accept names that were actually in the batch (no hallucinated extras)
     allowed = {n.strip().lower() for n in names}
-    return {n for n in generic if isinstance(n, str) and n.strip().lower() in allowed}
+    return {n.strip().lower() for n in generic if isinstance(n, str) and n.strip().lower() in allowed}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Demote generic PERSON entities to OTHER.")
     parser.add_argument("--db", default="transcripts_v2.lance")
     parser.add_argument("--out", default="kg_work/person_overrides.json")
+    parser.add_argument(
+        "--cache",
+        default="kg_work/person_verdicts.json",
+        help="persistent name->verdict map; cached names never hit the LLM "
+        "again, which makes re-runs deterministic",
+    )
     parser.add_argument("--gemma-url", default="http://localhost:8003/v1")
     parser.add_argument("--gemma-model", default="google/gemma-4-31B-it")
-    parser.add_argument("--batch", type=int, default=80)
+    parser.add_argument("--batch", type=int, default=60)
     args = parser.parse_args()
 
     tbl = lance.dataset(str(Path(args.db) / "kg_entities.lance")).to_table().to_pylist()
-    persons = [(r["entity_id"], r["name"]) for r in tbl if r["entity_type"] == "PERSON"]
+    persons = sorted(
+        ((r["entity_id"], r["name"]) for r in tbl if r["entity_type"] == "PERSON"),
+        key=lambda p: p[1].lower(),
+    )
     print(f"{len(persons)} PERSON entities to classify")
 
-    overrides: dict[str, str] = {}
+    cache_path = Path(args.cache)
+    verdicts: dict[str, str] = (
+        json.loads(cache_path.read_text()) if cache_path.exists() else {}
+    )
+
+    for _, name in persons:
+        low = name.strip().lower()
+        if low in STOPLIST_GENERIC:
+            verdicts[low] = "generic"
+
+    unknown = sorted({n.strip().lower() for _, n in persons} - set(verdicts))
+    print(f"cache: {len(verdicts)} known, {len(unknown)} new names for the LLM")
+
     with httpx.Client() as client:
-        for start in range(0, len(persons), args.batch):
-            batch = persons[start : start + args.batch]
-            names = [n for _, n in batch]
+        for start in range(0, len(unknown), args.batch):
+            batch = unknown[start : start + args.batch]
             try:
-                generic = classify_batch(client, args.gemma_url, args.gemma_model, names)
+                generic = classify_batch(client, args.gemma_url, args.gemma_model, batch)
             except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as exc:
-                # one retry, then skip the batch (those names stay PERSON)
                 print(f"batch {start}: retrying after {exc}")
                 try:
-                    generic = classify_batch(client, args.gemma_url, args.gemma_model, names)
+                    generic = classify_batch(client, args.gemma_url, args.gemma_model, batch)
                 except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as exc2:
-                    print(f"batch {start}: SKIPPED ({exc2})")
+                    print(f"batch {start}: SKIPPED ({exc2}) — names stay unclassified")
                     continue
-            lowered = {g.strip().lower() for g in generic}
-            for eid, name in batch:
-                if name.strip().lower() in lowered:
-                    overrides[eid] = "OTHER"
-            print(f"batch {start + len(batch)}/{len(persons)}: {len(overrides)} demoted so far", flush=True)
+            for low in batch:
+                verdicts[low] = "generic" if low in generic else "person"
+            print(f"batch {start + len(batch)}/{len(unknown)} classified", flush=True)
 
-    Path(args.out).write_text(json.dumps(overrides, indent=0))
-    print(f"wrote {len(overrides)} overrides -> {args.out}")
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(verdicts, indent=0, ensure_ascii=False, sort_keys=True))
+
+    overrides = {
+        eid: "OTHER" for eid, name in persons if verdicts.get(name.strip().lower()) == "generic"
+    }
+    Path(args.out).write_text(json.dumps(overrides, indent=0, sort_keys=True))
     demoted = [n for eid, n in persons if eid in overrides]
+    print(f"wrote {len(overrides)} overrides -> {args.out} (verdict cache: {cache_path})")
     print("examples:", demoted[:12])
 
 
