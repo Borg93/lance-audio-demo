@@ -23,6 +23,7 @@ const ConfigSchema = z.object({
     .catch(DEFAULT_N)
     .transform((v) => Math.max(MIN_N, Math.min(MAX_N, Math.round(v)))),
   rerank: z.boolean().catch(false),
+  minScore: z.number().nullable().catch(null),
   refineScope: z.enum(['video', 'chunk']).catch('video'),
   combineMode: z.enum(['union', 'intersect']).catch('union'),
   tags: z.array(z.string()).catch(() => []),
@@ -38,13 +39,12 @@ const ConfigSchema = z.object({
   enabled: z.boolean().catch(true),
 });
 
+// Nodes have fixed sizes (no NodeResizer) — old persisted width/height keys are
+// unknown to this schema and Zod strips them, so stale data still parses.
 const PersistedNodeSchema = z.object({
   id: z.string(),
   type: z.enum(NODE_KINDS),
   position: z.object({ x: z.number(), y: z.number() }),
-  // Optional resized dimensions (NodeResizer on Results/Export sink nodes).
-  width: z.number().optional(),
-  height: z.number().optional(),
 });
 
 const PersistedEdgeSchema = z.object({

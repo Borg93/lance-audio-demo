@@ -86,6 +86,29 @@
       </label>
     </div>
 
+    <div class="mt-2 flex items-center gap-2">
+      <label
+        class="text-[10px] text-muted-foreground"
+        for="min-score-{id}"
+        title="Drop hits scoring below this (normalized, higher = better). Empty = no threshold."
+      >
+        Min score
+      </label>
+      <input
+        id="min-score-{id}"
+        type="number"
+        step="any"
+        class="{FIELD_CLASS} w-16"
+        placeholder="off"
+        value={cfg.minScore ?? ''}
+        oninput={(e) => {
+          const raw = e.currentTarget.value.trim();
+          const num = Number(raw);
+          graph.setConfig(id, { minScore: raw === '' || Number.isNaN(num) ? null : num });
+        }}
+      />
+    </div>
+
     {#if hasUpstreamResults}
       <div class="nodrag mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
         <span

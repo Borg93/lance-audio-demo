@@ -108,6 +108,7 @@ function defaultConfig(): NodeConfig {
     mode: 'fts',
     n: DEFAULT_N,
     rerank: false,
+    minScore: null,
     refineScope: 'video',
     combineMode: 'union',
     tags: [],
@@ -507,6 +508,13 @@ class WorkflowGraph {
     this.selectedEdgeIds = edgeIds;
   }
 
+  /** Disconnect one edge (the nodes stay). */
+  removeEdge(id: string): void {
+    if (this.running) return;
+    this.edges = this.edges.filter((e) => e.id !== id);
+    this.selectedEdgeIds = this.selectedEdgeIds.filter((x) => x !== id);
+  }
+
   /** Delete one node, every edge touching it, and its config/runtime. */
   removeNode(id: string): void {
     if (this.running) return;
@@ -581,9 +589,6 @@ class WorkflowGraph {
               id: n.id,
               type: n.type,
               position: { x: n.position.x, y: n.position.y },
-              // Persist resized sink-node dimensions so they survive reload + undo/redo.
-              ...(n.width != null ? { width: n.width } : {}),
-              ...(n.height != null ? { height: n.height } : {}),
             },
           ]
         : [],
@@ -607,6 +612,7 @@ class WorkflowGraph {
         mode: c.mode,
         n: c.n,
         rerank: c.rerank,
+        minScore: c.minScore,
         refineScope: c.refineScope,
         combineMode: c.combineMode,
         tags: c.tags,
@@ -657,8 +663,6 @@ class WorkflowGraph {
       type: n.type,
       position: { x: n.position.x, y: n.position.y },
       data: {},
-      ...(n.width != null ? { width: n.width } : {}),
-      ...(n.height != null ? { height: n.height } : {}),
     }));
     const ids = new Set(nodes.map((n) => n.id));
     const edges: Edge[] = parsed.edges

@@ -63,6 +63,9 @@ export interface NodeConfig {
   mode: SearchMode;
   n: number;
   rerank: boolean;
+  /** search: drop hits whose normalized relevance (`relevanceOf`, higher =
+   *  better) is below this. `null` = off; hits with no ranking signal pass. */
+  minScore: number | null;
   /** search: when scoped by an upstream result set, narrow to those videos
    *  (`doc_id IN`, may return new chunks) or to the exact upstream chunks
    *  (`(doc_id,speech_id,chunk_id) IN`, result ⊆ upstream). */
@@ -110,6 +113,9 @@ export interface NodeOutput {
   spec: Partial<SearchSpec>;
   /** A concrete result set, once a Search/Combine node has produced one. */
   hits: Hit[] | null;
+  /** True when this node errored (or was blocked by an upstream error) — the
+   *  executor blocks every dependent instead of running it on partial input. */
+  failed?: boolean;
 }
 
 /** A detached node, copied to the clipboard for paste. */

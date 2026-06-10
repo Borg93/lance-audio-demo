@@ -140,6 +140,7 @@
     {edgeTypes}
     colorMode={theme.current}
     fitView
+    deleteKey={['Backspace', 'Delete']}
     snapGrid={[SNAP_GRID_PX, SNAP_GRID_PX]}
     defaultEdgeOptions={{ markerEnd: ARROW_MARKER }}
     isValidConnection={validate}

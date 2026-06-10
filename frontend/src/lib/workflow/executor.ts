@@ -5,7 +5,7 @@
  * results back through the narrow `RunDeps` seam; it never touches the class.
  */
 import type { Edge, Node } from '@xyflow/svelte';
-import { search, type Hit, type SearchSpec } from '$lib/api';
+import { relevanceOf, search, type Hit, type SearchSpec } from '$lib/api';
 import { hitKey } from '$lib/utils';
 import { chunkScopeClause, dedupeHits, videoScopeClause } from './scope';
 import {
@@ -34,9 +34,10 @@ export interface RunDeps {
  * predecessors resolve, so independent branches (e.g. two Search legs feeding a
  * Combine) run concurrently instead of strictly one-after-another. Promises are
  * seeded in topological order, so when a node reads its predecessors' promises
- * they already exist. Each node is isolated — one failure marks only that node
- * and dependents still run with whatever survived. Returns a cycle-error message
- * to surface, or null on success.
+ * they already exist. A node failure never rejects (it records an error on that
+ * node) but it BLOCKS everything downstream — running a dependent on partial
+ * input would silently produce wrong results. Returns a cycle-error message to
+ * surface, or null on success.
  */
 export async function runGraph(deps: RunDeps): Promise<string | null> {
   const ids = deps.nodes.map((n) => n.id);
@@ -84,14 +85,21 @@ function topoOrder(deps: RunDeps, incoming: Map<string, string[]>): string[] | n
 
 /** Run one node: merge its predecessors' outputs into its input, then execute by
  *  kind. Returns the output that travels to successors. Isolated — any throw is
- *  recorded on the node and surfaces as an empty output, so it never rejects a
- *  dependent's `Promise.all`. */
+ *  recorded on the node and surfaces as a failed empty output, so it never
+ *  rejects a dependent's `Promise.all`; the `failed` flag blocks dependents. */
 async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Promise<NodeOutput> {
   const kind = deps.kindOf(id);
   // kindOf is null only for an unknown/corrupt node id — nothing to run. Handled
   // here so the switch below stays exhaustive over NodeKind.
   if (kind === null) return { spec: {}, hits: null };
   const cfg = deps.config(id);
+
+  // An upstream failure blocks this node (and, via the flag, everything after
+  // it) — even through a disabled node, which only bypasses its OWN work.
+  if (predOutputs.some((o) => o.failed)) {
+    deps.patchRuntime(id, { status: 'error', error: 'Skipped — an upstream node failed.' });
+    return { spec: {}, hits: null, failed: true };
+  }
 
   // Merge upstream outputs. `inSpec` = WHAT to search; `scope` = the union of
   // upstream result sets (WHERE). Track per-source hit sets (Combine·intersect)
@@ -234,8 +242,17 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
         if (wheres.length) spec.where = wheres.map((w) => `(${w})`).join(' AND ');
 
         const t0 = performance.now();
-        const hits = await search(spec);
+        let hits = await search(spec);
         const ms = Math.round(performance.now() - t0);
+        // Threshold: drop hits below the configured relevance. Hits with no
+        // ranking signal (e.g. scene browsing) pass — there's nothing to compare.
+        if (cfg.minScore != null) {
+          const min = cfg.minScore;
+          hits = hits.filter((h) => {
+            const r = relevanceOf(h);
+            return r === null || r >= min;
+          });
+        }
         deps.patchRuntime(id, {
           status: 'done',
           hits,
@@ -268,6 +285,6 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     deps.patchRuntime(id, { status: 'error', error: msg });
-    return { spec: {}, hits: null };
+    return { spec: {}, hits: null, failed: true };
   }
 }

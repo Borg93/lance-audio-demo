@@ -45,6 +45,16 @@
   /** The dialog container — programmatically focused on open. */
   let dialogEl: HTMLDivElement | null = null;
 
+  /** Re-parent the overlay to <body>. This component mounts INSIDE a Svelte
+   *  Flow node, i.e. inside the canvas's translated+scaled viewport — and
+   *  `position: fixed` resolves against the nearest transformed ancestor, so
+   *  without the portal the "full-screen" modal renders zoomed into the canvas
+   *  with broken pointer math. */
+  function portal(node: HTMLElement): { destroy(): void } {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
+
   onMount(() => {
     // Borrow the singleton: pre-filter to the upstream results so the user
     // lassos WITHIN them (no upstream ⇒ leave filteredIds null = all points),
@@ -79,61 +89,67 @@
   }}
 />
 
-<!-- backdrop: clicking it cancels (discard) -->
-<button
-  type="button"
-  aria-label="Close atlas viewer"
-  class="fixed inset-0 z-30 cursor-default bg-black/50"
-  onclick={onCancel}
-></button>
+<!-- Portaled to <body> (see `portal` above) so the overlay escapes the canvas
+     transform. -->
+<div use:portal>
+  <!-- backdrop: clicking it cancels (discard) -->
+  <button
+    type="button"
+    aria-label="Close atlas viewer"
+    class="fixed inset-0 z-30 cursor-default bg-black/50"
+    onclick={onCancel}
+  ></button>
 
-<!-- content -->
-<div
-  bind:this={dialogEl}
-  role="dialog"
-  aria-modal="true"
-  aria-label="Atlas viewer"
-  tabindex="-1"
-  class="fixed inset-4 z-40 flex flex-col overflow-hidden rounded-lg border border-border bg-card shadow-lg outline-none"
->
-  <div class="flex items-center justify-between border-b border-border px-4 py-2">
-    <div class="flex items-baseline gap-2">
-      <h2 class="text-sm font-semibold text-foreground">Atlas Viewer</h2>
-      <span class="text-[11px] text-muted-foreground">
-        {#if upstreamHits && upstreamHits.length}
-          pre-filtered to {upstreamHits.length.toLocaleString()} upstream hits
-        {:else}
-          all points
-        {/if}
-        · lasso a region, then confirm
-      </span>
+  <!-- content -->
+  <div
+    bind:this={dialogEl}
+    role="dialog"
+    aria-modal="true"
+    aria-label="Atlas viewer"
+    tabindex="-1"
+    class="fixed inset-4 z-40 flex flex-col overflow-hidden rounded-lg border border-border bg-card shadow-lg outline-none"
+  >
+    <div class="flex items-center justify-between border-b border-border px-4 py-2">
+      <div class="flex items-baseline gap-2">
+        <h2 class="text-sm font-semibold text-foreground">Atlas Viewer</h2>
+        <span class="text-[11px] text-muted-foreground">
+          {#if upstreamHits && upstreamHits.length}
+            pre-filtered to {upstreamHits.length.toLocaleString()} upstream hits
+          {:else}
+            all points
+          {/if}
+          · lasso a region, then confirm
+        </span>
+      </div>
+      <button
+        type="button"
+        class="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+        title="Close (discard)"
+        aria-label="Close atlas viewer"
+        onclick={onCancel}
+      >
+        <X class="size-4" />
+      </button>
     </div>
-    <button
-      type="button"
-      class="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
-      title="Close (discard)"
-      aria-label="Close atlas viewer"
-      onclick={onCancel}
-    >
-      <X class="size-4" />
-    </button>
-  </div>
 
-  <div class="min-h-0 flex-1">
-    <AtlasMap {onSelectionHits} />
-  </div>
+    <div class="min-h-0 flex-1">
+      <AtlasMap {onSelectionHits} />
+    </div>
 
-  <div class="flex items-center justify-between border-t border-border px-4 py-2">
-    <span class="text-[11px] text-muted-foreground">
-      {#if selectionTotal > 0}
-        <span class="text-foreground">{selectionTotal.toLocaleString()}</span> points selected
-      {:else}
-        No selection yet
-      {/if}
-    </span>
-    <div class="flex items-center gap-2">
-      <Button variant="ghost" size="sm" onclick={onCancel}>Cancel</Button>
-      <Button size="sm" disabled={selectionTotal === 0} onclick={confirm}>Confirm selection</Button>
+    <div class="flex items-center justify-between border-t border-border px-4 py-2">
+      <span class="text-[11px] text-muted-foreground">
+        {#if selectionTotal > 0}
+          <span class="text-foreground">{selectionTotal.toLocaleString()}</span> points selected
+        {:else}
+          No selection yet
+        {/if}
+      </span>
+      <div class="flex items-center gap-2">
+        <Button variant="ghost" size="sm" onclick={onCancel}>Cancel</Button>
+        <Button size="sm" disabled={selectionTotal === 0} onclick={confirm}
+          >Confirm selection</Button
+        >
+      </div>
     </div>
   </div>
 </div>
