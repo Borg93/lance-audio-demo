@@ -46,6 +46,8 @@
     ORG: [52, 211, 153], // emerald-400
     GEO: [251, 191, 36], // amber-400
     EVENT: [167, 139, 250], // violet-400
+    CONCEPT: [244, 114, 182], // pink-400 — ideas / policy areas / methods
+    WORK: [251, 146, 60], // orange-400 — reports / artifacts / datasets
     OTHER: [148, 163, 184], // slate-400
   };
   function nodeColor(type: string, videos: number): [number, number, number] {

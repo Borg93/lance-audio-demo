@@ -52,13 +52,27 @@ def clean_name(raw: str) -> str:
     return raw.strip().strip("<>").replace("\\", "").strip(_EDGE_PUNCT)
 
 
+def _is_sentence(name: str) -> bool:
+    """A clause the model mistook for an entity, e.g. 'Om dina tänder är gula
+    eller bleka, är det inget att le om'. Heuristic: long, AND carries a comma
+    AND >=2 all-lowercase words — title-case org/event names (which can also be
+    long) have no lowercase words and survive."""
+    words = name.split()
+    if len(words) < 6 or "," not in name:
+        return False
+    lower_words = sum(1 for w in words if w.isalpha() and w.islower())
+    return lower_words >= 2
+
+
 def is_junk(name: str) -> bool:
     low = name.lower()
     return (
         len(name) <= 1
+        or len(name) > 90
         or low in STOPWORDS
         or bool(_NUMERIC.fullmatch(name))
         or bool(_AMOUNT.fullmatch(low))
+        or _is_sentence(name)
     )
 
 
@@ -86,6 +100,13 @@ def slug(name: str) -> str:
 
 
 def norm_type(t: str | None) -> str:
+    """Map LightRAG's 11-value entity taxonomy onto the viewer's colour buckets.
+
+    The model emits person/organization/location/event plus concept, method,
+    content, artifact, data, naturalobject, creature. Collapsing the last seven
+    into OTHER greyed out ~66% of the graph, so concept/method → CONCEPT and
+    content/artifact/data → WORK are kept as distinct, coloured buckets.
+    """
     s = (t or "").lower()
     if "person" in s:
         return "PERSON"
@@ -95,6 +116,10 @@ def norm_type(t: str | None) -> str:
         return "GEO"
     if any(k in s for k in ("event", "händels", "seminar")):
         return "EVENT"
+    if any(k in s for k in ("concept", "method", "begrepp", "metod")):
+        return "CONCEPT"
+    if any(k in s for k in ("content", "artifact", "data", "verk", "rapport")):
+        return "WORK"
     return "OTHER"
 
 

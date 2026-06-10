@@ -17,7 +17,7 @@ How to (re)build the tables: [`scripts/kg/README.md`](../scripts/kg/README.md).
 | --- | --- |
 | `entity_id` | stable 16-hex id (`sha1(lowercased name)`) |
 | `name` / `name_lower` | display name / lowercase for filtering |
-| `entity_type` | `PERSON` · `ORG` · `GEO` · `EVENT` · `OTHER` |
+| `entity_type` | `PERSON` · `ORG` · `GEO` · `EVENT` · `CONCEPT` · `WORK` · `OTHER` (the viewer's node colours; CONCEPT = ideas/policy/methods, WORK = reports/artifacts/datasets) |
 | `mention_count` | number of distinct clips mentioning it |
 
 | `:Chunk` property | meaning |

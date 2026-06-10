@@ -239,12 +239,14 @@ def _entity_guidance() -> dict[str, str]:
             "Om ingen passar, använd `Other`.\n\n"
             "- Person: ENDAST namngivna individer (t.ex. 'Anna Lindberg', 'Ingegerd'). "
             "ALDRIG yrken/roller (Forskare, Politiker), grupper (Barn, Kvinnor, "
-            "Svenskar) eller pronomen (Jag, Vi, Man) — dessa är `Other` eller ska "
+            "Svenskar) eller pronomen (Jag, Vi, Man) — dessa är `Concept` eller ska "
             "inte extraheras alls.\n"
             "- Organization: företag, myndigheter, partier, institutioner.\n"
             "- Location: geografiska platser (länder, städer, regioner).\n"
             "- Event: händelser, utredningar, konferenser, reformer.\n"
-            "- Concept: abstrakta begrepp, politikområden, teorier."
+            "- Concept: abstrakta begrepp, politikområden, teorier, metoder.\n"
+            "- Content: rapporter, artiklar, lagar, dokument.\n"
+            "- Artifact: konkreta skapade objekt, verktyg, system."
         )
     }
 
