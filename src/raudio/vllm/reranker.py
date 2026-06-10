@@ -22,6 +22,7 @@ import pyarrow as pa
 from lancedb.rerankers import Reranker
 
 from .base import DEFAULT_TIMEOUT_S, VLLMTransport
+from .schemas import RerankResponse
 
 RERANK_MODEL = "Qwen/Qwen3-VL-Reranker-2B"
 DEFAULT_RERANK_URL = "http://127.0.0.1:8002"
@@ -67,8 +68,8 @@ class VLLMReranker:
             "query": f"{_PREFIX}<Instruct>: {self.instruction}\n<Query>: {query}\n",
             "documents": [f"<Document>: {c}{_SUFFIX}" for c in candidates],
         }
-        results = self._t.post("/v1/rerank", body)["results"]  # may be unordered
-        scored = sorted((item["index"], item["relevance_score"]) for item in results)
+        results = self._t.post("/v1/rerank", body, into=RerankResponse).results  # may be unordered
+        scored = sorted((item.index, item.relevance_score) for item in results)
         return [score for _, score in scored]
 
 
@@ -98,7 +99,9 @@ class QwenVLReranker(Reranker):
         scored = head.append_column("_relevance_score", pa.array(scores, type=pa.float32()))
         return scored.sort_by([("_relevance_score", "descending")])
 
-    def rerank_hybrid(self, query: str, vector_results: pa.Table, fts_results: pa.Table) -> pa.Table:
+    def rerank_hybrid(
+        self, query: str, vector_results: pa.Table, fts_results: pa.Table
+    ) -> pa.Table:
         return self._score(query, self.merge_results(vector_results, fts_results))
 
     def rerank_vector(self, query: str, vector_results: pa.Table) -> pa.Table:

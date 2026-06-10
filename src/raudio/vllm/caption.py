@@ -20,6 +20,7 @@ from typing import Protocol
 
 from .base import DEFAULT_TIMEOUT_S, VLLMTransport
 from .image import frame_to_data_url
+from .schemas import ChatCompletionResponse, ChatMessage, ImagePart, ImageUrl, TextPart
 
 # Gemma 4 instruction-tuned VLM that you already run locally at the OpenAI chat
 # endpoint on :8003 (the `rask-gemma` server). This client only POSTs to it — it
@@ -39,8 +40,6 @@ CAPTION_INSTRUCTION = os.getenv(
 CAPTION_CONCURRENCY = 8
 # Headroom for a full Swedish sentence (Swedish tokenizes longer than English).
 CAPTION_MAX_TOKENS = 96
-
-_ChatMessage = dict[str, object]
 
 
 class CaptionClient(Protocol):
@@ -79,19 +78,20 @@ class VLLMCaptionClient:
         return self._t.map(self._caption_one, images, concurrency=self.concurrency)
 
     def _caption_one(self, image: bytes) -> str:
-        messages: list[_ChatMessage] = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": frame_to_data_url(image)}},
-                    {"type": "text", "text": self.instruction},
+        messages = [
+            ChatMessage(
+                role="user",
+                content=[
+                    ImagePart(image_url=ImageUrl(url=frame_to_data_url(image))),
+                    TextPart(text=self.instruction),
                 ],
-            }
+            )
         ]
         body = {
             "model": self.model,
-            "messages": messages,
+            "messages": [m.model_dump() for m in messages],
             "max_tokens": self.max_tokens,
             "temperature": 0.0,
         }
-        return self._t.post("/v1/chat/completions", body)["choices"][0]["message"]["content"].strip()
+        resp = self._t.post("/v1/chat/completions", body, into=ChatCompletionResponse)
+        return resp.choices[0].message.content.strip()

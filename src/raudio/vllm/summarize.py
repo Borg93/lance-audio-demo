@@ -10,14 +10,13 @@ from __future__ import annotations
 from typing import Protocol
 
 from .base import DEFAULT_TIMEOUT_S, VLLMTransport
+from .schemas import ChatCompletionResponse, ChatMessage
 
 SUMMARIZE_MODEL = "Qwen/Qwen3-Instruct-4B"
 DEFAULT_SUMMARIZE_URL = "http://127.0.0.1:8004"
 SUMMARIZE_INSTRUCTION = "Summarize the following transcript passage in one concise sentence."
 SUMMARIZE_CONCURRENCY = 32
 SUMMARIZE_MAX_TOKENS = 96
-
-_ChatMessage = dict[str, object]
 
 
 class SummarizeClient(Protocol):
@@ -56,14 +55,15 @@ class VLLMSummarizeClient:
         return self._t.map(self._summarize_one, texts, concurrency=self.concurrency)
 
     def _summarize_one(self, text: str) -> str:
-        messages: list[_ChatMessage] = [
-            {"role": "system", "content": self.instruction},
-            {"role": "user", "content": text},
+        messages = [
+            ChatMessage(role="system", content=self.instruction),
+            ChatMessage(role="user", content=text),
         ]
         body = {
             "model": self.model,
-            "messages": messages,
+            "messages": [m.model_dump() for m in messages],
             "max_tokens": self.max_tokens,
             "temperature": 0.0,
         }
-        return self._t.post("/v1/chat/completions", body)["choices"][0]["message"]["content"].strip()
+        resp = self._t.post("/v1/chat/completions", body, into=ChatCompletionResponse)
+        return resp.choices[0].message.content.strip()

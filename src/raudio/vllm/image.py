@@ -11,6 +11,7 @@ import base64
 import io
 
 import numpy as np
+from numpy.typing import ArrayLike
 from PIL import Image
 
 from ..model.schema import EMBED_DIM
@@ -31,7 +32,7 @@ from ..model.schema import EMBED_DIM
 _IMAGE_SIDE = 392
 
 
-def l2_normalize(vectors: object) -> np.ndarray:
+def l2_normalize(vectors: ArrayLike) -> np.ndarray:
     """L2-normalize a batch of embeddings to unit length.
 
     Validates the dimension against ``EMBED_DIM`` so a server/model mismatch
@@ -47,7 +48,7 @@ def l2_normalize(vectors: object) -> np.ndarray:
     return (arr / norms).astype(np.float32)
 
 
-def image_to_data_url(image: object) -> str:
+def image_to_data_url(image: Image.Image | bytes | bytearray) -> str:
     """Encode a PIL image or raw JPEG bytes as a ``data:image/jpeg;base64,…`` URL.
 
     Center-crops + resizes to a fixed square first (see ``_IMAGE_SIDE``) so the
@@ -78,7 +79,9 @@ def image_to_data_url(image: object) -> str:
 _CAPTION_MAX_SIDE = 896
 
 
-def frame_to_data_url(image: object, *, max_side: int = _CAPTION_MAX_SIDE) -> str:
+def frame_to_data_url(
+    image: Image.Image | bytes | bytearray, *, max_side: int = _CAPTION_MAX_SIDE
+) -> str:
     """Encode a frame for a generative VLM caption — full scene, no square crop.
 
     Preserves aspect ratio, only downscaling so the longest side ≤ ``max_side``.
