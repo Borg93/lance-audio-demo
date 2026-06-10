@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
@@ -27,6 +28,28 @@ import networkx as nx
 import pyarrow as pa
 
 SEP = "<SEP>"  # GRAPH_FIELD_SEP in lightrag 1.5.x
+
+# Pronouns / meta-speech "entities" the LLM extracts from first-person Swedish
+# transcripts — zero informational value and they poison co-occurrence queries.
+STOPWORDS = {
+    "jag", "vi", "man", "du", "ni", "han", "hon", "de", "dem", "det", "den",
+    "alla", "andra", "många", "ingen", "någon", "folk", "talaren", "talare",
+    "moderator", "moderatorn", "publiken", "deltagarna", "deltagare",
+    "åhörarna", "frågeställaren",
+}
+
+_NUMERIC = re.compile(r"[\d\s.,:%–—-]+")
+
+
+def clean_name(raw: str) -> str:
+    """Strip extraction artifacts (angle brackets, stray backslashes) so
+    '<Chirac>' folds into the same entity as 'Chirac'."""
+    return raw.strip().strip("<>").replace("\\", "").strip()
+
+
+def is_junk(name: str) -> bool:
+    low = name.lower()
+    return len(name) <= 1 or low in STOPWORDS or bool(_NUMERIC.fullmatch(name))
 
 
 def slug(name: str) -> str:
@@ -94,21 +117,21 @@ def main() -> None:
             if key and key != "unknown_source":
                 md5_to_key[cid] = key.split(SEP)[0]
 
-        def keys_of(source_id: str | None) -> set[str]:
+        def keys_of(source_id: str | None, _md5: dict[str, str] = md5_to_key) -> set[str]:
             out: set[str] = set()
             for tok in (source_id or "").split(SEP):
                 tok = tok.strip()
                 if not tok:
                     continue
-                out.add(md5_to_key.get(tok, tok if tok in chunk_meta else ""))
+                out.add(_md5.get(tok, tok if tok in chunk_meta else ""))
             return {k for k in out if k in chunk_meta}
 
         g = nx.read_graphml(work / "graph_chunk_entity_relation.graphml")
         print(f"fold {work}: {g.number_of_nodes()} nodes, {g.number_of_edges()} edges")
 
         for node, data in g.nodes(data=True):
-            name = (data.get("entity_id") or node or "").strip()
-            if not name:
+            name = clean_name(data.get("entity_id") or node or "")
+            if not name or is_junk(name):
                 continue
             eid = slug(name)
             ent_name[eid] = name
@@ -118,7 +141,10 @@ def main() -> None:
             ent_chunks[eid] |= keys_of(data.get("source_id"))
 
         for src, tgt, data in g.edges(data=True):
-            s, t = slug(str(src).strip()), slug(str(tgt).strip())
+            src_name, tgt_name = clean_name(str(src)), clean_name(str(tgt))
+            if not src_name or not tgt_name or is_junk(src_name) or is_junk(tgt_name):
+                continue
+            s, t = slug(src_name), slug(tgt_name)
             cks = keys_of(data.get("source_id")) or {next(iter(ent_chunks[s]), "")}
             for ck in cks:
                 if not ck or (s, t, ck) in seen_rels:
@@ -138,10 +164,81 @@ def main() -> None:
                         "doc_id": ck.split(":")[0],
                     }
                 )
-            ent_name.setdefault(s, str(src).strip())
-            ent_name.setdefault(t, str(tgt).strip())
+            ent_name.setdefault(s, src_name)
+            ent_name.setdefault(t, tgt_name)
             ent_type.setdefault(s, "OTHER")
             ent_type.setdefault(t, "OTHER")
+
+    # ── alias merging ────────────────────────────────────────────────────────
+    # 1) Swedish definite/plural suffix duplicates (Kommun/Kommunen/Kommunerna)
+    #    merge non-PERSON variants into the most-mentioned form.
+    # 2) Single-token person names merge into a multi-token superset ONLY when
+    #    exactly one candidate exists ('Bosse'→'Bosse Ringholm'; 'Pettersson'
+    #    with two Petterssons stays split — ambiguity blocks the merge).
+    alias: dict[str, str] = {}
+    by_lower = {ent_name[e].lower(): e for e in ent_name}
+    suffix_groups: dict[str, set[str]] = defaultdict(set)  # base form -> all variants
+    for eid in list(ent_name):
+        if ent_type.get(eid) == "PERSON":
+            continue
+        low = ent_name[eid].lower()
+        for suf in ("arna", "erna", "orna", "en", "et", "na"):
+            base = low[: -len(suf)] if low.endswith(suf) else ""
+            if len(base) >= 4 and base in by_lower:
+                other = by_lower[base]
+                if other != eid and ent_type.get(other) != "PERSON":
+                    # group by base so Kommun/Kommunen/Kommunerna ALL collapse
+                    # into one entity, not just pairwise with the base form
+                    suffix_groups[base] |= {other, eid}
+                break
+    for cluster in suffix_groups.values():
+        win = max(cluster, key=lambda e: len(ent_chunks[e]))
+        for lose in cluster:
+            if lose != win:
+                alias[lose] = win
+    multi = [
+        (eid, set(ent_name[eid].lower().split()))
+        for eid in ent_name
+        if ent_type.get(eid) == "PERSON" and len(ent_name[eid].split()) > 1
+    ]
+    for eid in list(ent_name):
+        if ent_type.get(eid) != "PERSON" or eid in alias:
+            continue
+        toks = ent_name[eid].lower().split()
+        if len(toks) != 1:
+            continue
+        cands = [m for m, mtoks in multi if toks[0] in mtoks and m != eid]
+        if len(cands) == 1:
+            alias[eid] = cands[0]
+
+    def resolve(eid: str) -> str:
+        seen: set[str] = set()
+        while eid in alias and eid not in seen:
+            seen.add(eid)
+            eid = alias[eid]
+        return eid
+
+    merged = 0
+    for lose in list(alias):
+        win = resolve(lose)
+        if win == lose or lose not in ent_name:
+            continue
+        ent_chunks[win] |= ent_chunks.pop(lose, set())
+        ent_name.pop(lose, None)
+        ent_type.pop(lose, None)
+        merged += 1
+    if merged:
+        remapped: list[dict] = []
+        seen_rels.clear()
+        for r in rels:
+            s, t = resolve(r["source_entity_id"]), resolve(r["target_entity_id"])
+            key = (s, t, r["chunk_id"])
+            if s == t or key in seen_rels:
+                continue
+            seen_rels.add(key)
+            remapped.append({**r, "source_entity_id": s, "target_entity_id": t})
+        rels = remapped
+    print(f"alias merge: {merged} entities folded into their canonical form")
 
     if args.type_overrides:
         corrections = json.loads(Path(args.type_overrides).read_text())

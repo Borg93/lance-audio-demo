@@ -74,11 +74,12 @@ def main() -> None:
             names = [n for _, n in batch]
             try:
                 generic = classify_batch(client, args.gemma_url, args.gemma_model, names)
-            except Exception as exc:  # one retry, then skip the batch (stays PERSON)
+            except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as exc:
+                # one retry, then skip the batch (those names stay PERSON)
                 print(f"batch {start}: retrying after {exc}")
                 try:
                     generic = classify_batch(client, args.gemma_url, args.gemma_model, names)
-                except Exception as exc2:
+                except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as exc2:
                     print(f"batch {start}: SKIPPED ({exc2})")
                     continue
             lowered = {g.strip().lower() for g in generic}
