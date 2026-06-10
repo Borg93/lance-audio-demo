@@ -22,11 +22,9 @@ All are pure ``StateDep`` reads via the native-LanceDB scan idiom over the cache
 Arrow ``/points`` serialization lives in :mod:`backend.atlas.points`.
 """
 
-from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Response
-from pydantic import BaseModel
 
 from backend.atlas.points import (
     _POINTS_CACHE,
@@ -37,26 +35,12 @@ from backend.atlas.points import (
 )
 from backend.core.exceptions import NotFoundError, ValidationError
 from backend.deps import StateDep
+from backend.schemas.atlas import AtlasSpace, AtlasStatusResponse, ChunkRowIds
 
 router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 
 #: Media type for the /points Arrow IPC stream response.
 _ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
-
-
-class AtlasSpace(StrEnum):
-    """The three precomputed projection spaces the Atlas map can render.
-
-    A ``StrEnum`` so FastAPI validates ``?space=`` at the route boundary (422 on
-    an unknown value) and the member compares/hashes equal to its string value —
-    so it indexes ``_SPACES`` (whose keys are the same literals) directly, and
-    the ``warmup`` loop that iterates the dict's string keys is unaffected (the
-    ``(space, version)`` cache key stays the same hashable tuple either way).
-    """
-
-    text = "text"
-    visual = "visual"
-    caption = "caption"
 
 
 #: Full-hit columns for the per-chunk detail pane (matches the search hit shape).
@@ -85,7 +69,7 @@ def atlas_status(
     space: Annotated[AtlasSpace, Query(description="Projection space to report rows for.")] = (
         AtlasSpace.text
     ),
-) -> dict[str, Any]:
+) -> AtlasStatusResponse:
     """Which projection spaces are built, plus the requested space's row count.
 
     ``spaces`` always reports both text+visual presence (so the UI can gate a
@@ -97,7 +81,7 @@ def atlas_status(
     cols = _space_cols(space)
     projected = cols["x"] in names
     rows = state.chunks.count_rows(filter=f"{cols['x']} IS NOT NULL") if projected else 0
-    return {"projected": projected, "rows": rows, "space": space, "spaces": spaces}
+    return AtlasStatusResponse(projected=projected, rows=rows, space=space, spaces=spaces)
 
 
 @router.get("/points")
@@ -161,16 +145,6 @@ def atlas_chunk(state: StateDep, doc_id: str, speech_id: int, chunk_id: int) -> 
     hit["alignments"] = parse_alignments_json(hit.pop("alignments_json", None))
     _attach_frame_captions(state.chunk_frames_tbl, [hit])
     return hit
-
-
-class ChunkRowIds(BaseModel):
-    """A batch of stable Lance row addresses (``_rowid``) for selected points.
-
-    The frontend reads these from /points (one per scatter point) and sends back
-    exactly the selected subset — far cheaper than re-deriving rows from keys.
-    """
-
-    rowids: list[int]
 
 
 @router.post("/chunks")

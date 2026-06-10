@@ -11,32 +11,31 @@ rather than at startup, so a diarization rebuild is picked up without restarting
 the server — and an absent table or doc simply returns ``built: false``.
 """
 
-from typing import Any
-
 import lance
 from fastapi import APIRouter
 
 from backend.deps import StateDep
+from backend.media.blobs import valid_doc_id
+from backend.schemas.diarization import DiarizationResponse, SpeakerTurn
 
 router = APIRouter(prefix="/api/diarization", tags=["diarization"])
 
 
-def _not_built(doc_id: str) -> dict[str, Any]:
+def _not_built(doc_id: str) -> DiarizationResponse:
     """The empty contract payload for a missing table / doc / row set."""
-    return {"built": False, "doc_id": doc_id, "turns": [], "speakers": []}
+    return DiarizationResponse(built=False, doc_id=doc_id)
 
 
 @router.get("/{doc_id}")
-def get_diarization(doc_id: str, state: StateDep) -> dict[str, Any]:
+def get_diarization(doc_id: str, state: StateDep) -> DiarizationResponse:
     """A video's speaker turns (sorted by start), or ``built: false`` if absent."""
+    # Whitelist the path param (16-char hex) BEFORE it is inlined into the Lance
+    # filter literal below — otherwise a crafted doc_id is a SQL-injection vector.
+    valid_doc_id(doc_id)
     path = state.db_path / "speaker_turns.lance"
     if not path.exists():
         return _not_built(doc_id)
-    rows = (
-        lance.dataset(str(path))
-        .to_table(filter=f"doc_id = '{doc_id}'")
-        .to_pylist()
-    )
+    rows = lance.dataset(str(path)).to_table(filter=f"doc_id = '{doc_id}'").to_pylist()
     if not rows:
         return _not_built(doc_id)
     # The columns are a writer-guaranteed contract (every row carries all five,
@@ -44,15 +43,15 @@ def get_diarization(doc_id: str, state: StateDep) -> dict[str, Any]:
     # silently return a built-but-empty payload the timeline can't render.
     turns = sorted(
         (
-            {
-                "turn_id": int(row["turn_id"]),
-                "speaker": row["speaker_label"],
-                "start": float(row["start"]),
-                "end": float(row["end"]),
-            }
+            SpeakerTurn(
+                turn_id=int(row["turn_id"]),
+                speaker=row["speaker_label"],
+                start=float(row["start"]),
+                end=float(row["end"]),
+            )
             for row in rows
         ),
-        key=lambda turn: turn["start"],
+        key=lambda turn: turn.start,
     )
-    speakers = sorted({turn["speaker"] for turn in turns})
-    return {"built": True, "doc_id": doc_id, "turns": turns, "speakers": speakers}
+    speakers = sorted({turn.speaker for turn in turns})
+    return DiarizationResponse(built=True, doc_id=doc_id, turns=turns, speakers=speakers)
