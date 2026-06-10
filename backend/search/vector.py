@@ -1,8 +1,7 @@
 """Single-column cosine vector search over the chunks table.
 
-Extracted verbatim from the former monolithic ``service.py`` — only the error
-mapping changed: a failed search raises a domain :class:`ValidationError` (HTTP
-400, stable message) with the real Lance error logged, never interpolated.
+A failed search raises a domain :class:`ValidationError` (HTTP 400, stable
+message) with the real Lance error logged, never interpolated.
 """
 
 from __future__ import annotations

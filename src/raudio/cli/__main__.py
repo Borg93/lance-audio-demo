@@ -1,6 +1,0 @@
-"""``python -m raudio.cli`` entry point."""
-
-from . import app
-
-if __name__ == "__main__":
-    app()

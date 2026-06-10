@@ -1,9 +1,8 @@
 """Shared projection columns + IVF_PQ recall knobs for the search layer.
 
-Extracted verbatim from the former monolithic ``service.py`` — these are
-algorithmic constants (not env-varying), so they stay module constants, not
-:class:`~backend.core.config.Settings`. Single source of truth so the
-vector / frames / fts / postprocess modules don't duplicate them.
+These are algorithmic constants (not env-varying), so they stay module
+constants, not :class:`~backend.core.config.Settings`. Single source of truth
+so the vector / frames / fts / postprocess modules don't duplicate them.
 """
 
 from __future__ import annotations

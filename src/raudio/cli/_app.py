@@ -27,11 +27,7 @@ app = typer.Typer(
 
 
 class CliContext(BaseModel):
-    """Per-invocation root options, carried via ``typer.Context.obj`` to subcommands.
-
-    Replaces the old mutable module-global; each ``raudio`` invocation gets its own
-    instance built by :func:`_root`, so there is no shared cross-command state.
-    """
+    """Per-invocation root options, carried via ``typer.Context.obj`` to subcommands."""
 
     db: Path = Path("./transcripts_v2.lance")
     table: str = "chunks"

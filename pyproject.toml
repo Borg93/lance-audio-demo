@@ -51,8 +51,10 @@ atlas = [
 # the `embed-server` and `rerank-server` Make targets. That keeps the main
 # project resolvable and isolates the vLLM dependency tree.
 
+# The console script and `python -m raudio` share one entry point
+# (raudio/__main__.py:main — the writing-python cli.md convention).
 [project.scripts]
-raudio = "raudio.cli:app"
+raudio = "raudio.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

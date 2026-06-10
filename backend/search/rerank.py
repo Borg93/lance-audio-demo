@@ -2,7 +2,6 @@
 
 Pure: no Lance, no exceptions. The reranker getter (passed in) is the only
 dependency, and that getter owns its own 503 mapping (see ``backend.clients``).
-Extracted verbatim from the former monolithic ``service.py``.
 """
 
 from __future__ import annotations

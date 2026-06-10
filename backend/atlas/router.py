@@ -125,9 +125,8 @@ def _attach_frame_captions(frames: Any, rows: list[dict[str, Any]]) -> None:
 
     if frames is None or not rows:
         return
-    # _attach_captions now filters with `doc_id IN (...)` (not the deep per-hit
-    # OR that used to overflow the parser), so we batch large — a 1000-point
-    # lasso goes from ~7 scans to ~2 (≈430ms→360ms, benchmarked).
+    # _attach_captions filters with `doc_id IN (...)`, so large batches are
+    # cheap — a 1000-point lasso is ~2 scans (≈360ms, benchmarked).
     for start in range(0, len(rows), _FRAME_CAPTION_BATCH_SIZE):
         _attach_captions(frames, rows[start : start + _FRAME_CAPTION_BATCH_SIZE])
 

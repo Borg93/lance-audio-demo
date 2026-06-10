@@ -3,11 +3,9 @@
 Ranks ``chunk_frames`` (by an image/caption vector, or BM25 over the caption
 text), dedups to one best frame per chunk, then fetches the matching ``chunks``
 payload rows and re-orders them to the frame ranking. Backs visual / scene /
-scene_fts search and the frame legs of ``all``. Extracted verbatim from the
-former monolithic ``service.py`` — only the error mapping changed (the join
-failure raises a domain :class:`ValidationError`, real error logged not
-interpolated). The graceful-degradation ``except`` blocks (no index yet → ``[]``)
-keep their original ``# noqa: BLE001`` semantics.
+scene_fts search and the frame legs of ``all``. A join failure raises a domain
+:class:`ValidationError` (real error logged, never interpolated); the
+graceful-degradation ``except`` blocks degrade to ``[]`` when no index exists yet.
 """
 
 from __future__ import annotations

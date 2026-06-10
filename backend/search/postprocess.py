@@ -2,7 +2,7 @@
 
 Parses each hit's per-word alignments, attaches the chunk's representative-frame
 caption (for the list/table views), and provides the RRF fusion used by the
-multi-ranking modes. Extracted verbatim from the former monolithic ``service.py``.
+multi-ranking modes.
 """
 
 from __future__ import annotations

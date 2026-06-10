@@ -5,9 +5,11 @@ Exposes the full pipeline as subcommands: ``transcribe``, ``detect-language``,
 ``download``, ``extract-chunk-frames``, ``compact``. Run ``raudio --help`` for
 the authoritative list.
 
-The Typer ``app`` lives in :mod:`._app`; each command group module registers its
-commands against it. Importing those modules here is what wires them onto ``app``
-so the ``raudio.cli:app`` console entry point sees the full command set.
+The Typer ``app`` lives in :mod:`._app` (underscored: a plain ``app.py`` would
+make ``raudio.cli.app`` ambiguously both that module and this re-exported Typer
+object). Each command group module registers against it; importing those modules
+here is what wires them onto ``app`` so the entry point (``raudio.__main__``)
+sees the full command set.
 """
 
 from . import features, ingest, media, search, transcribe  # noqa: F401 — register commands

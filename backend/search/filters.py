@@ -1,7 +1,7 @@
 """SQL WHERE-clause composition + value escaping — pure string logic, no Lance.
 
-Extracted verbatim from the former monolithic ``service.py``. No exceptions, no
-Lance handles: just builds the SQL the retrieval modules push down as a filter.
+No exceptions, no Lance handles: just builds the SQL the retrieval modules push
+down as a filter.
 """
 
 from __future__ import annotations
