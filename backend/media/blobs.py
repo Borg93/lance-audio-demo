@@ -41,7 +41,7 @@ def rowid_for_doc_id(ds: lance.LanceDataset, doc_id: str) -> int | None:
 
 
 def stream_blob_range(
-    ds: lance.LanceDataset, column: str, rowid: int, start: int, end: int
+    ds: lance.LanceDataset, column: str, rowid: int, *, start: int, end: int
 ) -> Iterator[bytes]:
     """Yield bytes of the inclusive ``[start, end]`` range from a blob column."""
     blob = ds.take_blobs(column, ids=[rowid])[0]

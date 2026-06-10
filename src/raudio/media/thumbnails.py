@@ -16,6 +16,8 @@ import logging
 import subprocess
 from pathlib import Path
 
+from raudio.errors import RaudioError
+
 logger = logging.getLogger(__name__)
 
 # File extensions we try to thumbnail. Everything else is skipped silently.
@@ -28,7 +30,7 @@ AUDIO_EXTS: frozenset[str] = frozenset(
 MEDIA_EXTS: frozenset[str] = VIDEO_EXTS | AUDIO_EXTS
 
 
-def _extract_video_frame(src: Path, dest: Path, at_sec: float, width: int) -> bool:
+def _extract_video_frame(src: Path, dest: Path, *, at_sec: float, width: int) -> bool:
     """Pull a single frame at ``at_sec`` and resize to ``width`` (keep AR)."""
     # Fast seek (-ss before -i) is less accurate but ~100× faster on long files.
     # For long press-conf videos, accuracy doesn't matter for a thumbnail.
@@ -73,7 +75,7 @@ def generate_thumbnails(
     ``{"ok", "skipped", "failed", "unsupported"}``.
     """
     if not input_dir.is_dir():
-        raise SystemExit(f"Input directory not found: {input_dir}")
+        raise RaudioError(f"Input directory not found: {input_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     buckets: dict[str, list[str]] = {}
@@ -93,7 +95,7 @@ def generate_thumbnails(
 
         ok = False
         if ext in VIDEO_EXTS:
-            ok = _extract_video_frame(src, dest, at_sec, width)
+            ok = _extract_video_frame(src, dest, at_sec=at_sec, width=width)
         elif ext in AUDIO_EXTS:
             ok = _render_waveform(src, dest, width)
 

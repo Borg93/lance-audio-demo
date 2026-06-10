@@ -61,7 +61,7 @@ class TestRunSearchErrors:
     def test_semantic_without_embedding_column_is_400(self, chunks) -> None:
         spec = SearchSpec(q="carbon", mode=SearchMode.SEMANTIC)
         with pytest.raises(HTTPException) as exc:
-            run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=None)
+            run_search(chunks, None, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert exc.value.status_code == 400
         assert "embed-chunks" in exc.value.detail
 
@@ -69,21 +69,21 @@ class TestRunSearchErrors:
         # Image-only hybrid: no text vector, so FTS half can't run.
         spec = SearchSpec(q="", mode=SearchMode.HYBRID)
         with pytest.raises(HTTPException) as exc:
-            run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=b"jpeg")
+            run_search(chunks, None, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=b"jpeg")
         assert exc.value.status_code == 400
         assert "text query" in exc.value.detail
 
     def test_hybrid_without_embedding_column_is_400(self, chunks) -> None:
         spec = SearchSpec(q="carbon", mode=SearchMode.HYBRID)
         with pytest.raises(HTTPException) as exc:
-            run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=None)
+            run_search(chunks, None, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert exc.value.status_code == 400
 
 
 class TestRunSearchDegradation:
     def test_fts_returns_parsed_alignments_key(self, chunks) -> None:
         spec = SearchSpec(q="carbon", mode=SearchMode.FTS)
-        hits = run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=None)
+        hits = run_search(chunks, None, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert hits
         assert "alignments" in hits[0]
         assert "alignments_json" not in hits[0]
@@ -91,13 +91,13 @@ class TestRunSearchDegradation:
     def test_visual_without_frames_returns_empty(self, chunks) -> None:
         # No chunk_frames table → frame search degrades to [] instead of erroring.
         spec = SearchSpec(q="anything", mode=SearchMode.VISUAL)
-        hits = run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=None)
+        hits = run_search(chunks, None, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert hits == []
 
     def test_all_without_embeddings_falls_back_to_fts(self, chunks) -> None:
         # 'all' fuses FTS + (absent) vectors; the FTS ranking still comes through.
         spec = SearchSpec(q="carbon emissions", mode=SearchMode.ALL)
-        hits = run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=None)
+        hits = run_search(chunks, None, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert hits
 
 
@@ -119,7 +119,7 @@ class TestSceneSearch:
     def test_scene_returns_chunk_hits(self, captioned) -> None:
         chunks, frames = captioned
         spec = SearchSpec(q="anything", mode=SearchMode.SCENE)
-        hits = run_search(chunks, frames, _embedder, _no_reranker, spec, image_bytes=None)
+        hits = run_search(chunks, frames, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         # caption_embedding is populated → scene search ranks frames, joins to chunks.
         assert hits
         assert {"doc_id", "text", "caption"} <= hits[0].keys()
@@ -130,7 +130,7 @@ class TestSceneSearch:
         # The best frame's cosine `_distance` must ride onto the joined chunk row.
         chunks, frames = captioned
         spec = SearchSpec(q="anything", mode=SearchMode.SCENE)
-        hits = run_search(chunks, frames, _embedder, _no_reranker, spec, image_bytes=None)
+        hits = run_search(chunks, frames, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert hits and "_distance" in hits[0]
 
     def test_scene_fts_hit_carries_the_bm25_score(self, captioned) -> None:
@@ -138,19 +138,19 @@ class TestSceneSearch:
         # survive the join back to chunks.
         chunks, frames = captioned
         spec = SearchSpec(q="caption", mode=SearchMode.SCENE_FTS)
-        hits = run_search(chunks, frames, _no_embedder, _no_reranker, spec, image_bytes=None)
+        hits = run_search(chunks, frames, get_embedder=_no_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert hits and "_score" in hits[0]
 
     def test_scene_without_frames_is_empty(self, chunks) -> None:
         # No chunk_frames table → scene degrades to [] like visual (not a 500).
         spec = SearchSpec(q="carbon", mode=SearchMode.SCENE)
-        assert run_search(chunks, None, _embedder, _no_reranker, spec, image_bytes=None) == []
+        assert run_search(chunks, None, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None) == []
 
     def test_caption_rides_along_on_fts_hits(self, captioned) -> None:
         # Captions surface on EVERY mode (for the list/table views), not just scene.
         chunks, frames = captioned
         spec = SearchSpec(q="carbon", mode=SearchMode.FTS)
-        hits = run_search(chunks, frames, _embedder, _no_reranker, spec, image_bytes=None)
+        hits = run_search(chunks, frames, get_embedder=_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert hits and hits[0]["caption"]
 
     def test_scene_fts_keyword_search(self, captioned) -> None:
@@ -159,26 +159,26 @@ class TestSceneSearch:
         # only; the embed getter is never called on this path).
         chunks, frames = captioned
         spec = SearchSpec(q="caption", mode=SearchMode.SCENE_FTS)
-        hits = run_search(chunks, frames, _no_embedder, _no_reranker, spec, image_bytes=None)
+        hits = run_search(chunks, frames, get_embedder=_no_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None)
         assert hits
         assert {"doc_id", "text", "caption"} <= hits[0].keys()
 
     def test_scene_fts_without_captions_is_empty(self, chunks) -> None:
         spec = SearchSpec(q="anything", mode=SearchMode.SCENE_FTS)
-        assert run_search(chunks, None, _no_embedder, _no_reranker, spec, image_bytes=None) == []
+        assert run_search(chunks, None, get_embedder=_no_embedder, get_reranker=_no_reranker, spec=spec, image_bytes=None) == []
 
 
 class TestSearchHelpers:
     def test_vector_search_missing_column_returns_empty(self, chunks) -> None:
         vec = FakeEmbedClient().embed_text(["x"])[0]
-        assert _vector_search(chunks, vec, "text_embedding", 5, None) == []
+        assert _vector_search(chunks, vec, "text_embedding", n=5, where=None) == []
 
     def test_vector_search_none_vec_returns_empty(self, chunks) -> None:
-        assert _vector_search(chunks, None, "text_embedding", 5, None) == []
+        assert _vector_search(chunks, None, "text_embedding", n=5, where=None) == []
 
     def test_frame_search_none_table_returns_empty(self, chunks) -> None:
         vec = FakeEmbedClient().embed_text(["x"])[0]
-        assert _frame_search(None, chunks, vec, 5, None) == []
+        assert _frame_search(None, chunks, vec, n=5, where=None) == []
 
     def test_postprocess_parses_and_pops_raw(self) -> None:
         out = _postprocess_hits([{"text": "hi", "alignments_json": '[{"words": []}]'}])

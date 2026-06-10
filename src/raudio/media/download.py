@@ -20,6 +20,8 @@ from pathlib import Path
 import httpx
 from tqdm import tqdm
 
+from raudio.errors import RaudioError
+
 logger = logging.getLogger(__name__)
 
 MEDIA_URL = "https://iiifintern-ai.ra.se/api/audiovideo/{bildid}.mp4"
@@ -40,6 +42,7 @@ def read_manifest(csv_path: Path) -> list[dict[str, str]]:
 async def _download_one(
     client: httpx.AsyncClient,
     row: dict[str, str],
+    *,
     output_dir: Path,
     sem: asyncio.Semaphore,
     pbar: tqdm,
@@ -75,6 +78,7 @@ async def _download_one(
 
 async def _run(
     rows: list[dict[str, str]],
+    *,
     output_dir: Path,
     concurrency: int,
     timeout: float,
@@ -89,7 +93,7 @@ async def _run(
     async with httpx.AsyncClient(timeout=timeout_cfg, limits=limits) as client:
         with tqdm(total=len(rows), desc="download", unit="file") as pbar:
             tasks = [
-                _download_one(client, row, output_dir, sem, pbar) for row in rows
+                _download_one(client, row, output_dir=output_dir, sem=sem, pbar=pbar) for row in rows
             ]
             for coro in asyncio.as_completed(tasks):
                 bildid, status = await coro
@@ -121,7 +125,7 @@ def download_manifest(
         ``{"ok": [...], "skipped": [...], "http 404": [...], "error: ReadTimeout": [...]}``.
     """
     if not csv_path.is_file():
-        raise SystemExit(f"CSV not found: {csv_path}")
+        raise RaudioError(f"CSV not found: {csv_path}")
 
     rows = read_manifest(csv_path)
     if limit is not None:
@@ -132,11 +136,14 @@ def download_manifest(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(
-        f"downloading {len(rows)} file(s) from {csv_path.name} "
-        f"→ {output_dir}/ (concurrency={concurrency})"
+        "downloading %d file(s) from %s → %s/ (concurrency=%d)",
+        len(rows),
+        csv_path.name,
+        output_dir,
+        concurrency,
     )
 
-    buckets = asyncio.run(_run(rows, output_dir, concurrency, timeout))
+    buckets = asyncio.run(_run(rows, output_dir=output_dir, concurrency=concurrency, timeout=timeout))
 
     logger.info("summary:")
     for status in sorted(buckets):

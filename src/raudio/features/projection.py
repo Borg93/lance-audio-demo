@@ -121,15 +121,15 @@ def project_atlas_columns(
     _attach_column_by_row_id(
         chunks_path,
         x_col,
-        dict(zip(row_ids, xy[:, 0].tolist(), strict=True)),
-        pa.float32(),
+        value_by_row_id=dict(zip(row_ids, xy[:, 0].tolist(), strict=True)),
+        pa_type=pa.float32(),
         batch_rows=batch_rows,
     )
     _attach_column_by_row_id(
         chunks_path,
         y_col,
-        dict(zip(row_ids, xy[:, 1].tolist(), strict=True)),
-        pa.float32(),
+        value_by_row_id=dict(zip(row_ids, xy[:, 1].tolist(), strict=True)),
+        pa_type=pa.float32(),
         batch_rows=batch_rows,
         progress=None if clusters is not None else progress,
     )
@@ -137,8 +137,8 @@ def project_atlas_columns(
         _attach_column_by_row_id(
             chunks_path,
             cluster_col,
-            dict(zip(row_ids, clusters.tolist(), strict=True)),
-            pa.int32(),
+            value_by_row_id=dict(zip(row_ids, clusters.tolist(), strict=True)),
+            pa_type=pa.int32(),
             batch_rows=batch_rows,
             progress=progress,
         )
@@ -221,9 +221,9 @@ def _evoc_clusters(matrix: np.ndarray, *, n_neighbors: int, seed: int | None) ->
 def _attach_column_by_row_id(
     chunks_path: str | Path,
     name: str,
+    *,
     value_by_row_id: dict[int, Any],
     pa_type: pa.DataType,
-    *,
     batch_rows: int,
     progress: Callable[[int], None] | None = None,
 ) -> None:

@@ -30,6 +30,7 @@ import pytest
 
 from raudio.asr import detect_language as dl
 from raudio.asr.detect_language import detect_and_sort
+from raudio.errors import RaudioError
 
 # Default model id routes to the *whisper* probe branch; an mms-lid id routes to
 # the *mms* branch. We patch both so either branch yields our fake probe.
@@ -313,11 +314,11 @@ def test_empty_directory_returns_empty_dict(patched_io, monkeypatch, tmp_path):
     assert results == {}
 
 
-def test_audio_dir_not_a_directory_raises_system_exit(tmp_path):
-    """A non-directory ``audio_dir`` is a hard CLI error → SystemExit."""
+def test_audio_dir_not_a_directory_raises_domain_error(tmp_path):
+    """A non-directory ``audio_dir`` is a domain error (the CLI maps it to exit 1)."""
     missing = tmp_path / "nope"
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(RaudioError):
         detect_and_sort(audio_dir=missing, model=WHISPER_MODEL, move=False)
 
 

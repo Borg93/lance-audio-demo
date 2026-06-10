@@ -61,6 +61,14 @@ class SearchSpec(BaseModel):
     # True => filter applies BEFORE vector/FTS search (prefilter); False => after.
     prefilter: bool = True
 
+    @field_validator("q", "q_vec")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        # Boundary normalization: a whitespace-only query must read as empty so
+        # the handlers' empty-input short-circuit (and q_vec's fall-back-to-q
+        # contract) hold.
+        return v.strip()
+
     @field_validator("n")
     @classmethod
     def _clamp_n(cls, v: int) -> int:
@@ -80,3 +88,13 @@ class SearchSpec(BaseModel):
     @classmethod
     def _clamp_weight(cls, v: float | None) -> float | None:
         return None if v is None else max(0.0, min(1.0, float(v)))
+
+
+class PostSearchSpec(SearchSpec):
+    """The POST (multipart, image upload) variant: defaults to hybrid mode.
+
+    Same fields and clamping as :class:`SearchSpec` — only the default ``mode``
+    differs, matching the image-search UX (an upload usually wants fusion).
+    """
+
+    mode: SearchMode = SearchMode.HYBRID

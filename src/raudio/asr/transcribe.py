@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from raudio.errors import RaudioError
+
 logger = logging.getLogger(__name__)
 
 # Suitable (language → wav2vec2 emissions model) defaults. See also:
@@ -60,14 +62,14 @@ def run_transcribe(
             text_normalizer,
         )
     except ImportError as e:
-        raise SystemExit(
+        raise RaudioError(
             "Could not import easytranscriber/easyaligner (core dependencies).\n"
             "Reinstall the project environment with:  uv sync\n"
             f"(underlying error: {e})"
         ) from e
 
     if not audio_dir.is_dir():
-        raise SystemExit(f"Audio directory not found: {audio_dir}")
+        raise RaudioError(f"Audio directory not found: {audio_dir}")
 
     emissions_model = emissions_model or DEFAULT_EMISSIONS_MODEL.get(
         language, "facebook/wav2vec2-base-960h"
@@ -78,7 +80,7 @@ def run_transcribe(
         f.name for f in audio_dir.iterdir() if f.is_file() and not f.name.startswith(".")
     )
     if not audio_files:
-        raise SystemExit(f"No audio files found in {audio_dir}")
+        raise RaudioError(f"No audio files found in {audio_dir}")
 
     logger.info(
         f"transcribing {len(audio_files)} file(s) from {audio_dir} "

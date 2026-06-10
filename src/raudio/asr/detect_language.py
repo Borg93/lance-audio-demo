@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING
 
 from easytranscriber.audio import read_audio_segment
 
+from raudio.errors import RaudioError
+
 from .transcribe import DEFAULT_EMISSIONS_MODEL
 
 if TYPE_CHECKING:
@@ -153,7 +155,7 @@ def detect_and_sort(
         otherwise the raw code passes through.
     """
     if not audio_dir.is_dir():
-        raise SystemExit(f"Audio directory not found: {audio_dir}")
+        raise RaudioError(f"Audio directory not found: {audio_dir}")
 
     files = sorted(
         f for f in audio_dir.iterdir()
@@ -171,8 +173,11 @@ def detect_and_sort(
         probe = _whisper_probe(model, cache_dir, device)
 
     logger.info(
-        f"detecting language in {len(files)} file(s) with {model} "
-        f"({num_windows} × {sample_seconds:.0f}s windows per file)"
+        "detecting language in %d file(s) with %s (%d × %.0fs windows per file)",
+        len(files),
+        model,
+        num_windows,
+        sample_seconds,
     )
 
     results: dict[str, tuple[str, float]] = {}

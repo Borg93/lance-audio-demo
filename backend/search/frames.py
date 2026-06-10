@@ -51,9 +51,9 @@ def _frame_search(
     chunk_frames,
     chunks,
     vec: Any,
+    *,
     n: int,
     where: str | None,
-    *,
     column: str = _FRAME_EMBED_COLUMN,
     scope_where: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -99,9 +99,9 @@ def _frame_fts_search(
     chunk_frames,
     chunks,
     query: str,
+    *,
     n: int,
     where: str | None,
-    *,
     scope_where: str | None = None,
 ) -> list[dict[str, Any]]:
     """BM25 keyword search over `chunk_frames.caption`, joined back to `chunks`.

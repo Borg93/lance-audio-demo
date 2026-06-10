@@ -163,7 +163,7 @@ def extract_chunk_frame(
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _extract_one(job: FrameJob, width: int, jpeg_quality: int, timeout: float) -> ExtractedFrame:
+def _extract_one(job: FrameJob, *, width: int, jpeg_quality: int, timeout: float) -> ExtractedFrame:
     """Worker-pool task: extract one frame, capturing failure as an error field."""
     try:
         jpeg, w, h = extract_chunk_frame(
@@ -220,14 +220,14 @@ def extract_chunk_frames_parallel(
 
     if workers <= 1:
         for job in jobs:
-            yield _extract_one(job, width, jpeg_quality, timeout)
+            yield _extract_one(job, width=width, jpeg_quality=jpeg_quality, timeout=timeout)
         return
 
     # ffmpeg runs as a subprocess (GIL released during wait), so threads parallelize
     # well. ThreadPool also dodges the `lance is not fork-safe` warning that
     # ProcessPoolExecutor triggers via Linux's default fork start method.
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(_extract_one, job, width, jpeg_quality, timeout) for job in jobs]
+        futures = [pool.submit(_extract_one, job, width=width, jpeg_quality=jpeg_quality, timeout=timeout) for job in jobs]
         for fut in as_completed(futures):
             yield fut.result()
 

@@ -339,8 +339,8 @@ def _write_chunks_table(
     db: lancedb.DBConnection,
     db_path: str | Path,
     table_name: str,
-    chunks_table: pa.Table,
     *,
+    chunks_table: pa.Table,
     incoming_doc_ids: set[str],
 ) -> lancedb.table.Table:
     """Create the chunks table, or idempotently replace these docs' rows in it.
@@ -434,7 +434,7 @@ def ingest_many(
         db,
         db_path,
         table_name,
-        chunks_table,
+        chunks_table=chunks_table,
         incoming_doc_ids={row["doc_id"] for row in chunk_rows},
     )
 

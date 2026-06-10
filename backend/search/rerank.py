@@ -17,6 +17,7 @@ def _rerank_by_text(
     get_reranker: Callable[[], VLLMReranker],
     query: str,
     hits: list[dict[str, Any]],
+    *,
     rerank_n: int,
     n: int,
 ) -> list[dict[str, Any]]:

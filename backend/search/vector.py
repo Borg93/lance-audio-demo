@@ -24,9 +24,9 @@ def _vector_search(
     table,
     vec: Any,
     column: str,
+    *,
     n: int,
     where: str | None,
-    *,
     prefilter: bool = True,
 ) -> list[dict[str, Any]]:
     """Run a cosine vector search on ``column``; returns raw list of dicts.

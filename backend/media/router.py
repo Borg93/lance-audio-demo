@@ -132,7 +132,7 @@ def media(doc_id: str, request: Request, state: StateDep) -> Response:
             return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
         start, end = rng
         return StreamingResponse(
-            stream_blob_range(state.docs_ds, "media_blob", rowid, start, end),
+            stream_blob_range(state.docs_ds, "media_blob", rowid, start=start, end=end),
             status_code=206,
             media_type=mime,
             headers={
@@ -144,7 +144,7 @@ def media(doc_id: str, request: Request, state: StateDep) -> Response:
         )
 
     return StreamingResponse(
-        stream_blob_range(state.docs_ds, "media_blob", rowid, 0, total - 1),
+        stream_blob_range(state.docs_ds, "media_blob", rowid, start=0, end=total - 1),
         media_type=mime,
         headers={
             "Content-Length": str(total),

@@ -11,13 +11,13 @@ signatures at runtime, so the annotations stay real objects.
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from backend.deps import EmbedderFactoryDep, RerankerFactoryDep, StateDep
 from backend.schemas.search import DocTranscriptChunk, DocTranscriptResponse
 from backend.search.service import run_search
-from backend.search.spec import SearchMode, SearchSpec
+from backend.search.spec import PostSearchSpec, SearchMode, SearchSpec
 from raudio.retrieval.search import parse_alignments_json
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -28,54 +28,24 @@ def search_get(
     state: StateDep,
     get_embedder: EmbedderFactoryDep,
     get_reranker: RerankerFactoryDep,
-    q: Annotated[str, Query()] = "",
-    n: Annotated[int, Query()] = 20,
-    mode: Annotated[SearchMode, Query()] = SearchMode.FTS,
-    rerank: Annotated[bool, Query()] = False,
-    rerank_n: Annotated[int, Query()] = 20,
-    language: Annotated[str | None, Query()] = None,
-    namn: Annotated[str | None, Query()] = None,
-    referenskod: Annotated[str | None, Query()] = None,
-    extraid: Annotated[str | None, Query()] = None,
-    topic: Annotated[str | None, Query()] = None,
-    fuzziness: Annotated[int, Query()] = 0,
-    phrase: Annotated[bool, Query()] = False,
-    weight: Annotated[float | None, Query()] = None,
-    q_vec: Annotated[str, Query()] = "",
-    where: Annotated[str | None, Query()] = None,
-    prefilter: Annotated[bool, Query()] = True,
+    # The whole query string binds to the spec model (FastAPI Pydantic
+    # query-param model): each field is one query param, validated + clamped
+    # by SearchSpec itself, so the wire shape is unchanged.
+    spec: Annotated[SearchSpec, Query()],
 ) -> list[dict[str, Any]]:
-    spec = SearchSpec(
-        q=q.strip(),
-        n=n,
-        mode=mode,
-        rerank=rerank,
-        rerank_n=rerank_n,
-        language=language,
-        namn=namn,
-        referenskod=referenskod,
-        extraid=extraid,
-        topic=topic,
-        fuzziness=fuzziness,
-        phrase=phrase,
-        weight=weight,
-        q_vec=q_vec.strip(),
-        where=where,
-        prefilter=prefilter,
-    )
     if not spec.q and not spec.q_vec and not spec.topic:
         return []
     return run_search(
-        state.chunks, state.chunk_frames_tbl, get_embedder, get_reranker, spec, image_bytes=None
+        state.chunks,
+        state.chunk_frames_tbl,
+        get_embedder=get_embedder,
+        get_reranker=get_reranker,
+        spec=spec,
+        image_bytes=None,
     )
 
 
-@router.post("/search")
-async def search_post(
-    state: StateDep,
-    get_embedder: EmbedderFactoryDep,
-    get_reranker: RerankerFactoryDep,
-    image: Annotated[UploadFile | None, File()] = None,
+def _post_spec(
     q: Annotated[str, Form()] = "",
     n: Annotated[int, Form()] = 20,
     mode: Annotated[SearchMode, Form()] = SearchMode.HYBRID,
@@ -90,25 +60,40 @@ async def search_post(
     q_vec: Annotated[str, Form()] = "",
     where: Annotated[str | None, Form()] = None,
     prefilter: Annotated[bool, Form()] = True,
-) -> list[dict[str, Any]]:
-    spec = SearchSpec(
-        q=q.strip(),
+) -> PostSearchSpec:
+    """Marshal the multipart form fields into the spec model.
+
+    A dependency (not an ``Annotated[…, Form()]`` model on the route) because a
+    Form model next to a ``File()`` param makes FastAPI EMBED the model — it
+    would then expect a literal ``spec`` form key instead of the flat fields.
+    This keeps the wire shape flat and ``spec.py`` free of FastAPI imports.
+    """
+    return PostSearchSpec(
+        q=q,
         n=n,
         mode=mode,
         rerank=rerank,
         rerank_n=rerank_n,
+        weight=weight,
         language=language,
         namn=namn,
         referenskod=referenskod,
         extraid=extraid,
         topic=topic,
-        fuzziness=0,
-        phrase=False,
-        weight=weight,
-        q_vec=q_vec.strip(),
+        q_vec=q_vec,
         where=where,
         prefilter=prefilter,
     )
+
+
+@router.post("/search")
+async def search_post(
+    state: StateDep,
+    get_embedder: EmbedderFactoryDep,
+    get_reranker: RerankerFactoryDep,
+    spec: Annotated[PostSearchSpec, Depends(_post_spec)],
+    image: Annotated[UploadFile | None, File()] = None,
+) -> list[dict[str, Any]]:
     image_bytes = await image.read() if image is not None else None
     if not spec.q and not spec.q_vec and not image_bytes and not spec.topic:
         return []
@@ -117,9 +102,9 @@ async def search_post(
         run_search,
         state.chunks,
         state.chunk_frames_tbl,
-        get_embedder,
-        get_reranker,
-        spec,
+        get_embedder=get_embedder,
+        get_reranker=get_reranker,
+        spec=spec,
         image_bytes=image_bytes,
     )
 
