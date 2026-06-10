@@ -23,9 +23,9 @@ import asyncio
 import itertools
 import json
 import time
+from collections.abc import Awaitable, Callable
 from functools import partial
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from lightrag import LightRAG
 from lightrag.llm.openai import openai_complete_if_cache, openai_embed
@@ -158,7 +158,7 @@ async def llm_func(
 
 if ARGS.dummy_embeddings:
 
-    async def _const_embed(texts: list[str]) -> "object":
+    async def _const_embed(texts: list[str]) -> object:
         import numpy as np
 
         return np.ones((len(texts), 8), dtype=np.float32)
