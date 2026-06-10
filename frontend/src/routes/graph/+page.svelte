@@ -23,6 +23,7 @@
   } from 'd3-force';
   import { Button, Select, type SelectOption } from '$lib/components/ui';
   import GpuGraph from '$lib/graph/gpu-graph.svelte';
+  import GraphBreadcrumb from '$lib/graph/graph-breadcrumb.svelte';
   import {
     getGraphStatus,
     getGraphSubgraph,
@@ -101,6 +102,8 @@
 
   let detail = $state<GraphEntityResponse | null>(null);
   let selectedId = $state<string | null>(null);
+  // navigation trail for the breadcrumb; empty = overview
+  let trail = $state<{ id: string; name: string }[]>([]);
 
   // ── force-layout buffers (mutated in place; layoutVersion is the GPU signal)
   let graphNodes = $state.raw<GraphNode[]>([]);
@@ -180,12 +183,17 @@
     nodeSize = size;
     nodeState = new Uint8Array(n);
     edgesIdx = ei;
-    recomputeFit();
-    layoutVersion++;
 
+    // Settle the force layout SYNCHRONOUSLY (milliseconds at these node
+    // counts) so nodes mount already in their final positions and the camera
+    // fits exactly once. A live-ticking sim fit the camera to the seed
+    // circle, animated the collapse, then snap-refit on 'end' — three camera
+    // moves per click that read as wild zooming and stomped any manual
+    // pan/zoom made mid-transition.
     simNodes = nodes.map((nd, i) => ({ id: nd.id, idx: i, x: x[i], y: y[i] }));
     const links = valid.map((e) => ({ source: e.source, target: e.target }));
     sim = forceSimulation<SimNode>(simNodes)
+      .stop()
       .force('charge', forceManyBody<SimNode>().strength(-220))
       .force(
         'link',
@@ -196,15 +204,14 @@
       )
       .force('collide', forceCollide<SimNode>((d) => sizeOf(graphNodes[d.idx]?.mentions ?? 1) / 2 + 5))
       .force('x', forceX<SimNode>(0).strength(0.04))
-      .force('y', forceY<SimNode>(0).strength(0.04))
-      .on('tick', () => {
-        for (let i = 0; i < simNodes.length; i++) {
-          nodesX[i] = simNodes[i]!.x ?? 0;
-          nodesY[i] = simNodes[i]!.y ?? 0;
-        }
-        layoutVersion++;
-      })
-      .on('end', recomputeFit);
+      .force('y', forceY<SimNode>(0).strength(0.04));
+    for (let tick = 0; sim.alpha() > 0.025 && tick < 400; tick++) sim.tick();
+    for (let i = 0; i < simNodes.length; i++) {
+      nodesX[i] = simNodes[i]!.x ?? 0;
+      nodesY[i] = simNodes[i]!.y ?? 0;
+    }
+    recomputeFit();
+    layoutVersion++;
   }
 
   // ── data loaders ──────────────────────────────────────────────────────────
@@ -214,6 +221,7 @@
       const sub = await getGraphSubgraph(undefined, 120);
       selectedId = null;
       detail = null;
+      trail = [];
       buildLayout(sub.nodes, sub.edges);
     } finally {
       loading = false;
@@ -228,6 +236,10 @@
       const [sub, d] = await Promise.all([getGraphSubgraph(id, 60), getGraphEntity(id)]);
       selectedId = id;
       detail = d;
+      // breadcrumb trail: revisiting a crumb truncates back to it, new hops append
+      const at = trail.findIndex((c) => c.id === id);
+      const name = d.entity?.name ?? id;
+      trail = at >= 0 ? trail.slice(0, at + 1) : [...trail, { id, name }];
       buildLayout(sub.nodes, sub.edges);
     } finally {
       loading = false;
@@ -369,6 +381,8 @@
           {/each}
         </div>
       </div>
+
+      <GraphBreadcrumb {trail} onNavigate={(id) => (id ? selectEntity(id) : loadOverview())} />
 
       {#if cypherOpen}
         <div class="flex items-start gap-2">
