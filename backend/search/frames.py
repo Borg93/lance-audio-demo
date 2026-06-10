@@ -25,7 +25,7 @@ from backend.search.constants import (
     _VECTOR_NPROBES,
     _VECTOR_REFINE_FACTOR,
 )
-from backend.search.postprocess import _chunk_key
+from backend.search.postprocess import ChunkKey, _chunk_key
 
 logger = logging.getLogger(__name__)
 
@@ -139,13 +139,19 @@ def _frames_to_chunk_hits(
     Shared by vector (visual/scene) and FTS (scene keyword) frame search — only the
     upstream ranking differs, the join is identical.
     """
-    keys: list[tuple[Any, int, int]] = []
-    seen: set[tuple[Any, int, int]] = set()
+    keys: list[ChunkKey] = []
+    seen: set[ChunkKey] = set()
+    # Carry each chunk's frame ranking signal (`_distance` for vector search,
+    # `_score` for caption FTS) from the best (first) ranked frame, so the hit
+    # keeps a score after the join below — the results table / `relevanceOf`
+    # reads it. Without this, scene/visual hits arrive scoreless.
+    score_by_key: dict[ChunkKey, dict[str, float]] = {}
     for r in ranked:
         key = _chunk_key(r)
         if key not in seen:
             seen.add(key)
             keys.append(key)
+            score_by_key[key] = {k: r[k] for k in ("_distance", "_score") if k in r}
     if not keys:
         return []
     # doc_id is a sha1 hex and the ids are ints, so the filter is safe. A pure
@@ -161,4 +167,4 @@ def _frames_to_chunk_hits(
         logger.warning("frame search join failed", exc_info=True)
         raise ValidationError("frame search join failed") from e
     by_key = {_chunk_key(r): r for r in rows}
-    return [by_key[k] for k in keys if k in by_key]
+    return [{**by_key[k], **score_by_key[k]} for k in keys if k in by_key]

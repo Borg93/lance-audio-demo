@@ -12,6 +12,11 @@ from typing import Any
 from backend.search.constants import _CAPTION_COLUMN
 from backend.search.filters import _sql_quote
 
+# Stable (doc_id, speech_id, chunk_id) identity for a chunk/frame, shared by the
+# chunks and chunk_frames tables. Plain alias — this backend targets 3.11, where
+# the PEP 695 `type` statement isn't available.
+ChunkKey = tuple[str, int, int]
+
 
 def _postprocess_hits(raw: list[dict[str, Any]], chunk_frames: Any = None) -> list[dict[str, Any]]:
     """Finalize hits for the API: parse alignments + attach each frame's caption.
@@ -27,9 +32,9 @@ def _postprocess_hits(raw: list[dict[str, Any]], chunk_frames: Any = None) -> li
     return raw
 
 
-def _chunk_key(hit: dict[str, Any]) -> tuple[Any, int, int]:
+def _chunk_key(hit: dict[str, Any]) -> ChunkKey:
     """The (doc_id, speech_id, chunk_id) identity shared by chunks and frames."""
-    return (hit["doc_id"], int(hit["speech_id"]), int(hit["chunk_id"]))
+    return (str(hit["doc_id"]), int(hit["speech_id"]), int(hit["chunk_id"]))
 
 
 def _attach_captions(chunk_frames, hits: list[dict[str, Any]]) -> None:
