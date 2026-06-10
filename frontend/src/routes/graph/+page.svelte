@@ -88,6 +88,7 @@
   let status = $state<GraphStatus | null>(null);
   let view = $state<View>('graph');
   let loading = $state(false);
+  let showHelp = $state(false);
 
   let searchQ = $state('');
   let matches = $state<GraphMatch[]>([]);
@@ -351,6 +352,13 @@
         <Button variant="outline" size="sm" onclick={loadOverview}>Overview</Button>
 
         <div class="ml-auto flex items-center gap-1">
+          <Button
+            variant={showHelp ? 'default' : 'ghost'}
+            size="sm"
+            onclick={() => (showHelp = !showHelp)}
+            title="How to read this">?</Button
+          >
+          <div class="bg-border mx-1 h-4 w-px"></div>
           {#each ['graph', 'table', 'json'] as const as v (v)}
             <Button
               variant={view === v ? 'default' : 'ghost'}
@@ -370,6 +378,37 @@
             bind:value={cypherText}
           ></textarea>
           <Button size="sm" onclick={runCypher}>Run</Button>
+        </div>
+      {/if}
+
+      {#if showHelp}
+        <div class="bg-muted/40 border-border text-muted-foreground rounded-md border p-3 text-xs leading-relaxed">
+          <p class="text-foreground mb-1 font-medium">What is this?</p>
+          A knowledge graph LightRAG extracted from the press-conference transcripts. Each
+          <b>node is an entity</b> (person, organisation, place, event…) and each <b>edge is a
+          relationship</b> it pulled from the text. Everything is queried live with Cypher via
+          lance-graph.
+          <p class="text-foreground mt-2 mb-1 font-medium">How to use it</p>
+          <ul class="ml-4 list-disc space-y-0.5">
+            <li><b>Search</b> an entity (top-left) or click a node → its side panel opens.</li>
+            <li>
+              The side panel lists <b>clips</b> (the 30 s moments it's mentioned — click one to play
+              it), plus <b>related</b> and <b>co-occurring</b> entities (click to re-centre).
+            </li>
+            <li>
+              <b>Cypher presets</b> / the REPL answer precise questions; results show in the
+              <b>Table</b> / <b>JSON</b> tabs.
+            </li>
+          </ul>
+          <p class="text-foreground mt-2 mb-1 font-medium">How to read the graph</p>
+          <ul class="ml-4 list-disc space-y-0.5">
+            <li><b>Node size</b> = how many clips mention it; <b>brighter</b> = appears in &gt;1 video.</li>
+            <li><b>Colour</b> = type (legend, bottom-left). Drag to pan, scroll to zoom, “Fit” to recentre.</li>
+            <li>
+              The picture is for <i>navigating</i> — the precise answers live in the clips list and
+              the Cypher/Table view.
+            </li>
+          </ul>
         </div>
       {/if}
     </div>
@@ -421,6 +460,17 @@
           {/if}
           <div class="absolute right-2 bottom-2">
             <Button variant="outline" size="sm" onclick={recomputeFit}>Fit</Button>
+          </div>
+          <div
+            class="bg-card/70 border-border text-muted-foreground absolute bottom-2 left-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-2 py-1 text-[10px] backdrop-blur"
+          >
+            {#each Object.entries(TYPE_RGB) as [t, rgb] (t)}
+              <span class="flex items-center gap-1">
+                <span class="size-2 rounded-full" style:background="rgb({rgb[0]},{rgb[1]},{rgb[2]})"></span>
+                {t}
+              </span>
+            {/each}
+            <span class="text-muted-foreground/70">· size = mentions · click a node for clips</span>
           </div>
         </div>
       {:else if view === 'table'}
