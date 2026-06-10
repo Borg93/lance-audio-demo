@@ -11,6 +11,7 @@ from typing import Any
 
 from backend.search.constants import _CAPTION_COLUMN
 from backend.search.filters import _sql_quote
+from raudio.retrieval.search import parse_alignments_json
 
 # Stable (doc_id, speech_id, chunk_id) identity for a chunk/frame, shared by the
 # chunks and chunk_frames tables. Plain alias — this backend targets 3.11, where
@@ -24,8 +25,6 @@ def _postprocess_hits(raw: list[dict[str, Any]], chunk_frames: Any = None) -> li
     ``chunk_frames`` is optional so unit tests can call this with parsed rows
     alone; ``run_search`` always passes it so list/table views get the caption.
     """
-    from raudio.retrieval.search import parse_alignments_json
-
     for h in raw:
         h["alignments"] = parse_alignments_json(h.pop("alignments_json", None))
     _attach_captions(chunk_frames, raw)

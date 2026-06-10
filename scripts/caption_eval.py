@@ -17,7 +17,12 @@ from pathlib import Path
 
 import lance
 
-from raudio.vllm.caption import CAPTION_INSTRUCTION, CAPTION_MODEL, DEFAULT_CAPTION_URL, VLLMCaptionClient
+from raudio.vllm.caption import (
+    CAPTION_INSTRUCTION,
+    CAPTION_MODEL,
+    DEFAULT_CAPTION_URL,
+    VLLMCaptionClient,
+)
 
 OUT_DIR = Path("/tmp/raudio_caption_eval")
 

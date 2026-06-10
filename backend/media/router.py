@@ -8,6 +8,7 @@ file; ``thumbnail`` / ``chunk_frame`` return small inline JPEGs.
 import logging
 from typing import Annotated
 
+import lance
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
@@ -26,6 +27,18 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["media"])
 
 
+def _doc_mime(ds: lance.LanceDataset, doc_id: str, column: str, default: str) -> str:
+    """MIME type stored for a document, or ``default`` when the cell is absent/null.
+
+    ``doc_id`` is already whitelisted by :func:`valid_doc_id` at every call site,
+    so inlining it into the filter literal is safe.
+    """
+    t = ds.to_table(columns=[column], filter=f"doc_id = '{doc_id}'", limit=1)
+    if t.num_rows > 0 and t.column(column)[0].is_valid:
+        return t.column(column)[0].as_py()
+    return default
+
+
 @router.get("/api/thumbnail/{doc_id}")
 def thumbnail(doc_id: str, state: StateDep) -> Response:
     valid_doc_id(doc_id)
@@ -34,12 +47,7 @@ def thumbnail(doc_id: str, state: StateDep) -> Response:
     rowid = rowid_for_doc_id(state.docs_ds, doc_id)
     if rowid is None:
         raise NotFoundError("doc_id not found")
-    mime_row = state.docs_ds.to_table(
-        columns=["thumbnail_mime"], filter=f"doc_id = '{doc_id}'", limit=1
-    )
-    mime = "image/jpeg"
-    if mime_row.num_rows > 0 and mime_row.column("thumbnail_mime")[0].is_valid:
-        mime = mime_row.column("thumbnail_mime")[0].as_py()
+    mime = _doc_mime(state.docs_ds, doc_id, "thumbnail_mime", "image/jpeg")
     blob = state.docs_ds.take_blobs("thumbnail", ids=[rowid])[0]
     with blob as f:
         data = f.read()
@@ -115,13 +123,7 @@ def media(doc_id: str, request: Request, state: StateDep) -> Response:
     if rowid is None:
         raise NotFoundError("doc_id not found")
 
-    mime_row = state.docs_ds.to_table(
-        columns=["media_mime"], filter=f"doc_id = '{doc_id}'", limit=1
-    )
-    mime = "application/octet-stream"
-    if mime_row.num_rows > 0 and mime_row.column("media_mime")[0].is_valid:
-        mime = mime_row.column("media_mime")[0].as_py()
-
+    mime = _doc_mime(state.docs_ds, doc_id, "media_mime", "application/octet-stream")
     total = doc_blob_size(state.docs_ds, "media_blob", rowid)
     range_hdr = request.headers.get("range")
     if range_hdr:

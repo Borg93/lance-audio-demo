@@ -381,9 +381,9 @@ def ingest_many(
 ) -> lancedb.table.Table:
     """Ingest many transcripts in one pass.
 
-    Writes the ``chunks`` table (always) and the ``documents`` table (when
-    ``audio_root`` is supplied). Builds the FTS + scalar indexes once at the
-    end.
+    Writes the ``chunks`` table (always) and the ``documents`` table (when any
+    of ``audio_root`` / ``media_base_uri`` / ``thumbnail_dir`` is supplied).
+    Builds the FTS + scalar indexes once at the end.
 
     Parameters
     ----------
@@ -392,9 +392,12 @@ def ingest_many(
     docs
         Iterable of parsed :class:`AudioMetadata`.
     audio_root
-        If set, each document's source media is slurped and written into the
-        ``documents`` table as a Lance blob-v2 column. Pass ``None`` to skip
-        the documents table entirely.
+        Root directory used to resolve each document's ``audio_path`` into a
+        local ``file://`` URI for the ``documents`` table's ``media_blob``
+        column (a Blob V2 *External* reference — the URI, never the bytes).
+    media_base_uri
+        Overrides the media URI base so ``media_blob`` points at e.g.
+        ``hf://…`` / ``s3://…`` instead of a local ``file://`` path.
     table_name
         Name of the chunks table. Defaults to ``"chunks"``.
     metadata_csv
@@ -402,6 +405,14 @@ def ingest_many(
         Rows are joined to transcripts by ``bildid == Path(audio_path).stem``;
         matched values populate the ``referenskod`` / ``namn`` / ``bildid`` /
         ``extraid`` columns in both tables.
+    thumbnail_dir
+        Directory of ``<audio stem>.jpg`` files; a matching file is loaded as
+        the document's inline ``thumbnail`` blob (missing files stay null).
+    fts_language
+        Tantivy stemmer language for the FTS index over ``text``.
+    doc_language
+        ISO 639-1 code written to every document row (e.g. inferred from the
+        alignments directory name by the CLI).
     """
     db = lancedb.connect(str(db_path))
 

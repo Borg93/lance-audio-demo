@@ -11,6 +11,9 @@ Two things break silently if these models drift:
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from raudio.vllm.schemas import (
     ChatCompletionResponse,
     ChatMessage,
@@ -78,3 +81,9 @@ class TestResponseParsing:
             {"results": [{"index": 2, "relevance_score": 0.91}, {"index": 0, "relevance_score": 0.4}]}
         )
         assert [(r.index, r.relevance_score) for r in resp.results] == [(2, 0.91), (0, 0.4)]
+
+    def test_empty_choices_fails_at_the_parse_boundary(self) -> None:
+        # A malformed reply with no choices must raise a ValidationError from the
+        # transport parse (min_length=1), not an IndexError at choices[0] later.
+        with pytest.raises(ValidationError):
+            ChatCompletionResponse.model_validate({"choices": []})

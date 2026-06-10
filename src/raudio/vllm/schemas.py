@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ── Request: OpenAI-style chat messages ──────────────────────────────────────
 
@@ -64,9 +64,14 @@ class _ChatChoice(BaseModel):
 
 
 class ChatCompletionResponse(BaseModel):
-    """``POST /v1/chat/completions`` reply — caption + summarize read ``choices``."""
+    """``POST /v1/chat/completions`` reply — caption + summarize read ``choices``.
 
-    choices: list[_ChatChoice]
+    ``min_length=1`` makes a malformed empty-``choices`` reply fail at the
+    transport parse boundary (a clear ``ValidationError`` from ``post``) instead
+    of an ``IndexError`` at the ``choices[0]`` read in each client.
+    """
+
+    choices: list[_ChatChoice] = Field(min_length=1)
 
 
 class _EmbeddingItem(BaseModel):

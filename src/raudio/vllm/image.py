@@ -31,6 +31,12 @@ from ..model.schema import EMBED_DIM
 # length, change the Makefile min/max_pixels pin to match (side² == pin).
 _IMAGE_SIDE = 392
 
+# Re-encode quality for the embedding payload. Trades wire size against fidelity
+# only — JPEG quality does NOT affect the vision-token count (that is pinned by
+# pixel area via _IMAGE_SIDE above). Whole-image similarity tolerates mild
+# compression artifacts, so a standard high-quality setting suffices.
+_EMBED_JPEG_QUALITY = 88
+
 
 def l2_normalize(vectors: ArrayLike) -> np.ndarray:
     """L2-normalize a batch of embeddings to unit length.
@@ -68,7 +74,7 @@ def image_to_data_url(image: Image.Image | bytes | bytearray) -> str:
         image = image.convert("RGB")
     image = _square_crop(image)
     buf = io.BytesIO()
-    image.save(buf, format="JPEG", quality=88)
+    image.save(buf, format="JPEG", quality=_EMBED_JPEG_QUALITY)
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
 
 
@@ -77,6 +83,11 @@ def image_to_data_url(image: Image.Image | bytes | bytearray) -> str:
 # frame and never upscales — Gemma's variable-resolution vision tower handles
 # the native aspect ratio fine, and a chat server bills vision tokens per call.
 _CAPTION_MAX_SIDE = 896
+
+# Re-encode quality for caption frames — slightly above the embedding payload so
+# on-screen text / fine detail stays legible for the caption VLM. Affects payload
+# size only, never the vision-token count.
+_CAPTION_JPEG_QUALITY = 90
 
 
 def frame_to_data_url(
@@ -101,7 +112,7 @@ def frame_to_data_url(
         new_size = (round(image.width * scale), round(image.height * scale))
         image = image.resize(new_size, Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    image.save(buf, format="JPEG", quality=90)
+    image.save(buf, format="JPEG", quality=_CAPTION_JPEG_QUALITY)
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
 
 

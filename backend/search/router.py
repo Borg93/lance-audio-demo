@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from backend.deps import EmbedderFactoryDep, RerankerFactoryDep, StateDep
 from backend.search.service import run_search
 from backend.search.spec import SearchMode, SearchSpec
+from raudio.retrieval.search import parse_alignments_json
 
 router = APIRouter(tags=["search"])
 
@@ -72,7 +73,7 @@ def search_get(
         fuzziness=fuzziness,
         phrase=phrase,
         weight=weight,
-        q_vec=q_vec,
+        q_vec=q_vec.strip(),
         where=where,
         prefilter=prefilter,
     )
@@ -118,7 +119,7 @@ async def search_post(
         fuzziness=0,
         phrase=False,
         weight=weight,
-        q_vec=q_vec,
+        q_vec=q_vec.strip(),
         where=where,
         prefilter=prefilter,
     )
@@ -144,8 +145,6 @@ def chunk_alignments(state: StateDep, doc_id: str, speech_id: int, chunk_id: int
     of the payload and only the selected hit renders it), so the player fetches the
     real array here on demand. Sync handler → threadpool (the Lance read is blocking).
     """
-    from raudio.retrieval.search import parse_alignments_json
-
     safe_doc = doc_id.replace("'", "''")
     where = f"doc_id = '{safe_doc}' AND speech_id = {speech_id} AND chunk_id = {chunk_id}"
     rows = state.chunks_ds.to_table(columns=["alignments_json"], filter=where).to_pylist()
@@ -163,8 +162,6 @@ def doc_transcript(state: StateDep, doc_id: str) -> DocTranscriptResponse:
     (the Lance read is blocking). No vector/_score column is projected, so the plain
     dataset scan can't hit the FTS/vector _score restriction.
     """
-    from raudio.retrieval.search import parse_alignments_json
-
     safe_doc = doc_id.replace("'", "''")
     where = f"doc_id = '{safe_doc}'"
     rows = state.chunks_ds.to_table(

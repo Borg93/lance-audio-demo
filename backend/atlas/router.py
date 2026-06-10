@@ -36,11 +36,15 @@ from backend.atlas.points import (
 from backend.core.exceptions import NotFoundError, ValidationError
 from backend.deps import StateDep
 from backend.schemas.atlas import AtlasSpace, AtlasStatusResponse, ChunkRowIds
+from raudio.retrieval.search import parse_alignments_json
 
 router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 
 #: Media type for the /points Arrow IPC stream response.
 _ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
+
+#: Rows per ``_attach_captions`` call when decorating a selection with frame captions.
+_FRAME_CAPTION_BATCH_SIZE = 500
 
 
 #: Full-hit columns for the per-chunk detail pane (matches the search hit shape).
@@ -124,15 +128,13 @@ def _attach_frame_captions(frames: Any, rows: list[dict[str, Any]]) -> None:
     # _attach_captions now filters with `doc_id IN (...)` (not the deep per-hit
     # OR that used to overflow the parser), so we batch large — a 1000-point
     # lasso goes from ~7 scans to ~2 (≈430ms→360ms, benchmarked).
-    for start in range(0, len(rows), 500):
-        _attach_captions(frames, rows[start : start + 500])
+    for start in range(0, len(rows), _FRAME_CAPTION_BATCH_SIZE):
+        _attach_captions(frames, rows[start : start + _FRAME_CAPTION_BATCH_SIZE])
 
 
 @router.get("/chunk/{doc_id}/{speech_id}/{chunk_id}")
 def atlas_chunk(state: StateDep, doc_id: str, speech_id: int, chunk_id: int) -> dict[str, Any]:
     """Full hit for one chunk (detail pane + playback), looked up by key."""
-    from raudio.retrieval.search import parse_alignments_json
-
     schema = set(state.chunks.schema.names)
     columns = [c for c in _HIT_COLUMNS if c in schema]
     safe_doc = doc_id.replace("'", "''")
@@ -157,8 +159,6 @@ def atlas_chunks(state: StateDep, body: ChunkRowIds) -> list[dict[str, Any]]:
     stable for the served table version; stale ids simply don't match. Capped at
     1000 (the table render budget); the full selection still drives map dimming.
     """
-    from raudio.retrieval.search import parse_alignments_json
-
     rowids = body.rowids[:1000]
     if not rowids:
         return []

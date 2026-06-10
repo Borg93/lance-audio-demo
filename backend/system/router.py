@@ -34,7 +34,10 @@ def health(state: StateDep) -> HealthResponse:
             r = httpx.get(f"{url}/health", timeout=1.5)
             return VllmPing(ok=r.status_code == 200, url=url)
         except Exception as e:  # noqa: BLE001
-            return VllmPing(ok=False, url=url, error=str(e).split("\n")[0][:120])
+            # Keep the exception TYPE — httpx messages alone (e.g. a bare host)
+            # don't identify whether it was a timeout, refusal, or DNS failure.
+            first_line = str(e).split("\n")[0][:100]
+            return VllmPing(ok=False, url=url, error=f"{type(e).__name__}: {first_line}")
 
     return HealthResponse(
         db=DbFacts(

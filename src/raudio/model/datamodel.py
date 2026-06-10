@@ -21,6 +21,8 @@ class _Base(BaseModel):
 
 
 class WordSegment(_Base):
+    """One word-level alignment timing; ``score`` is null for some aligned words."""
+
     text: str
     start: float
     end: float
@@ -28,6 +30,8 @@ class WordSegment(_Base):
 
 
 class AudioChunk(_Base):
+    """One decoded chunk within a speech segment: text, timing + decode stats."""
+
     start: float
     end: float
     text: str | None = None
@@ -40,6 +44,8 @@ class AudioChunk(_Base):
 
 
 class AlignmentSegment(_Base):
+    """One aligned text span with its per-word ``words`` timings."""
+
     start: float
     end: float
     text: str
@@ -50,6 +56,8 @@ class AlignmentSegment(_Base):
 
 
 class SpeechSegment(_Base):
+    """One detected speech region: its decoded ``chunks`` + word ``alignments``."""
+
     speech_id: str | int | None = None
     start: float | None = None
     end: float | None = None
@@ -64,6 +72,8 @@ class SpeechSegment(_Base):
 
 
 class AudioMetadata(_Base):
+    """Top-level transcriber output for one media file (path, duration, speeches)."""
+
     audio_path: str
     sample_rate: int
     duration: float
