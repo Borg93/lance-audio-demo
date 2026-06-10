@@ -370,7 +370,9 @@ export async function getDiarization(
 }
 
 // ── Health ──────────────────────────────────────────────────────────────
-const PingSchema = z.object({ ok: z.boolean(), url: z.string(), error: z.string().optional() });
+// `error` is null (not absent) when healthy — the backend Pydantic model
+// serializes its `str | None` field explicitly, so the schema must take both.
+const PingSchema = z.object({ ok: z.boolean(), url: z.string(), error: z.string().nullish() });
 const HealthSchema = z.object({
   db: z.object({
     path: z.string(),
@@ -804,7 +806,10 @@ export async function searchGraphEntities(
   q: string,
   fetcher: typeof fetch = fetch,
 ): Promise<GraphSearchResponse> {
-  return asJson(await fetcher(`/api/graph/search?q=${encodeURIComponent(q)}`), GraphSearchResponseSchema);
+  return asJson(
+    await fetcher(`/api/graph/search?q=${encodeURIComponent(q)}`),
+    GraphSearchResponseSchema,
+  );
 }
 
 const GraphEntitySchema = z.object({

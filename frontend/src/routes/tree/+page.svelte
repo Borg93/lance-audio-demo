@@ -16,6 +16,7 @@
   import { getTopics, type TopicNode } from '$lib/api';
   import TopicTreemap from '$lib/components/topic-treemap.svelte';
   import TopicResultsPanel from '$lib/components/topic-results-panel.svelte';
+  import ResizableSplit from '$lib/components/resizable-split.svelte';
 
   type Phase = 'loading' | 'ready' | 'unavailable' | 'error';
 
@@ -71,18 +72,32 @@
       Failed to load topics: {errorMsg}
     </div>
   {:else if phase === 'ready' && hierarchy}
-    <!-- One always-mounted treemap (so drill/view state survives opening the
-         panel) + a fixed-width results panel when a topic is clicked. -->
-    <div class="flex h-full min-h-0">
-      <div class="min-w-0 flex-1">
-        <TopicTreemap {hierarchy} {noiseLabel} onShowResults={(name) => (selectedTopic = name)} />
-      </div>
-      {#if selectedTopic}
-        <div class="w-96 shrink-0">
+    <!-- `tree` re-binds the narrowed value: the {#if} guard's narrowing does
+         not flow into the snippet bodies (they are functions). -->
+    {@const tree = hierarchy}
+    <!-- Map + results, draggable divider (same split as the Search page). The
+         split is always mounted so the treemap's drill/view state survives
+         topic clicks; the right pane swaps hint ↔ results. -->
+    <ResizableSplit storageKey="raudio-tree-split" initial={0.68} minLeft={420} minRight={300}>
+      {#snippet left()}
+        <TopicTreemap
+          hierarchy={tree}
+          {noiseLabel}
+          onShowResults={(name) => (selectedTopic = name)}
+        />
+      {/snippet}
+      {#snippet right()}
+        {#if selectedTopic}
           <TopicResultsPanel topic={selectedTopic} onClose={() => (selectedTopic = null)} />
-        </div>
-      {/if}
-    </div>
+        {:else}
+          <div
+            class="grid h-full place-items-center border-l border-border bg-card p-6 text-center text-xs text-muted-foreground"
+          >
+            Click a topic to browse its chunks here.
+          </div>
+        {/if}
+      {/snippet}
+    </ResizableSplit>
   {:else}
     <div class="grid h-full place-items-center text-sm text-muted-foreground">Loading…</div>
   {/if}
