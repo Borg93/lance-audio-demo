@@ -2,7 +2,7 @@
 
 > The single authoritative runbook: from a fresh clone to a running, searchable
 > system. For *what each stage does* see [PIPELINE.md](PIPELINE.md) (ASR) and
-> [GUIDE.md](../GUIDE.md) (architecture); this doc is the **ordered, exact
+> [GUIDE.md](GUIDE.md) (architecture); this doc is the **ordered, exact
 > command sequence + verification gates**.
 
 There are **two** things people mean by "reproduce", and they need different
@@ -21,12 +21,11 @@ paths. Pick one:
 > but different bytes, vectors, and cluster ids. If you need the exact numbers
 > behind a result, restore the artifact.
 
-> [!WARNING]
-> **The #1 footgun: the database name.** The live/serving DB is
-> **`transcripts_v2.lance`**, but every `Makefile` target defaults to
-> `DB=./transcripts.lance`. Always pass `DB=transcripts_v2.lance` (or `export
-> DB=transcripts_v2.lance`) for the real corpus, or you will silently build/serve
-> an empty DB. Every command below makes `DB` explicit.
+> [!NOTE]
+> **Database name.** The default DB is already **`transcripts_v2.lance`** (the
+> `Makefile` `DB ?=` default and the `raudio --db` CLI default both point at it).
+> The commands below still pass `DB=transcripts_v2.lance` explicitly for clarity;
+> override `DB=…` only to build a throwaway or alternate corpus.
 
 ---
 
@@ -61,6 +60,7 @@ make check-deps        # verifies uv + ffmpeg + hf + GPU, prints install hints
 
 | Role | Model id | Served by |
 |---|---|---|
+| Language ID | `openai/whisper-large-v3` | in-process (Path B) |
 | ASR transcribe | `KBLab/kb-whisper-large` | in-process (Path B) |
 | ASR align (sv) | `KBLab/wav2vec2-large-voxrex-swedish` | in-process (Path B) |
 | Text/image embed | `Qwen/Qwen3-VL-Embedding-2B` | vLLM `:8001` |
@@ -119,8 +119,9 @@ populated rows / files), so a crash is safe to re-run. Run every command with
 
 ```mermaid
 flowchart TD
-    CSV["video_batcher.csv (in-repo seed)"] --> DL[download videos]
-    DL --> TR[transcribe → alignment JSON]
+    CSV["video_batcher.csv (local, gitignored seed)"] --> DL[download videos]
+    DL --> LANG["detect-language → input/&lt;lang&gt;/ (Swedish only continues)"]
+    LANG --> TR[transcribe → alignment JSON]
     TR --> TH[thumbnail]
     TH --> ING["ingest-full → chunks + documents (+FTS, BTREE)"]
     ING --> TE[embed-chunks → text_embedding]
@@ -140,8 +141,9 @@ flowchart TD
 
 ### Provenance — what produces every table & column
 
-> **Source-of-truth chain:** `video_batcher.csv` (in-repo seed) + the Riksarkivet
-> **MP4s** → `transcribe` (alignment JSON) → `ingest` (`chunks` + `documents`) →
+> **Source-of-truth chain:** `video_batcher.csv` (local, gitignored seed) + the
+> Riksarkivet **MP4s** → `detect-language` (sort into `input/<lang>/`, keep `sv`)
+> → `transcribe` (alignment JSON) → `ingest` (`chunks` + `documents`) →
 > feature/CLI steps (everything else). If you lose the Lance dataset, replay Path B
 > from those two inputs to regenerate all of the below. This is the exact map of
 > *what writes which column, from where*.
@@ -150,7 +152,7 @@ flowchart TD
 
 | Column(s) | Written by | From |
 |---|---|---|
-| `doc_id · speech_id · chunk_id · audio_path · start · end · duration · text · sample_rate · audio_duration · audio_frames · num_logits · language · language_prob · alignments_json · metadata` | `make ingest-full` (`raudio ingest`) | the per-video **alignment JSON** from `make transcribe` (VAD→Whisper→forced-align). `doc_id`=SHA1(audio_path); `text` is Swedish-FTS-indexed; `alignments_json` is word-level JSONB |
+| `doc_id · speech_id · chunk_id · audio_path · start · end · duration · text · sample_rate · audio_duration · audio_frames · num_logits · language · language_prob · alignments_json · metadata` | `make ingest-full` (`raudio ingest`) | the per-video **alignment JSON** from `make transcribe` (easytranscriber 0.2.3 + easyaligner 0.2.3: pyannote VAD → KB-Whisper → wav2vec2-large-voxrex-swedish CTC emissions → forced align). `doc_id`=SHA1(audio_path); `text` is Swedish-FTS-indexed; `alignments_json` is word-level JSONB |
 | `referenskod · namn · bildid · extraid` | `make ingest-full` | **`video_batcher.csv`**, keyed by `bildid` (= `audio_path` stem) |
 | `text_embedding` (2048-d) | `make embed-chunks` (`feature text_embedding`) | `chunks.text` → embed server `:8001` (Qwen3-VL-Embedding-2B) |
 | `frame_embedding` (2048-d) | `make atlas-visual` (join) | `chunk_frames.frame_embedding` @ frame_idx=0 |
@@ -188,21 +190,32 @@ flowchart TD
 |---|---|---|
 | `doc_id · turn_id · speaker_label · start · end` | `make speaker-turns` (`raudio extract-speaker-turns`) | source MP4 (`--audio-root`) → **pyannote** `speaker-diarization-community-1`, in-process. `speaker_label` is anonymous & **per-video only**. No vector column → no IVF index (optional `doc_id` BTREE) |
 
-> **`video_batcher.csv`** (in-repo — the one human-curated bootstrap input) is
-> **semicolon-separated**: `referenskod;namn;extraid;bildid` (~1154 rows). `ingest`
-> keys it by `bildid` (= the `audio_path` stem, e.g. `T0001641_00001`) to fill the
-> four `chunks`/`documents` metadata columns; `make download` uses it to fetch the
-> MP4s. Keep it under version control — everything else is regenerable from it + the videos.
+> **`video_batcher.csv`** (local-only, **gitignored** — `.gitignore:32`; a fresh
+> clone does **not** have it) is the one human-curated bootstrap input,
+> **semicolon-separated**: `referenskod;namn;extraid;bildid` (~1575 data rows).
+> `ingest` keys it by `bildid` (= the `audio_path` stem, e.g. `T0001641_00001`) to
+> fill the four `chunks`/`documents` metadata columns; `make download` uses its
+> `bildid` column to fetch the MP4s. It is **not** version-controlled — keep your
+> own copy (or restore it via Path A); everything else is regenerable from it + the videos.
 
 ### B.1 — Acquire + transcribe (CPU/GPU, hours)
 
 ```bash
 export DB=transcripts_v2.lance LANGUAGE=sv AUDIO_DIR=./input/sv
 
-make download                         # video_batcher.csv → input/sv/*.mp4
-make transcribe AUDIO_DIR=$AUDIO_DIR  # → output/sv/alignments/*.json  (GPU)
+make download                         # video_batcher.csv `bildid` → input/sv/*.mp4
+#   ↳ fetches https://iiifintern-ai.ra.se/api/audiovideo/{bildid}.mp4 (RA-internal host)
+make detect-language                  # Whisper-large-v3 LID → moves each file into a <lang>/ subdir
+make transcribe AUDIO_DIR=$AUDIO_DIR  # easytranscriber 0.2.3 + easyaligner 0.2.3 → output/sv/alignments/*.json  (GPU)
 make thumbnail                        # → thumbnails/*.jpg
 ```
+
+> **Swedish only, for now.** `detect-language` (Whisper-large-v3; full detail in
+> [PIPELINE.md §3](PIPELINE.md)) classifies every downloaded file and **moves it
+> into a `<lang>/` subfolder** of its `--audio-dir`. The corpus continues with
+> **Swedish (`sv`) only** — `LANGUAGE:=sv`, and the forced-aligner ships emission
+> models for `sv`/`en` only; other languages are parked, not transcribed. Point
+> `transcribe --audio-dir` at the Swedish subfolder the sort produced.
 
 Gate: `ls output/sv/alignments/*.json | wc -l` should equal your video count.
 
@@ -289,10 +302,10 @@ print('turns:', ds.count_rows(), '| videos:', len(set(ds.to_table(columns=['doc_
 > (exactly like `chunk_frames`), and a scalar **BTREE on `doc_id`** speeds the
 > per-video lookup at full-corpus scale.
 >
-> **Restart the backend after building** — `raudio serve` has **no auto-reload**,
-> so a running backend won't serve the new `/api/diarization/{doc_id}` route (and
-> the player's **Speakers** tab) until it is restarted (`make stack-down` →
-> `make stack-up`, or restart just `make backend`).
+> **No restart needed.** `/api/diarization/{doc_id}` opens `speaker_turns.lance`
+> **on demand per request** (`backend/diarization/router.py`), so a freshly-built
+> or rebuilt table is served immediately — the player's **Speakers** tab picks it
+> up without bouncing the backend.
 
 ---
 
@@ -356,7 +369,6 @@ path works without the full corpus; it does **not** exercise transcribe or scene
 
 ## Footgun checklist
 
-- [ ] `DB=transcripts_v2.lance` on **every** command (Makefile default is wrong).
 - [ ] Start vLLM **embed before rerank**, never simultaneously (`serve-all.sh`
       enforces this).
 - [ ] On a CUDA-12.8 driver, use `make embed-server-docker` / `rerank-server-docker`.
@@ -366,6 +378,6 @@ path works without the full corpus; it does **not** exercise transcribe or scene
       `ministern`/`vägen`); `make ingest-full` does this, or `make reindex-fts`.
 - [ ] Diarization (`make speaker-turns`) needs a **cached HF token** (`hf auth
       login`) + the **`speaker-diarization-community-1` model terms accepted**; it
-      runs in-process (no server). **Restart the backend** afterwards (no
-      auto-reload) so `/api/diarization` + the Speakers tab go live. No vector
-      reindex — `speaker_turns` has no embeddings.
+      runs in-process (no server). No backend restart needed — `/api/diarization`
+      reads `speaker_turns.lance` on demand. No vector reindex — `speaker_turns`
+      has no embeddings.

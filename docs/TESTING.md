@@ -18,8 +18,10 @@ via deterministic fakes and tmp-dir Lance datasets.
 silently, plus integration tests that build a *real* Lance dataset in a tmp dir
 and exercise the genuine `LanceTable.search()` / `add_columns` paths with an
 offline embedder — never a mocked Lance. The only thing we lean on the local
-corpus for is the end-to-end `test_backend_smoke.py`, which skips cleanly when
-the dataset is absent.
+corpus for is the pytest-level `test_backend_smoke.py`, which runs with no embed
+server and skips cleanly when the dataset is absent. (That is distinct from the
+script-level full-pipeline smoke `scripts/e2e_smoke.py`, which drives the real
+CLI against a live embed server into a throwaway DB — see section 5.)
 
 The guiding rule, applied throughout: **we never mock the world.** If a
 function's only logic is assembling an ffmpeg argv, an httpx request body, or a
@@ -82,7 +84,7 @@ Two facts worth knowing about the harness:
 
 `tests/fakes.py` is the shared backbone: a deterministic `FakeEmbedClient`
 (maps each exact string to its own unit vector, so an exact-text query is its
-own nearest neighbour), `FakeReranker`, `FakeCaption`/`FakeSummarize`, and
+own nearest neighbour), `FakeReranker`, `FakeCaptionClient`/`FakeSummarizeClient`, and
 builders that write **real** on-disk Lance tables through the production helpers
 (`ingest_many`, `raudio.media.frames.write_chunk_frames`). The no-GPU tests
 dogfood the real writers instead of hand-rolling Arrow tables.
@@ -96,6 +98,14 @@ dogfood the real writers instead of hand-rolling Arrow tables.
 | `test_embed.py` | `add_columns` embedding pipeline, real Lance | `embed_text_column` attaches `text_embedding` and round-trips; `embed_frame_column` keys vectors by `_rowid` (each row gets *its own* frame's embedding regardless of scan order); brute-force vector search finds the planted nearest; re-ingest of the same doc is idempotent. |
 | `test_features.py` | Type-agnostic feature engine | The engine attaches non-vector columns (int, string) the same way it attaches embeddings; `summary` / `caption` round-trip; `upsert_scan_column` only-null vs overwrite modes; `FEATURES` registry well-formed. |
 | `test_detect_language.py` | `_plan_sample_starts`, pure math | Windows spread across the whole file, never run past EOF, short-file collapse to a single start, non-positive duration safe. |
+| `test_asr_detect.py` | `detect_and_sort` orchestration + aggregation | The sample → per-window → majority-language aggregation path that sorts downloads by detected language (Whisper-large-v3), with the GPU body stubbed. |
+| `test_asr_duration.py` | `_probe_duration_s`, pure | The ffmpeg-seek duration estimator (binary-search probe), exercised without invoking real ffmpeg. |
+| `test_ingest_documents.py` | `documents` table write path, real tmp-dir Lance | The `documents`-table leg of ingest through the Blob V2 columns (External `media_blob` URI + Inline `thumbnail`). |
+| `test_retrieval_search.py` | Alignment decoding + word-match extraction, pure | Alignment JSONB decoding and typed `WordMatch` extraction; no Lance/vLLM. |
+| `test_features_columns.py` | `chunk_frame_embedding_column` step, real Lance | The chunk-level frame-vector join that rolls per-frame vectors up to a chunk-level column. |
+| `test_backend_filters.py` | WHERE-clause composition + value escaping, pure | SQL-filter composition and single-quote value escaping; no Lance. |
+| `test_backend_diarization.py` | Diarization endpoint, synthetic Lance | The on-demand speaker-turns read over a synthetic `speaker_turns.lance` table (no backend restart needed). |
+| `test_vllm_schemas.py` | vLLM wire contract, pure | The request/response Pydantic value objects parsed at the transport boundary; no network. |
 | `test_backend_clients.py` | Lazy vLLM accessors + DI seam | `ensure_embedder` / `ensure_reranker` cache-then-construct; construction failure maps to **503**; `get_embedder` / `get_reranker` / `get_state` bind to `app.state.resources`. Uses the documented monkeypatch seam (the deferred `raudio.vllm.*` imports inside the accessors). |
 | `test_backend_search.py` | Search modes, no GPU | Injects `FakeEmbedClient` so `semantic` / `visual` / `hybrid` / `all` actually run the real `LanceTable.search()` chain (the sync `.search()` vs async-only `.query()` path). Semantic ranks the planted nearest; GET and POST both covered; `all` + rerank runs. |
 | `test_backend_service.py` | `run_search` error & degradation branches | Against a real chunks table with **no** embedding columns: `semantic`/`hybrid`-without-embeddings → 400, `hybrid`-without-text → 400, `visual`-without-frames → empty, `all`-without-embeddings falls back to FTS, `_vector_search`/`_frame_search` missing-column → empty, `_postprocess_hits` parses + pops `alignments_json`. The reranker getter raises if touched — none of these paths should construct it. A `TestSceneSearch` class additionally builds a captioned tmp dataset (`caption` + `caption_embedding` via offline fakes) to cover the scene legs: `scene` ranks frames over `caption_embedding` and joins back to chunks, `scene_fts` runs BM25 over the `caption` text, captions ride along on every mode's hits, and both scene modes degrade to `[]` (not a 500) when frames/captions are absent. |
@@ -149,8 +159,35 @@ uv run pytest tests/test_ingest.py -v
 uv run --with pytest --with httpx pytest
 ```
 
-`httpx` is needed by anything that constructs the app via `fastapi.testclient.
-TestClient` (the backend tests).
+There is **no `make test` target** — the `uv run … pytest` invocations above are
+the way to run the suite. `pytest`, `httpx`, and `pytest-cov` live in the `dev`
+dependency group (`pyproject.toml [dependency-groups]`), so
+`uv sync --group dev && uv run pytest …` is the equivalent of the
+`--with pytest --with httpx` form shown above. `httpx` is needed by anything that
+constructs the app via `fastapi.testclient.TestClient` (the backend tests).
+
+### Full-pipeline e2e smoke (distinct from the pytest smoke)
+
+`scripts/e2e_smoke.py` is a *separate* smoke from the pytest-level
+`test_backend_smoke.py`. Rather than gating on your real corpus and running with
+no embed server, it drives the actual CLI end-to-end into a throwaway temp DB
+(`tempfile.mkdtemp`, never touches your real DB) and **needs the vLLM embed
+server on `:8001`**:
+
+```bash
+# Full-pipeline e2e (real CLI end-to-end into a throwaway temp DB; needs :8001):
+make e2e-smoke
+# = uv run --extra multimodal python scripts/e2e_smoke.py --docs 2 --frame-limit 24
+```
+
+Unlike the pytest smoke it runs `thumbnail` → `ingest` → embed-chunks
+(`feature text_embedding --no-create-index`) → `extract-chunk-frames` →
+embed-chunk-frames (`feature frame_embedding --no-create-index`), then boots the
+backend over `TestClient` and asserts `/api/health`, `/api/documents`, the
+`fts`/`semantic`/`hybrid`/`all` + `visual` search modes, `/api/thumbnail`,
+`/api/media` Range→206, and `/api/chunk-frame`. It reads sample data from
+`output/sv-test/alignments` + `input/sv-test`, requires the `multimodal` extra,
+and prints the temp path to delete afterward.
 
 **Dataset-gated skip pattern** (from `test_backend_smoke.py`) — reuse this for
 any test that needs the local corpus so CI without the dataset stays green:

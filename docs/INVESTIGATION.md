@@ -13,7 +13,7 @@
 >
 > Every claim is cited to a file you can open and check.
 >
-> See also: [GUIDE.md](../GUIDE.md) (architecture & data flow),
+> See also: [GUIDE.md](GUIDE.md) (architecture & data flow),
 > [../README.md](../README.md) (quickstart), [TODO.md](TODO.md) (live blockers).
 
 ---
@@ -107,30 +107,34 @@ No predicate ever touches `frame_blob`.
 ### A3. The IVF_PQ index uses 256 partitions — queries now probe 20 + refine ✅ fixed
 
 Indexes are built with `num_partitions=256` (the `FeatureRunOptions` default,
-`features/columns.py:317`; also the `compact` default, `cli/media.py:237`),
+`features/columns.py:316`; also the `compact` default, `cli/media.py:237`),
 passed into `table.create_index(...)` in `ensure_vector_index`
 (`features/engine.py:278-285`).
 
 The original bug was that the backend's vector queries set neither `nprobes` nor
 `refine_factor`, so Lance defaulted to probing **1 of 256** partitions → fast but
 poor recall. **This is fixed.** Every vector leg in `backend/search/service.py`
-now sets both knobs (`_VECTOR_NPROBES = 20`, `_VECTOR_REFINE_FACTOR = 3`,
-defined at `service.py:59-60`):
+now sets these knobs (`_VECTOR_NPROBES = 20`, `_VECTOR_MAX_NPROBES = 0`,
+`_VECTOR_REFINE_FACTOR = 3`, defined in `backend/search/constants.py:49,56,57`
+and imported at `service.py:29-32`):
 
 ```python
-# backend/search/service.py — _vector_search
-table.search(vec.tolist(), vector_column_name=column)
-    .distance_type("cosine")
-    .nprobes(_VECTOR_NPROBES)        # 20 — ≈ √256, visits 20/256 partitions
-    .refine_factor(_VECTOR_REFINE_FACTOR)  # 3 — re-scores top-K×3 with full vectors
-    .select([*_PAYLOAD_COLUMNS, "_distance"])
-    .limit(n)
+# backend/search/service.py — vector / hybrid leg
+chunks.search(query_type="hybrid", vector_column_name="text_embedding")
+    .vector(text_vec.tolist())
+    .text(fts_query)
+    .rerank(fusion)
+    .minimum_nprobes(_VECTOR_NPROBES)        # 20 — ≈ √256, visits 20/256 partitions
+    .maximum_nprobes(_VECTOR_MAX_NPROBES)    # 0 — adaptive ceiling (extends toward all)
+    .refine_factor(_VECTOR_REFINE_FACTOR)    # 3 — re-scores top-K×3 with full vectors
+    .select(_PAYLOAD_COLUMNS)
+    .limit(spec.n)
 ```
 
-The hybrid leg (`service.py:334-335`) and the frame-vector leg
-(`_frame_search`, `service.py:461-462`) apply the same two knobs. Cost is roughly
-20-30 ms per query; recall is restored. The knobs are ignored when the column has
-no IVF index yet (flat search), so they are safe at any table size.
+The hybrid leg (`service.py:244-246`) and the frame-vector leg
+(`_frame_search`, now in `backend/search/frames.py`) apply the same knobs. Cost
+is roughly 20-30 ms per query; recall is restored. The knobs are ignored when the
+column has no IVF index yet (flat search), so they are safe at any table size.
 
 ### A4. The index builder refuses to run while the column has NULLs ✅ design resolved
 
@@ -158,29 +162,31 @@ The frame columns were removed from `CHUNK_SCHEMA` entirely (there is no
 ```mermaid
 flowchart LR
     Q["GET /api/search?mode=visual"] --> RS["run_search<br/>backend/search/service.py"]
-    RS --> FS["_frame_search(chunk_frames, chunks, vec, n)<br/>service.py:435"]
+    RS --> FS["_frame_search(chunk_frames, chunks, vec, n)<br/>backend/search/frames.py"]
     FS --> CF["ranks chunk_frames.frame_embedding<br/>(built + indexed, nprobes/refine set)"]
     CF --> JOIN["joins keys back to chunks<br/>for text / timestamps / metadata"]
     JOIN --> HITS["one hit per chunk,<br/>frame-distance order preserved"]
     CF -.->|"column absent → returns []<br/>(scene: caption_embedding<br/>not built yet)"| EMPTY["graceful empty<br/>(degrades, never errors)"]
 ```
 
-`_frame_search` (`service.py:435-469`) ranks `chunk_frames.frame_embedding`, keeps
-the best frame per `(doc_id, speech_id, chunk_id)`, then fetches the matching
-`chunks` rows via a single keyed Lance filter scan and re-orders them to the frame
-ranking. The `mode=all` fuse calls it for both the frame-vector leg (line 378)
-and the caption/scene leg (line 384-386). When a ranked column doesn't exist yet,
-the path returns `[]` (`service.py:455-456`); `frame_embedding` *is* built today,
-so the visual/`all` frame leg returns real hits — only the `caption_embedding`
-(scene) leg degrades to empty.
+`_frame_search` (now in `backend/search/frames.py`, re-imported into
+`service.py:40`) ranks `chunk_frames.frame_embedding`, keeps the best frame per
+`(doc_id, speech_id, chunk_id)`, then fetches the matching `chunks` rows via a
+single keyed Lance filter scan and re-orders them to the frame ranking. The
+`mode=all` fuse calls it for the frame-vector leg (`service.py:291`); the
+scene/caption leg calls it at `service.py:197`. When a ranked column doesn't exist
+yet, the path returns `[]`; `frame_embedding` *is* built today, so the
+visual/`all` frame leg returns real hits — only the `caption_embedding` (scene)
+leg degrades to empty.
 
 The frame *image* read path matches: `/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}`
-serves the JPEG from `chunk_frames` (`backend/media/router.py:49`); the legacy
+serves the JPEG from `chunk_frames` (route at `backend/media/router.py:61`, blob
+read via `take_blobs("frame_blob", ...)` at `router.py:104`); the legacy
 `chunks.frame_blob` fallback was removed along with the column.
 
 **The frame data is now built.** `frame_embedding` is populated by
 `raudio feature frame_embedding` (`make embed-chunk-frames`,
-`features/columns.py:_run_frame_embedding`, line 367) and on the **live**
+`features/columns.py:_run_frame_embedding`, line 366) and on the **live**
 `transcripts_v2.lance` DB it is complete end-to-end: `chunk_frames.frame_embedding`
 has 145,175 rows (zero NULL) with an IVF index `frame_embedding_idx`, so `visual`
 and the frame leg of `all` return real hits today. The Part B crash described
@@ -194,15 +200,15 @@ return empty until `make captions` (the Gemma caption pass) runs.
 | # | Item | Where | State |
 |---|------|-------|-------|
 | A1/A2 | Keep `chunk_frames` separate + append-only; Python-side resume | `model/schema.py`, `media/frames.py`, `cli/media.py` | Deliberate workaround for Lance 4.0 — keep until a newer Lance fixes the decoder + `IS NULL` panic |
-| A3 | `nprobes=20` / `refine_factor=3` on every vector leg | `backend/search/service.py:59-60, 334-335, 423-424, 461-462` | ✅ Fixed |
-| A4 | `visual` / `all` query `chunk_frames.frame_embedding`, join back to `chunks` | `backend/search/service.py:_frame_search` | ✅ Fixed — frame data is now built + indexed on the live DB (145,175 rows); only captions/`scene` remain |
+| A3 | `nprobes=20` / `refine_factor=3` on every vector leg | `backend/search/constants.py:49,56-57` + `backend/search/service.py:244-246` (hybrid leg) + `backend/search/frames.py` (moved `_vector_search`/`_frame_search`) | ✅ Fixed |
+| A4 | `visual` / `all` query `chunk_frames.frame_embedding`, join back to `chunks` | `backend/search/frames.py:_frame_search` | ✅ Fixed — frame data is now built + indexed on the live DB (145,175 rows); only captions/`scene` remain |
 
 ---
 
 ## Part B — The vLLM image-embed crash (historical — now cleared on the live DB)
 
 `raudio feature frame_embedding` (`make embed-chunk-frames`,
-`features/columns.py:_run_frame_embedding`, line 367) has now **completed
+`features/columns.py:_run_frame_embedding`, line 366) has now **completed
 end-to-end** on the live DB (145,175 frame vectors, indexed). Getting there meant
 clearing the crash documented below: earlier every attempt to embed an image
 killed the vLLM engine with:
@@ -233,26 +239,34 @@ tokens), and `256 > 196` overflowed the pin. **Both sides are now aligned to
 
 | Side | Setting | Pixels | Vision tokens |
 |------|---------|--------|---------------|
-| **Client** (`vllm/image.py:31`) | `_IMAGE_SIDE = 392` (center-crop to square) | 392² = 153664 | `(392/28)² = 14² = `**`196`** |
-| **Server** — Docker (`Makefile:281`) | `--mm-processor-kwargs '{"min_pixels":153664,"max_pixels":153664}'` | 153664 = 392² | `(392/28)² = `**`196`** |
-| **Server** — uvx (`Makefile:326`) | same `min_pixels == max_pixels == 153664` pin | 153664 = 392² | `(392/28)² = `**`196`** |
+| **Client** (`vllm/image.py:32`) | `_IMAGE_SIDE = 392` (center-crop to square) | 392² = 153664 | `(392/28)² = 14² = `**`196`** |
+| **Server** — Docker (`Makefile:286`) | `--mm-processor-kwargs '{"min_pixels": 153664, "max_pixels": 153664}'` | 153664 = 392² | `(392/28)² = `**`196`** |
+| **Server** — uvx (`Makefile:331`) | same `min_pixels == max_pixels == 153664` pin | 153664 = 392² | `(392/28)² = `**`196`** |
 
 `image_to_data_url` center-crops then resizes to `_IMAGE_SIDE`
-(`vllm/image.py:50`, crop/resize at lines 107-111); aspect ratio is sacrificed,
+(`vllm/image.py:57`; the crop/resize happens in `_square_crop`, `.crop` at
+`image.py:123`, `.resize` at `image.py:125`); aspect ratio is sacrificed,
 which is fine for whole-image similarity. The in-code comment at
-`vllm/image.py:21-30` documents the agreement and warns: if you change
+`vllm/image.py:21-31` documents the agreement and warns: if you change
 `_IMAGE_SIDE`, change the Makefile `min/max_pixels` pin to match (`side² == pin`).
 
 ### Why it is still unverified (the real open caveat)
 
 The 392 px / 153664 px pin and the 196-token budget were originally derived for the
 **8B** embedding model on **vLLM 0.20.0**. The current pin is **Qwen3-VL-
-Embedding-2B** on **vLLM 0.22.0** (`Makefile:247,254,282-284`). The 2B vision
+Embedding-2B** on **vLLM 0.22.0** (`Makefile:252,259,287-289`). The 2B vision
 tower may produce a *different* token count for the same pixel area, and 0.22.0
 may size the warmup buffer differently — but in practice this pin held: the live
 DB has 145,175 frame vectors, so the image-embed path now runs cleanly under it.
 The Makefile still flags the residual model/build caveat in two places
-(`Makefile:238-246` and the `embed-server-docker` NOTE at `Makefile:282-284`).
+(`Makefile:243-251` and the `embed-server-docker` NOTE at `Makefile:287-289`).
+
+> **Stale code comment to fix (not this doc):** the client comment at
+> `src/raudio/vllm/image.py:28-30` still reads *"UNVERIFIED end-to-end:
+> embed-chunk-frames has never completed on GPU."* That is now out of date — the
+> live DB has 145,175 frame vectors built + indexed (corroborated by
+> [GUIDE.md](GUIDE.md), [STORAGE.md](STORAGE.md), [EMBEDDINGS.md](EMBEDDINGS.md)).
+> Fix the `image.py` comment, not this section.
 
 **Validation gate (re-run if you change the pin or the model/build):**
 
@@ -264,7 +278,7 @@ make embed-chunk-frames           # raudio feature frame_embedding → frame_emb
 
 Confirm it processes all rows without the `deepstack tokens` ValueError, that
 `chunk_frames.frame_embedding` is populated, and that `ensure_vector_index` built
-an IVF_PQ index on it (`features/columns.py:382-387`). On the live DB this already
+an IVF_PQ index on it (`features/columns.py:381-386`). On the live DB this already
 holds (145,175 rows + `frame_embedding_idx`), so the A4 `visual`/`all` frame leg
 is exercised end-to-end with real data.
 
@@ -274,44 +288,53 @@ These are settled in the current `Makefile` — listed so they are not
 re-discovered the hard way:
 
 1. **One pinned vLLM build across both launch paths.** Both the uvx path
-   (`VLLM_PIN ?= vllm==0.22.0`, `Makefile:247`) and the Docker path
-   (`VLLM_IMAGE ?= vllm/vllm-openai:v0.22.0`, `Makefile:254`) pin **0.22.0**, so a
+   (`VLLM_PIN ?= vllm==0.22.0`, `Makefile:252`) and the Docker path
+   (`VLLM_IMAGE ?= vllm/vllm-openai:v0.22.0`, `Makefile:259`) pin **0.22.0**, so a
    token budget tuned on one build holds on the other. (The earlier 0.19.1-vs-
    `:latest` drift is gone.)
 
 2. **Both server targets carry the pixel pin.** `embed-server` (uvx,
-   `Makefile:326`) and `embed-server-docker` (`Makefile:281`) both pass
-   `--mm-processor-kwargs '{"min_pixels":153664,"max_pixels":153664}'`. (The earlier
+   `Makefile:331`) and `embed-server-docker` (`Makefile:286`) both pass
+   `--mm-processor-kwargs '{"min_pixels": 153664, "max_pixels": 153664}'`. (The earlier
    "no pin on the non-Docker server" gap is closed.)
 
 3. **Both servers default to the *same* GPU; start them sequentially.** There is
-   one card knob, `VLLM_GPU ?= 0` (`Makefile:219`), and both servers inherit it:
+   one card knob, `VLLM_GPU ?= 0` (`Makefile:224`), and both servers inherit it:
    `EMBED_GPU ?= $(VLLM_GPU)` and `RERANK_GPU ?= $(VLLM_GPU)`
-   (`Makefile:220-221`). The two 2B models co-locate on one GPU at
+   (`Makefile:225-226`). The two 2B models co-locate on one GPU at
    `EMBED_MEM_FRAC ?= 0.45` / `RERANK_MEM_FRAC ?= 0.45` each (~88 GB on a 96 GB
-   card; `Makefile:222-223`). **Bring them up sequentially** — embed fully up
+   card; `Makefile:227-228`). **Bring them up sequentially** — embed fully up
    *before* launching rerank — or vLLM's memory-profiling race trips: one server
    freeing GPU memory mid-init can abort the other's `profile_run` with an
-   `AssertionError` (`Makefile:213-218`). Override the card per launch with
+   `AssertionError` (`Makefile:221-223`). Override the card per launch with
    `make embed-server VLLM_GPU=N`.
 
 4. **Driver / PTX matrix on Blackwell.** vLLM ≥ 0.20 wants NVIDIA driver ≥ 575
    (CUDA 12.9); on a host capped at CUDA 12.8 the native (uvx) server can
    "driver too old"-crash at engine init, so the Docker image (which bundles its
-   own CUDA userspace) is the recommended path (`Makefile:238-254`). The HF
+   own CUDA userspace) is the recommended path (`Makefile:243-259`). The HF
    `kernels` package + FA3 prebuilt cache (`make kernels-prepare`,
-   `Makefile:312-317`) is the workaround for the Blackwell `sm_120` FlashAttention
+   `Makefile:317`) is the workaround for the Blackwell `sm_120` FlashAttention
    gap, and both `embed-server`/`rerank-server` launch with `--with "kernels"`
-   (`Makefile:321,332`).
+   (`Makefile:326,337`).
+
+5. **Where the pins actually live.** The in-process transcription stack pins
+   `torch==2.11.0+cu128` / `torchaudio==2.11.0+cu128` (`pyproject.toml:21-22`,
+   resolved in `uv.lock:3731`) — the same `cu128` build that drives the driver
+   constraint above. vLLM is deliberately **not** a project dependency and does
+   **not** appear in `uv.lock`: it runs in a `uvx` ephemeral env to avoid a
+   torch-pin conflict (`pyproject.toml:49-52`). So the only source of truth for the
+   vLLM 0.22.0 pin is the Makefile (`VLLM_PIN`, `Makefile:252` / `VLLM_IMAGE`,
+   `Makefile:259`) — don't grep `uv.lock` for it.
 
 ### Part B — recommended fixes
 
 | # | Fix | Where | Effort | Risk |
 |---|-----|-------|--------|------|
-| B1 | If you change the pin or model/build, re-run the **validation gate** above to re-confirm the 2B/0.22.0 token count under the 392 px pin; adjust `_IMAGE_SIDE` + the Makefile pin together (`side² == pin`) if it overruns | `vllm/image.py:31`, `Makefile:281,326` | XS–S | Med — *re-verify per build* |
+| B1 | If you change the pin or model/build, re-run the **validation gate** above to re-confirm the 2B/0.22.0 token count under the 392 px pin; adjust `_IMAGE_SIDE` + the Makefile pin together (`side² == pin`) if it overruns | `vllm/image.py:32`, `Makefile:286,331` | XS–S | Med — *re-verify per build* |
 | B2 (alt) | If vLLM stays unstable, add an in-process `transformers` client that satisfies the `EmbeddingClient` Protocol alongside `VLLMEmbeddingClient` (same `embed_text`/`embed_image` surface) and wire it via the feature/backend client getters | `vllm/embedding.py` (`EmbeddingClient` Protocol, `embedding.py:39-48`), `TODO.md:66-73` | M (~80 LOC) | Low — immune to vLLM internals, ~2 s/query slower |
-| B3 (alt) | Try a different vLLM tag (`v0.21.0+` or back to a `v0.10.x`) | `Makefile:247,254` | M | High — Blackwell `sm_120` compat unknown until tested |
-| B4 | Both servers share one GPU at 0.45 mem-frac each; start them **sequentially** (embed up before rerank) to avoid the memory-profiling race | `Makefile:219-223` | — | High if regressed |
+| B3 (alt) | Try a different vLLM tag (`v0.21.0+` or back to a `v0.10.x`) | `Makefile:252,259` | M | High — Blackwell `sm_120` compat unknown until tested |
+| B4 | Both servers share one GPU at 0.45 mem-frac each; start them **sequentially** (embed up before rerank) to avoid the memory-profiling race | `Makefile:224-228` | — | High if regressed |
 
 ---
 

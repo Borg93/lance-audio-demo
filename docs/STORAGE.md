@@ -1,37 +1,37 @@
 # How raudio uses Lance
 
 > The storage layer in depth. The [README](../README.md) is the quickstart and
-> [GUIDE.md](../GUIDE.md) is the architecture map; **this doc is the contract
+> [GUIDE.md](GUIDE.md) is the architecture map; **this doc is the contract
 > between the schema and the Lance file format**. Read it when you touch
 > [`src/raudio/model/schema.py`](../src/raudio/model/schema.py),
 > [`src/raudio/ingest/ingest.py`](../src/raudio/ingest/ingest.py), or the blob/range code in
 > [`backend/media/blobs.py`](../backend/media/blobs.py). For the indexation gotchas that bit us
 > (the `merge_insert` crash, `nprobes` recall) see [INVESTIGATION.md](INVESTIGATION.md).
 
-Everything raudio stores — transcript text, metadata, word alignments, two
+Everything raudio stores — transcript text, metadata, word alignments, three
 families of 2048-d embeddings, JPEG thumbnails, per-chunk video frames, and the
 URIs of the source MP4s — lives in **one Lance dataset directory** (the live one
-on this machine is `transcripts_v2.lance/`; see [§1](#1-the-three-tables)). There
+on this machine is `transcripts_v2.lance/`; see [§1](#1-the-tables)). There
 are no sidecar JSON files and no disk walks at query time. This is only possible
 because raudio leans on four specific **Lance file format 2.2** capabilities:
 
 | Feature | What it buys raudio | Where |
 |---|---|---|
-| **Columnar tables** | Cheap full-table FTS/metadata scans without touching media bytes | all three tables |
+| **Columnar tables** | Cheap full-table FTS/metadata scans without touching media bytes | every table |
 | **Blob V2** (4 storage tiers) | Media URIs *and* small bytes in the same row, range-readable | `media_blob`, `thumbnail`, `frame_blob` |
-| **JSONB** (`pa.json_()`) | Word-alignment trees as queryable binary JSON, no nested-struct decode | `chunks.alignments_json` |
-| **Native indexes** | Tantivy BM25 FTS + IVF_PQ cosine ANN over the same rows | `text`, `text_embedding`, `frame_embedding` |
+| **JSONB** (`pa.json_()`) | Word-alignment trees + topic tree as queryable binary JSON, no nested-struct decode | `chunks.alignments_json`, `topics.hierarchy` |
+| **Native indexes** | Tantivy BM25 FTS + IVF_PQ cosine ANN over the same rows | `text`/`caption`, `text_embedding`, `frame_embedding`, `caption_embedding` |
 
 A `blob_field` column **requires** `data_storage_version="2.2"`. Today only
 `documents` (`media_blob`, `thumbnail`) and `chunk_frames` (`frame_blob`) carry
-blob columns; `chunks` no longer does (frames moved to `chunk_frames`), but all
-three tables are pinned to `"2.2"` for consistency. That constraint shapes how
+blob columns; `chunks` no longer does (frames moved to `chunk_frames`), but every
+table is pinned to `"2.2"` for consistency. That constraint shapes how
 `ingest/ingest.py` and `media/frames.py` write their first dataset
 (see [§ Why `lance.write_dataset` not `create_table`](#why-lancewrite_dataset-not-create_table)).
 
 ---
 
-## 1. The three tables
+## 1. The tables
 
 ```mermaid
 erDiagram
@@ -42,7 +42,7 @@ erDiagram
     DOCUMENTS {
         string doc_id PK "sha1(audio_path)[:16]"
         string audio_path
-        string language "sv, en, de, fr"
+        string language "ISO 639-1 enum; live corpus is sv-only"
         string media_mime
         blob media_blob "Blob V2 External (URI)"
         blob thumbnail "Blob V2 Inline (JPEG bytes)"
@@ -58,8 +58,11 @@ erDiagram
         json alignments_json "JSONB word alignments"
         vector text_embedding "2048-d, IVF_PQ cosine"
         vector frame_embedding "2048-d chunk-level image vec (image-atlas)"
+        vector caption_embedding "2048-d caption-space (chunk-level)"
         float atlas_x "text-space EVoC layout (+ atlas_y, atlas_cluster)"
         float atlas_img_x "visual-space EVoC layout (+ atlas_img_y, atlas_img_cluster)"
+        float atlas_cap_x "caption-space EVoC layout (+ atlas_cap_y, atlas_cap_cluster)"
+        string topic_l0 "topic-layer label (+ topic_l1, topic_l2, doc_topic)"
         string namn "denormalised metadata: referenskod, namn, bildid, extraid"
     }
 
@@ -73,20 +76,29 @@ erDiagram
         int32 frame_width
         int32 frame_height
         vector frame_embedding "2048-d, added via add_columns()"
+        string caption "Swedish frame caption (Tantivy FTS)"
+        vector caption_embedding "2048-d, scene search (IVF_PQ)"
     }
 ```
 
-All three are physical Lance datasets under one directory:
-`<db>.lance/{chunks,documents,chunk_frames}.lance`. They are joined **only
-by key columns**, never by a stored foreign-key relation — the backend resolves
-keys to stable row ids with SQL filters (`_rowid_for_filter`, `rowid_for_doc_id`
-in [`backend/media/blobs.py`](../backend/media/blobs.py)).
+These are physical Lance datasets under one directory:
+`<db>.lance/{chunks,documents,chunk_frames}.lance`, plus two more raudio-produced
+tables — `speaker_turns.lance` (diarized turns, see [`speaker_turns`](#speaker_turns--the-diarization-table))
+and `topics.lance` (the topic tree, see [`topics`](#topics--the-topic-tree)).
+They are joined **only by key columns**, never by a stored
+foreign-key relation — the backend resolves keys to stable row ids with SQL
+filters (`_rowid_for_filter`, `rowid_for_doc_id` in
+[`backend/media/blobs.py`](../backend/media/blobs.py)). (A knowledge-graph layer
+also writes sibling `kg_chunks`/`kg_entities`/`kg_mentions`/`kg_relationships`
+tables into the same directory from `scripts/kg/adapter.py`, read by
+[`backend/graph/router.py`](../backend/graph/router.py); those are out of scope
+for this doc.)
 
-> **Which DB is live** — the Makefile default is `DB ?= ./transcripts.lance`,
-> but on this machine that directory is an **empty manifest with no tables**. The
-> populated, served dataset is **`transcripts_v2.lance/`** (chunks = 145,175 rows;
-> documents = 1,154; chunk_frames = 145,175). Point the backend/CLI at it with
-> `DB=./transcripts_v2.lance`.
+> **Which DB is live** — the served dataset is **`transcripts_v2.lance/`** (chunks
+> = 145,175 rows; documents = 1,154; chunk_frames = 145,175), and it is also the
+> default (`Makefile` `DB ?= ./transcripts_v2.lance`, and the `raudio --db` CLI
+> default). An older empty `./transcripts.lance` may linger on some machines, so
+> confirm you are pointed at `transcripts_v2.lance`.
 
 ### The keys
 
@@ -118,21 +130,35 @@ media the DB holds. Notable columns:
   never writes a placeholder column.
 - `frame_embedding` (`FixedSizeList<float32, 2048>`, nullable) — a **second
   vector column**, the *chunk-level* image vector for the image-atlas. It is the
-  representative-frame vector joined from `chunk_frames` (`raudio feature
-  atlas_visual` for the visual atlas, via `chunk_frame_embedding_column`),
-  so `chunks` carries **two** vector columns. (The IVF index lives on the
-  `chunk_frames` copy; the `chunks` copy is the source for the visual atlas
-  projection, not an indexed search column.)
-- `atlas_x` / `atlas_y` / `atlas_cluster` (text-space) and `atlas_img_x` /
-  `atlas_img_y` / `atlas_img_cluster` (visual-space) — six EVōC projection
+  representative-frame (`frame_idx=0`) vector joined from `chunk_frames`
+  (`raudio feature atlas_visual` for the visual atlas, via
+  `chunk_frame_embedding_column`). (The IVF index lives on the `chunk_frames`
+  copy; the `chunks` copy is the source for the visual atlas projection, not an
+  indexed search column.)
+- `caption_embedding` (`FixedSizeList<float32, 2048>`, nullable) — a **third
+  vector column**, the chunk-level caption-space vector. The same representative-
+  frame join (`chunk_frame_embedding_column`) brings the `frame_idx=0`
+  `caption_embedding` over from `chunk_frames` for `raudio feature atlas_caption`.
+  So `chunks` carries **three** vector columns (`text_embedding`,
+  `frame_embedding`, `caption_embedding`).
+- `atlas_x` / `atlas_y` / `atlas_cluster` (text-space), `atlas_img_x` /
+  `atlas_img_y` / `atlas_img_cluster` (visual-space) and `atlas_cap_x` /
+  `atlas_cap_y` / `atlas_cap_cluster` (caption-space) — nine EVōC projection
   columns for the Atlas view. The text triplet is written by `raudio feature
   atlas` from `text_embedding`; the visual triplet by `raudio feature
   atlas_visual` (= `raudio feature atlas --space visual`) from the chunk-level
-  `frame_embedding`. See [`src/raudio/features/projection.py`](../src/raudio/features/projection.py).
+  `frame_embedding`; the caption triplet by `raudio feature atlas_caption` from
+  the chunk-level `caption_embedding`. See
+  [`src/raudio/features/projection.py`](../src/raudio/features/projection.py).
+- `topic_l0` / `topic_l1` / `topic_l2` / `doc_topic` (`string`, nullable) — the
+  topic-layer labels written by `raudio feature topics`, which back the topic
+  facet (`SearchSpec.topic`) and are Bitmap-indexed (`doc_topic_idx`,
+  `topic_l2_idx`). See [`topics`](#topics--the-topic-tree) and
+  [`src/raudio/features/topic_tree.py`](../src/raudio/features/topic_tree.py).
 
 Riksarkivet archival metadata (`referenskod`, `namn`, `bildid`, `extraid`) is
 **denormalised** onto every chunk row so retrieval needs no join — the search
-projection `_HIT_COLUMNS` (in `backend/search/service.py`) reads them straight
+projection `_HIT_COLUMNS` (in `backend/search/constants.py`) reads them straight
 off the hit.
 
 ### `documents` — the portable media catalog
@@ -154,7 +180,11 @@ One row per extracted video frame, captured via ffmpeg
 `(doc_id, speech_id, chunk_id, frame_idx)` — a chunk can hold N frames
 (`frame_idx` 0..K-1), with `frame_idx=0` the single representative frame
 captured at `chunk.start`. `frame_blob` is **Blob V2 Inline** (~50 KB JPEG,
-comfortably under the 64 KB inline threshold).
+comfortably under the 64 KB inline threshold). Beyond the frame bytes it also
+carries the live caption columns `caption` (Swedish frame caption, Tantivy-indexed
+`caption_idx`) and `caption_embedding` (`FixedSizeList<float32, 2048>`, IVF_PQ
+`caption_embedding_idx`) — both fully populated — which back `mode=scene_fts` and
+`mode=scene` (§4).
 
 **Why it is a separate table and not just `frame_*` columns on `chunks`** —
 this is the single most load-bearing schema decision. Lance 4.0's `merge_insert`
@@ -171,6 +201,27 @@ so:
   files and bypasses the `merge_insert` join entirely.
 
 Full post-mortem in [INVESTIGATION.md](INVESTIGATION.md).
+
+### `speaker_turns` — the diarization table
+
+One row per diarized speaker turn ([`SPEAKER_TURNS_SCHEMA`](../src/raudio/model/schema.py),
+columns `doc_id`, `turn_id`, `speaker_label`, `start`, `end`). Written by
+`raudio extract-speaker-turns` (`write_speaker_turns` in
+[`src/raudio/media/diarize.py`](../src/raudio/media/diarize.py)) — `turn_id` is the
+per-video `enumerate` index over that video's turns. It is **append-only** on the
+same `"2.2"` storage version (`SPEAKER_TURNS_STORAGE_VERSION`) and is read on
+demand by the backend diarization router (`GET /api/diarization/{doc_id}` in
+[`backend/diarization/router.py`](../backend/diarization/router.py)) — no backend
+restart needed.
+
+### `topics` — the topic tree
+
+A single-row table (`topics.lance`) holding the nested topic hierarchy: `hierarchy`
+(`pa.json_()` JSONB — another JSONB consumer alongside `chunks.alignments_json`),
+`layers` (`int32`), `n_chunks` (`int64`). Written by `raudio feature topics`
+(`write_topics_table` in
+[`src/raudio/features/topic_tree.py`](../src/raudio/features/topic_tree.py)) from the
+`chunks.topic_l*` layer columns; pinned to `"2.2"` like the rest.
 
 ---
 
@@ -315,7 +366,7 @@ On read, `parse_alignments_json` (in
 [`src/raudio/retrieval/search.py`](../src/raudio/retrieval/search.py))
 defensively handles both shapes: if Lance already decoded it (not a `str`) it
 passes through; otherwise `json.loads`. The backend calls this in
-`_postprocess_hits` (`backend/search/service.py`) so every search hit ships an
+`_postprocess_hits` (`backend/search/postprocess.py`) so every search hit ships an
 `alignments` list.
 
 ---
@@ -348,9 +399,11 @@ flowchart LR
 `frame_embedding` IVF_PQ index on `chunk_frames` backs `mode=visual` and the
 frame leg of `mode=all`. The caption-backed modes — `scene` (cosine over
 `chunk_frames.caption_embedding`) and `scene_fts` (BM25 over
-`chunk_frames.caption`) — exist in code but return **empty** until captions are
-built (`make captions`), since the live DB has no `caption`/`caption_embedding`
-column yet. See [EMBEDDINGS.md](EMBEDDINGS.md) for the full search-mode map.
+`chunk_frames.caption`) — are **live**: captions are built on the served DB
+(`chunk_frames.caption` Tantivy-indexed as `caption_idx`,
+`chunk_frames.caption_embedding` IVF_PQ-indexed as `caption_embedding_idx`, both
+fully populated), so `scene`/`scene_fts` return real hits. See
+[EMBEDDINGS.md](EMBEDDINGS.md) for the full search-mode map.
 
 ### Tantivy full-text (BM25)
 
@@ -380,7 +433,10 @@ The non-default flags are each load-bearing:
   re-ingesting** — only the inverted index is rewritten.
 
 Two **BTREE scalar indexes** are also built, on `doc_id` and `audio_path`, to
-speed the key-lookup filters the backend runs constantly.
+speed the key-lookup filters the backend runs constantly. The live `chunks` table
+additionally carries two **BITMAP** indexes — `doc_topic_idx` and `topic_l2_idx`
+— built by `raudio feature topics` to make the topic facet (`SearchSpec.topic`)
+cheap to filter on.
 
 ### IVF_PQ cosine vector index
 
@@ -434,13 +490,18 @@ A third operational fact:
 
 ### Query-time recall (`nprobes` + `refine_factor`)
 
-Lance's IVF_PQ default probes too few partitions (`nprobes=1` scans only 1 of the
-256 cells) for good recall — the "feels broken, re-query" reflex. The backend
-fixes this in `backend/search/service.py`: every vector query is issued with
-`.nprobes(_VECTOR_NPROBES)` and `.refine_factor(_VECTOR_REFINE_FACTOR)`, where
-`_VECTOR_NPROBES = 20` (≈ √256) and `_VECTOR_REFINE_FACTOR = 3` re-scores the top
-candidates with full-precision vectors. The history of this gotcha (and the
-`merge_insert` crash) is documented in [INVESTIGATION.md](INVESTIGATION.md).
+Lance's IVF_PQ default probes too few partitions (`nprobes=1` scans only 1 cell)
+for good recall — the "feels broken, re-query" reflex. The backend fixes this with
+**adaptive probing** (`backend/search/service.py:244-246`,
+`backend/search/frames.py:84-86`): every vector query is issued with
+`.minimum_nprobes(_VECTOR_NPROBES).maximum_nprobes(_VECTOR_MAX_NPROBES).refine_factor(_VECTOR_REFINE_FACTOR)`,
+where `_VECTOR_NPROBES = 20`, `_VECTOR_MAX_NPROBES = 0` (uncapped — extends toward
+a full-index scan when a *selective* prefilter leaves the first pass short of
+`limit`), and `_VECTOR_REFINE_FACTOR = 3` re-scores the top candidates with
+full-precision vectors (`backend/search/constants.py:49-57`). Uncapped is cheap
+here: the live table is ~35 IVF partitions at 145k rows, so worst case is a
+full-index scan of a few ms. The history of this gotcha (and the `merge_insert`
+crash) is documented in [INVESTIGATION.md](INVESTIGATION.md).
 
 ---
 
@@ -451,20 +512,27 @@ candidates with full-precision vectors. The history of this gotcha (and the
 | `chunks.text` | Tantivy FTS | BM25 inverted index | `create_fts_index` (ingest / `raudio reindex-fts`) |
 | `chunks.text_embedding` | Vector index | IVF_PQ cosine, 2048-d | `raudio feature text_embedding` (`add_columns`) → `ensure_vector_index` |
 | `chunks.frame_embedding` | Column (data evolution) | 2048-d chunk-level image vec (image-atlas; not indexed on `chunks`) | `raudio feature atlas_visual` (`chunk_frame_embedding_column`, `add_columns`) |
+| `chunks.caption_embedding` | Column (data evolution) | 2048-d chunk-level caption vec (caption-atlas; not indexed on `chunks`) | `raudio feature atlas_caption` (`chunk_frame_embedding_column`, `add_columns`) |
 | `chunks.atlas_x` / `atlas_y` / `atlas_cluster` | Column (data evolution) | float / int32 (text-space EVōC) | `raudio feature atlas` (`add_columns`) |
 | `chunks.atlas_img_x` / `atlas_img_y` / `atlas_img_cluster` | Column (data evolution) | float / int32 (visual-space EVōC) | `raudio feature atlas_visual` (`add_columns`) |
+| `chunks.atlas_cap_x` / `atlas_cap_y` / `atlas_cap_cluster` | Column (data evolution) | float / int32 (caption-space EVōC) | `raudio feature atlas_caption` (`add_columns`) |
+| `chunks.topic_l0` / `topic_l1` / `topic_l2` / `doc_topic` | Column + Bitmap index | string (`doc_topic_idx`, `topic_l2_idx` Bitmap) | `raudio feature topics` (`add_columns`) |
 | `chunks.alignments_json` | JSONB | `pa.json_()` | `flatten_chunks` (`json.dumps`) |
 | `chunks.doc_id`, `audio_path` | Scalar index | BTREE | `create_scalar_index` |
 | `documents.media_blob` | Blob V2 | **External** (URI) | `_write_documents_table` (`blob_array`) |
 | `documents.thumbnail` | Blob V2 | Inline (bytes) | `_write_documents_table` (`blob_array`) |
 | `chunk_frames.frame_blob` | Blob V2 | Inline (bytes) | `raudio extract-chunk-frames` (append, `blob_array`) |
 | `chunk_frames.frame_embedding` | Vector index | IVF_PQ cosine, 2048-d | `raudio feature frame_embedding` (`add_columns`) → `ensure_vector_index` |
+| `chunk_frames.caption` | Tantivy FTS | BM25 inverted index (`caption_idx`) | `raudio feature caption` |
+| `chunk_frames.caption_embedding` | Vector index | IVF_PQ cosine, 2048-d (`caption_embedding_idx`) | `raudio feature caption_embedding` (`add_columns`) → `ensure_vector_index` |
+| `speaker_turns.*` | Columnar table | `"2.2"` storage version | `raudio extract-speaker-turns` (append) |
+| `topics.hierarchy` | JSONB | `pa.json_()` (topic tree) | `raudio feature topics` (`write_topics_table`) |
 
 ---
 
 ## See also
 
-- [GUIDE.md](../GUIDE.md) — architecture & onboarding map (write side vs read side).
+- [GUIDE.md](GUIDE.md) — architecture & onboarding map (write side vs read side).
 - [EMBEDDINGS.md](EMBEDDINGS.md) — the embedding + search-mode contract (RRF, rerank).
 - [INVESTIGATION.md](INVESTIGATION.md) — the `merge_insert` crash and `nprobes` recall, in depth.
 - [`src/raudio/model/schema.py`](../src/raudio/model/schema.py) — the authoritative PyArrow schemas.

@@ -16,10 +16,13 @@ This file replaces the old root `TODO.md` (a closed-item changelog) and `todo2.m
 
 ### ⏳ Diarization — full-corpus coverage
 - The `make speaker-turns` batch is backfilling `speaker_turns.lance` (resumable,
-  ~2–4 min/video on a shared GPU → ~1–2 days for all 1,154). Shipped + live for
+  ~2–4 min/video on a shared GPU → ~1–2 days for all ~1,576). Shipped + live for
   done videos (Speakers tab).
-- 📋 **3-GPU sharding** to finish in ~8–16 h: split videos across GPUs 0/1/2,
-  each writing `speaker_turns_gpu{n}.lance`, merged at the end (no concurrent-write race).
+- ✅ **Sharded diarization is shipped** — `raudio extract-speaker-turns --num-shards N
+  --shard-index i` writes each disjoint slice to `speaker_turns_shard{i}.lance`, folded
+  back with `raudio merge-speaker-turns` (no concurrent-write race). NOTE: the
+  `make speaker-turns` target itself does not pass shard flags; sharding is a manual
+  N-process launch (one per GPU).
 - 📋 **On-demand diarization** — diarize a video the first time it's opened + cache,
   instead of (or alongside) the full batch. `POST /api/diarization/{doc}` running pyannote.
 - 🟡 **"Diarized only" filter/badge** in the hit list (`GET /api/diarization` list route + a toggle).
@@ -66,7 +69,7 @@ Revisit only if a profiler or real concurrency makes them bite.
   (`asyncio.gather`); try `IVF_HNSW_SQ` for `frame_embedding`.
 - **vLLM perf:** async per-query embed client; confirm `--enable-prefix-caching`;
   `/metrics` bottleneck check; FP8 / `--async-scheduling` (stretch).
-- **Housekeeping:** prune old dataset versions (disk); `make compact` after multi-stage writes.
+- **Housekeeping:** prune old dataset versions (disk).
 
 ## Code-quality (deferred)
 

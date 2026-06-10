@@ -35,7 +35,7 @@ flowchart LR
         CLI["raudio CLI<br/>transcribe → ingest → feature text_embedding<br/>→ extract-chunk-frames → feature frame_embedding"]
     end
 
-    subgraph DB["transcripts.lance/ (single Lance dataset)"]
+    subgraph DB["transcripts_v2.lance/ (single Lance dataset)"]
         direction TB
         T1["chunks.lance<br/>text + FTS + text_embedding + frame_embedding + atlas_*"]
         T2["documents.lance<br/>media_blob + thumbnail"]
@@ -85,7 +85,7 @@ flowchart LR
 | API | **FastAPI** + **Starlette** + **uvicorn** | API-only; HTTP Range streaming off Lance Blob V2 |
 | Embeddings / rerank | **vLLM** serving **Qwen3-VL-Embedding-2B** / **-Reranker-2B** | Out-of-process, OpenAI-compatible HTTP; full 2048-d (no truncation) |
 | Media | **ffmpeg** (subprocess) | Thumbnails + per-chunk frame extraction |
-| ASR (upstream) | **easytranscriber** (Whisper/ct2 + wav2vec2 alignment) | torch pinned to `cu128` |
+| ASR (upstream) | **easytranscriber** `0.2.3` + **easyaligner** `0.2.3` (Whisper/ct2 + wav2vec2 alignment) | PyPI deps (`easytranscriber` declared in `pyproject.toml`; `easyaligner` transitive); torch pinned to `cu128` |
 | Frontend | **SvelteKit 2 / Svelte 5** (runes), **TypeScript**, **Vite**, **Tailwind 4**, **Zod**, **bits-ui**, **Bun** | SPA (`adapter-static`, `ssr=false`); Bun server proxies `/api/*` |
 | Python toolchain | **uv** + **ruff** + **ty** + **pytest** | `uv run` / `uvx`; lint + type config in `pyproject.toml` |
 | Orchestration | **GNU Make** | `Makefile` is the single source of truth for how every piece runs together |
@@ -98,14 +98,17 @@ for free. The CLI/backend are just HTTP clients of it.
 
 ---
 
-## 4. The data model — four Lance tables
+## 4. The data model — four core Lance tables (+ a derived `topics.lance`)
 
-All four live inside one `transcripts.lance/` directory (gitignored — local
-working data). Schemas: [`src/raudio/model/schema.py`](src/raudio/model/schema.py).
+All four core tables live inside one `transcripts_v2.lance/` directory (gitignored —
+local working data). Schemas: [`src/raudio/model/schema.py`](src/raudio/model/schema.py).
+A fifth, single-row `topics.lance` is written on the read side by `feature topics`
+(its `hierarchy` column holds the nested topic tree) and is served by `/api/topics`
+(`backend/topics/router.py`) — see §6.
 
 | Table | Grain | Carries | Key columns |
 |---|---|---|---|
-| **`chunks`** | one row per ~30 s transcript chunk | FTS text, metadata, alignments JSON, **two** vector columns — `text_embedding` (2048-d) and `frame_embedding` (2048-d, the chunk-level image vector) — plus the six EVōC atlas columns `atlas_x/y/cluster` (text space) and `atlas_img_x/y/cluster` (visual space) | `(doc_id, speech_id, chunk_id)` |
+| **`chunks`** | one row per ~30 s transcript chunk | FTS text, metadata, alignments JSON, **two** vector columns — `text_embedding` (2048-d) and `frame_embedding` (2048-d, the chunk-level image vector) — plus the nine EVōC atlas columns: `atlas_x/y/cluster` (text), `atlas_img_x/y/cluster` (visual), `atlas_cap_x/y/cluster` (caption) — plus the topic columns `topic_l*`/`doc_topic` written by `feature topics` | `(doc_id, speech_id, chunk_id)` |
 | **`documents`** | one row per source media file | `media_blob` (Blob V2 *External* URI), `thumbnail` (Blob V2 *Inline* bytes), metadata | `doc_id` |
 | **`chunk_frames`** | one row per extracted frame (a chunk can hold N frames, `frame_idx` 0..K-1; `frame_idx=0` is the single representative frame) | `frame_blob` (Blob V2 Inline JPEG), `frame_embedding` (2048-d, added later) | `(doc_id, speech_id, chunk_id, frame_idx)` |
 | **`speaker_turns`** | one row per diarized speaker turn (a video produces N turns) | `speaker_label` (anonymous pyannote label `SPEAKER_00`…, stable only *within* one video), `start` / `end` in **absolute video seconds**. **No** vector/blob column → no IVF/vector index | `(doc_id, turn_id)` |
@@ -209,8 +212,9 @@ separate, *unshipped* effort — see [TODO.md](TODO.md)).
 
 ```mermaid
 flowchart TD
-    A["input/&lt;lang&gt;/*.mp4"] -->|"raudio detect-language<br/>(MMS-LID / Whisper)"| B["sorted into &lt;lang&gt;/"]
-    B -->|"raudio transcribe<br/>(easytranscriber → KB-Whisper)"| C["output/&lt;lang&gt;/alignments/*.json"]
+    S0["video_batcher.csv<br/>(local, gitignored seed)"] -->|"raudio download<br/>(httpx → iiifintern-ai.ra.se)"| S1["input/sv/{bildid}.mp4"]
+    S1 -->|"raudio detect-language<br/>(Whisper-large-v3 / MMS-LID)"| A["input/&lt;lang&gt;/*.mp4<br/>(sorted; corpus is sv-only)"]
+    A -->|"raudio transcribe<br/>(easytranscriber → KB-Whisper)"| C["output/&lt;lang&gt;/alignments/*.json"]
     C -->|"raudio thumbnail (ffmpeg)"| D["thumbnails/{stem}.jpg"]
     C --> E
     D --> E
@@ -218,22 +222,30 @@ flowchart TD
     F["raudio feature text_embedding<br/>Qwen3-VL text → text_embedding · IVF_PQ"] --> G
     G["raudio extract-chunk-frames<br/>ffmpeg → chunk_frames.lance (append-only)"] --> H
     H["raudio feature frame_embedding<br/>Qwen3-VL image → frame_embedding (add_columns)"] --> I
-    I["raudio feature caption + caption_embedding<br/>Gemma 4 Swedish caption (:8003) → IVF_PQ"] --> DB["(transcripts.lance)<br/>self-contained dataset"]
+    I["raudio feature caption + caption_embedding<br/>Gemma 4 Swedish caption (:8003) → IVF_PQ"] --> J
+    J["raudio extract-speaker-turns<br/>(pyannote → speaker_turns.lance)"] --> K
+    K["raudio feature atlas / atlas-visual / atlas-caption<br/>EVōC → atlas_* (text/visual/caption)"] --> L
+    L["raudio feature topics<br/>topic_l*/doc_topic + topics.lance"] --> M
+    M["raudio compact<br/>compact fragments + rebuild indexes"] --> DB["(transcripts_v2.lance)<br/>self-contained dataset"]
 
     classDef done fill:#1a1a1e,stroke:#34d399,color:#e9e9ea;
-    classDef open fill:#1a1a1e,stroke:#fbbf24,color:#e9e9ea;
-    class C,D,E,F,G,H done;
-    class I open;
+    class S0,S1,A,C,D,E,F,G,H,I,J,K,L,M done;
 ```
 
 > 🟢 = validated end-to-end on the live DB (`transcripts_v2.lance`: 145,175 chunks
 > / 1,154 documents / 145,175 chunk_frames). The frame stages
 > (`extract-chunk-frames` / `feature frame_embedding`) are **done** — all 145,175
-> frames are embedded and IVF-indexed (`frame_embedding_idx`). 🟡 = the one
-> genuinely-open piece: **captions** (`make captions` = `feature caption` +
-> `caption_embedding`, needs the Gemma server on `:8003`). Until they are built,
-> the `scene` / `scene_fts` modes return empty. Detailed pipeline + models:
-> [`docs/PIPELINE.md`](docs/PIPELINE.md).
+> frames are embedded and IVF-indexed (`frame_embedding_idx`). **Captions are also
+> built** (`make captions` = `feature caption` + `caption_embedding`, needs the
+> Gemma server on `:8003`): `chunk_frames.caption` + `caption_embedding` are fully
+> populated, so the `scene` / `scene_fts` modes return hits. Detailed pipeline +
+> models: [`docs/PIPELINE.md`](docs/PIPELINE.md).
+
+The corpus seed is a local, gitignored `video_batcher.csv`
+(`referenskod;namn;extraid;bildid`, ~1576 rows, never committed); `raudio download`
+pulls each row's `bildid` as `https://iiifintern-ai.ra.se/api/audiovideo/{bildid}.mp4`
+into `input/sv/`, then `detect-language` (Whisper-large-v3) sorts the Swedish files
+into `input/sv/sv/` and the pipeline continues sv-only.
 
 `ingest` is the heart: `load_transcript` (Pydantic `model_validate_json`) → `flatten_chunks`
 (walks speeches→chunks, joins the `video_batcher` CSV metadata by
@@ -351,26 +363,33 @@ src/raudio/                Python pipeline — the WRITE side + search/embedding
 │   ├── reranker.py         cross-encoder: VLLMReranker + QwenVLReranker (Lance adapter)
 │   ├── caption.py          image caption client
 │   ├── summarize.py        text summary client
-│   └── image.py            pure helpers: l2_normalize, image_to_data_url
+│   ├── image.py            pure helpers: l2_normalize, image_to_data_url
+│   └── schemas.py          Pydantic transport-boundary models
 ├── features/             DATA-EVOLUTION engine (type-agnostic column upserts)
 │   ├── engine.py           upsert_scan_column / upsert_blob_column / ensure_vector_index
 │   ├── columns.py          embed_text_column / embed_frame_column / summary_column /
 │   │                       caption_column / embed_caption_column / chunk_frame_embedding_column
 │   │                       + the FEATURES registry (text_embedding, frame_embedding, summary,
-│   │                       caption, caption_embedding, atlas, atlas_visual)
-│   └── projection.py       EVōC fit → atlas_x/y/cluster (text) + atlas_img_* (visual)
+│   │                       caption, caption_embedding, atlas, atlas_visual, atlas_caption, topics)
+│   ├── projection.py       EVōC fit → atlas_x/y/cluster (text) + atlas_img_* (visual)
+│   └── topic_tree.py       build_topic_tree / topic_layer_columns (nested topic hierarchy)
 └── retrieval/             READ PATH
     ├── search.py           FTS query + pure parsing/formatting helpers (timecode, …)
     └── qwen3_vl_reranker.jinja  vLLM chat template for the reranker server
 
 backend/                   FastAPI package (the read-side serving app)
-├── app.py                 create_app() factory wiring the routers together
+├── app.py                 create_app() factory wiring routers (probes/search/media/system/atlas/topics/diarization/graph) + lifespan
 ├── state.py               app state / Lance handles
 ├── deps.py                FastAPI dependencies
 ├── clients.py             vLLM client wiring for the backend
+├── warmup.py              cache warm-up run by the lifespan
+├── core/                  config / exceptions / handlers / lifespan / middleware / probes (the layered FastAPI template)
+├── schemas/               Pydantic response models (atlas/diarization/graph/health/search/system/topics)
 ├── search/                /api/search router + search core
 ├── media/                 /api/media /thumbnail /chunk-frame router
 ├── atlas/                  /api/atlas/{status,points,chunk,chunks} router (the map view)
+├── topics/                 /api/topics router (topic hierarchy → topics.lance)
+├── graph/                  /api/graph router (entity graph: /status //cypher //search //entity //subgraph)
 ├── diarization/            /api/diarization/{doc_id} router (Speakers-tab timeline; reads speaker_turns)
 └── system/                health / system router
 
@@ -444,11 +463,13 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
 - **`_Ctx` class as CLI global state.** `--db` / `--table` are stashed on a
   module-level class by the root callback rather than threaded through every
   signature. It's process-global; the idiomatic Typer alternative is `ctx.obj`.
-- **Eager DB open inside `create_app` (not a lifespan).** The backend holds
-  read-only Lance handles — no pool to dispose, no async driver — so the skill's
-  lifespan rule mostly doesn't apply. Cost: `create_app` needs a real dataset
-  (it raises if `chunks` is missing), which is exactly what the TestClient smoke
-  test exercises.
+- **Eager DB open inside `create_app`, plus a lifespan.** The read-only Lance
+  handles are opened eagerly in `create_app` (so a bare `TestClient(create_app(db))`
+  still has `app.state.resources` — no pool to dispose, no async driver), but a
+  lifespan IS wired (`backend/core/lifespan.py`): it only warms caches + flips the
+  `/readyz` readiness flags, which a lifespan-less TestClient rightly skips. Cost:
+  `create_app` still needs a real dataset (it raises if `chunks` is missing), which
+  is exactly what the TestClient smoke test exercises.
 - **FTS language must be `"Swedish"`.** The default English stemmer can't reduce
   Swedish forms (`ministern`, `vägen`, `ansåg`), so those queries return zero
   hits. `with_position=True` enables phrase queries; `remove_stop_words=False`
@@ -491,20 +512,29 @@ The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
     `chunks` (`chunk_frame_embedding_column` → the chunk-level `frame_embedding`),
     then fits EVōC over it and writes `atlas_img_x` / `atlas_img_y` /
     `atlas_img_cluster`.
-  - Both delegate the EVōC fit to `src/raudio/features/projection.py`
+  - `atlas_caption` (alias: `atlas --space caption`) — the **caption** space. First
+    joins each chunk's `caption_embedding` up from `chunk_frames` onto `chunks`,
+    then fits EVōC over it and writes `atlas_cap_x` / `atlas_cap_y` /
+    `atlas_cap_cluster`.
+  - `topics` — names the EVōC regions: runs in an isolated env and writes the
+    `topic_l*` / `doc_topic` columns onto `chunks` plus the single-row `topics.lance`
+    (the nested hierarchy served by `/api/topics`).
+  - The three atlas features delegate the EVōC fit to `src/raudio/features/projection.py`
     (`project_atlas_columns`). EVōC is CPU-only (numba / scikit-learn, no torch) and
     ships in the `[atlas]` optional extra.
-- **The columns on `chunks`:** the two triplets above — `atlas_x/y/cluster`
-  (text) and `atlas_img_x/y/cluster` (visual). The presence of the `*_x` column is
-  the "is this space built?" signal.
+- **The columns on `chunks`:** the three triplets above — `atlas_x/y/cluster`
+  (text), `atlas_img_x/y/cluster` (visual), and `atlas_cap_x/y/cluster` (caption) —
+  plus the `topic_l*` / `doc_topic` topic columns. The presence of the `*_x` column
+  is the "is this space built?" signal.
 - **The backend router** (`backend/atlas/router.py`, mounted by `create_app`),
   prefix `/api/atlas`:
-  - `GET /status?space=text|visual` — which spaces are built + the requested
-    space's non-null row count (reports both spaces so the UI can gate a
-    Text/Visual toggle).
-  - `GET /points?space=` — compact arrays for the scatter renderer (x/y/cluster +
-    factorized `language` / `namn` + a doc-id dictionary and per-point keys). No
-    2048-d vectors and no per-point text — small and fast for 145k points.
+  - `GET /status?space=text|visual|caption` — which spaces are built + the requested
+    space's non-null row count (reports every space's presence so the UI can gate a
+    Text/Visual/Caption toggle — `backend/schemas/atlas.py`).
+  - `GET /points?space=` — one Apache Arrow IPC stream (binary, parse-free): float16
+    x/y coords + dictionary-encoded `cluster` / `language` / `namn` / topic keys + a
+    doc-id dictionary, cached per (space, dataset version). No 2048-d vectors and no
+    per-point text. (`backend/atlas/points.py::build_points`)
   - `GET /chunk/{doc_id}/{speech_id}/{chunk_id}` — the full hit for one chunk
     (text + alignments + paths), lazy-fetched when a point is selected.
   - `POST /chunks` — full hits for a batch of chunk keys (capped at 1000) for the

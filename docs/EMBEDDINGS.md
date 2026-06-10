@@ -3,7 +3,7 @@
 > How `raudio` turns Swedish transcript text and video frames into 2048-d
 > vectors in one shared space, and how it cross-encodes query/document pairs for
 > reranking. This is the "shared seam" of the project — read
-> [GUIDE.md §7](../GUIDE.md#7-the-shared-seam-vllm-clients) for where it sits in
+> [GUIDE.md §7](GUIDE.md#7-the-shared-seam-vllm-clients) for where it sits in
 > the wider architecture, and [TODO.md](TODO.md) for open blockers. The
 > image-embed resolution mismatch that historically gated frame embedding has its
 > own deep-dive in **[INVESTIGATION.md](INVESTIGATION.md)** (Part B) — read that
@@ -330,7 +330,7 @@ answer the query."`.
 > `/v1/rerank` strings; the Jinja template is what the server actually renders
 > into tokens. Drift between them silently degrades relevance — the model was
 > trained on this exact framing. Treat changes here as risky (see
-> [GUIDE.md §7](../GUIDE.md#7-the-shared-seam-vllm-clients)).
+> [GUIDE.md §7](GUIDE.md#7-the-shared-seam-vllm-clients)).
 
 The response (`data["results"]`) may come back unordered, so `rerank()` re-sorts
 by the returned `index` to restore the caller's candidate order before returning
@@ -353,6 +353,10 @@ reads the `text` column, calls `client.rerank(query, docs)`, appends the scores 
 ---
 
 ## 6. How search uses embeddings (`backend/search/service.py::run_search`)
+
+> The concrete row-count and index facts in §6–§7 (145,175 rows,
+> `frame_embedding_idx`, etc.) refer to `transcripts_v2.lance` — which is both the
+> served dataset and the `Makefile`/CLI default (`DB ?= ./transcripts_v2.lance`).
 
 `/api/search` accepts a `mode`; `run_search` routes each one differently. Only
 `fts` needs no GPU; every other mode calls `get_embedder()` first (and 503s if the
@@ -449,12 +453,12 @@ image or the vectors. It applies to `fts`, `semantic`, `scene`, `scene_fts`,
 > one best frame per chunk key, then fetch the matching `chunks` rows and re-order
 > to the frame ranking). On the live DB `chunk_frames.frame_embedding` is fully
 > built (all 145,175 rows + `frame_embedding_idx`), so `visual` and the frame leg
-> of `all` return hits today. The genuinely-open piece is **captions** — `scene`
-> and `scene_fts` return **empty** until `make captions` builds
-> `chunk_frames.caption` + `caption_embedding` (needs the Gemma server on `:8003`).
-> Both `_vector_search` and `_frame_search` degrade to `[]` (not an error) when the
-> embedding column doesn't exist yet, so fusion modes still return their other
-> legs.
+> of `all` return hits today. On the live DB (`transcripts_v2.lance`)
+> `chunk_frames.caption` and `caption_embedding` are also fully built (all 145,175
+> rows + `caption_idx` + `caption_embedding_idx`), so `scene` and `scene_fts`
+> return hits today. Both `_vector_search` and `_frame_search` still degrade to
+> `[]` (not an error) when an embedding column is absent, so fusion modes keep
+> their other legs on a partially-built DB.
 
 ---
 

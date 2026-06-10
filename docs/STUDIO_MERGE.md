@@ -4,7 +4,7 @@
 > Tauri 2 desktop application called **Studio**. It is a *planning* document — architecture,
 > contracts, trade-offs, and a phased roadmap. There is **no implementation code** here;
 > mermaid diagrams, interface sketches, and decision tables stand in for it. Tone follows
-> [`GUIDE.md`](../GUIDE.md): one mental model, stated decisions, honest unknowns.
+> [`GUIDE.md`](GUIDE.md): one mental model, stated decisions, honest unknowns.
 >
 > Status of inputs at time of writing (2026-05-29):
 > - **ranymizer** source available at `/tmp/ranymizer-ref` — the structural + styling template.
@@ -237,9 +237,9 @@ a Tauri resource dir (recommended for a truly air-gapped desktop build).
 | **FTS / BM25 keyword search** | ⚠️ **possible — degraded mode** | currently server (Tantivy) | the offline opportunity — see 5.3 |
 | Metadata browse/filter (language/namn/referenskod/extraid) | ⚠️ possible from shipped index | currently server | could ship a static index for offline browse |
 | Transcript playback of a **sideloaded/cached** media file | ✅ | — | local file only |
-| **Semantic / vector search** | ❌ | ✅ vLLM Qwen3-VL text embed + IVF_PQ over 145k×1024-d | ~25 GB VRAM; too heavy for device (user constraint) |
+| **Semantic / vector search** | ❌ | ✅ vLLM Qwen3-VL text embed + IVF_PQ over 145k×2048-d | ~25 GB VRAM; too heavy for device (user constraint) |
 | **Visual / cross-modal search** | ❌ | ✅ Qwen3-VL image embed | **NOT validated end-to-end** (vLLM deepstack crash, 448-vs-392 mismatch) — do not assume it works |
-| **Hybrid / "all" fusion + cross-encoder rerank** | ❌ | ✅ Qwen3-VL-Reranker-8B | the heaviest tier |
+| **Hybrid / "all" fusion + cross-encoder rerank** | ❌ | ✅ Qwen3-VL-Reranker-2B | the heaviest tier |
 | Media streaming / thumbnails / chunk-frames | ❌ | ✅ Lance Blob V2 + HTTP Range | source MP4s are large, server-side |
 
 ```mermaid
@@ -307,7 +307,7 @@ Rust side move in mostly as-is.
 ```text
 studio/
 ├─ package.json                     # Bun workspace root, one reconciled dependency set
-├─ biome.json                       # one linter (from ranymizer; raudio has none today)
+├─ biome.json                       # one linter (from ranymizer; raudio uses ESLint today — reconcile to one)
 ├─ apps/
 │  └─ shell/                        # the Tauri + SvelteKit app (ex-ranymizer frontend)
 │     ├─ src/

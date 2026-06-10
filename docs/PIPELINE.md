@@ -2,9 +2,9 @@
 
 > How a Swedish press-conference MP4 becomes word-aligned transcript JSON that
 > `raudio ingest` can load. This is the **upstream half** of the write side
-> sketched in the [Architecture Guide](../GUIDE.md) §5 — everything that
+> sketched in the [Architecture Guide](GUIDE.md) §5 — everything that
 > happens *before* a Lance table exists. For the schema those JSONs land in,
-> see [GUIDE.md §4](../GUIDE.md#4-the-data-model--four-lance-tables); for the
+> see [GUIDE.md §4](GUIDE.md#4-the-data-model--four-lance-tables); for the
 > running task list see [TODO.md](TODO.md).
 
 `raudio` does **not** implement ASR. It is a thin operator wrapper around two
@@ -31,7 +31,7 @@ in [`run_transcribe`](../src/raudio/asr/transcribe.py).
 
 ```mermaid
 flowchart TD
-    A["input/sv/*.mp4 (16 kHz mono PCM)"] --> S1
+    A["input/sv/*.mp4"] --> S1
     subgraph S1["Stage 1 — VAD (Voice Activity Detection)"]
         V["pyannote (default) or silero<br/>finds speech regions"]
     end
@@ -330,7 +330,7 @@ sequenceDiagram
     participant ET as easytranscriber.pipeline
     participant FS as output/sv/alignments/*.json
     participant ING as raudio ingest
-    participant L as transcripts.lance
+    participant L as transcripts_v2.lance
 
     CLI->>ET: pipeline(vad, transcription_model, emissions_model, ...)
     ET-->>FS: AudioMetadata JSON per file
@@ -351,13 +351,13 @@ The handoff is purely by convention:
 - **FTS language.** `ingest` builds the Tantivy index with `--fts-language`
   (default `English`, but **use `Swedish`** for this corpus — the English
   stemmer can't reduce forms like `ministern` / `vägen` / `ansåg`). See
-  [GUIDE.md §4](../GUIDE.md#4-the-data-model--four-lance-tables) and
+  [GUIDE.md §4](GUIDE.md#4-the-data-model--four-lance-tables) and
   `raudio reindex-fts` for fixing the stemmer after the fact.
 - **What the words are for.** The per-word `start`/`end` preserved in
   `alignments_json` is what the search API surfaces as exact word timestamps
   (`raudio search --words`) and what the frontend uses to seek the `<video>`
   element. The full read path picks up from
-  [GUIDE.md §5 (read side)](../GUIDE.md#5-end-to-end-information-flow).
+  [GUIDE.md §5 (read side)](GUIDE.md#5-end-to-end-information-flow).
 
 In short: **`transcribe` (4 models) → alignment JSON (`AudioMetadata`) →
 `ingest` (Lance `chunks`/`documents`)**. Everything downstream — embeddings,
@@ -371,7 +371,7 @@ materializes from these JSONs.
 Diarization — **"who spoke when"** — is an independent offline stage that runs
 **after `ingest`** but does *not* touch the ASR/alignment chain above: it reads
 the **source MP4** again (not the alignment JSON) and writes a brand-new
-[`speaker_turns`](../GUIDE.md#4-the-data-model--four-lance-tables) Lance table.
+[`speaker_turns`](GUIDE.md#4-the-data-model--four-lance-tables) Lance table.
 Unlike the embedding stages, it needs **no vLLM server** — `pyannote.audio` is in
 the main venv and runs **in-process** (no isolated worker), GPU-accelerated when a
 CUDA device is present.
@@ -425,9 +425,10 @@ Grounded details from [`diarize.py`](../src/raudio/media/diarize.py) /
   optional scalar BTREE on `doc_id` is the only useful index.
 
 The read side serves this via `GET /api/diarization/{doc_id}` into the player's
-**Speakers** tab — see [GUIDE.md §5](../GUIDE.md#5-end-to-end-information-flow).
-**`raudio serve` has no auto-reload: restart the backend after building the table**
-so it serves the route (the [REPRODUCE.md](REPRODUCE.md) runbook calls this out).
+**Speakers** tab — see [GUIDE.md §5](GUIDE.md#5-end-to-end-information-flow).
+The route reads `speaker_turns.lance` **on demand per request**
+(`backend/diarization/router.py`), so a freshly-built or rebuilt table is served
+immediately — **no backend restart needed** (the [REPRODUCE.md](REPRODUCE.md) runbook concurs).
 
 > This is **diarization only** (segment the audio by speaker turn). The separate
 > cross-video *voice search* / speaker-embedding axis (matching the *same* person
