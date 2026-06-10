@@ -51,6 +51,9 @@ const PersistedEdgeSchema = z.object({
   id: z.string(),
   source: z.string(),
   target: z.string(),
+  // Which target port the edge lands on (Search has "in" + "image"); absent in
+  // pre-two-port snapshots — the loader infers it from the source kind.
+  targetHandle: z.string().optional(),
   label: z.string().optional(),
 });
 

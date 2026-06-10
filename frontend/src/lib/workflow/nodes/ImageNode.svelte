@@ -50,8 +50,8 @@
       </p>
     {/if}
     <p class="mt-1 text-[10px] text-muted-foreground">
-      Wire into Search, then set mode = <span class="text-foreground">Image</span> or
-      <span class="text-foreground">All</span>.
+      Wire into a Search's <span class="text-violet-400">img</span> port, then set mode =
+      <span class="text-foreground">Image</span> or <span class="text-foreground">All</span>.
     </p>
     <Handle type="source" position={Position.Right} />
   </NodeShell>

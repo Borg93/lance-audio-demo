@@ -2,7 +2,9 @@
   /** The execution node. Searches for its inline query (or a connected Query
    *  node / Image), in its chosen mode. If another Search feeds into it, this
    *  one is scoped to the videos that upstream result came from — so chaining
-   *  Search → Search refines progressively. */
+   *  Search → Search refines progressively. Two input ports: "in" (query /
+   *  filter / upstream results) and "image" (Image node only), so the wires
+   *  show what feeds what. */
   import { Handle, Position, type NodeProps } from '@xyflow/svelte';
   import type { SearchMode } from '$lib/api';
   import {
@@ -15,6 +17,7 @@
     type NodeKind,
     type RefineScope,
   } from '$lib/workflow/graph.svelte';
+  import { SEARCH_IMAGE_HANDLE, SEARCH_IN_HANDLE } from '$lib/workflow/types';
   import { FIELD_CLASS } from './field';
   import NodeShell from './NodeShell.svelte';
 
@@ -42,7 +45,30 @@
 
 {#if cfg && rt}
   <NodeShell {id} title="Search · {modeLabel(cfg.mode)}" status={rt.status} {selected}>
-    <Handle type="target" position={Position.Left} />
+    <!-- Two target ports (handles + labels anchor to the xyflow node wrapper).
+         The image port is violet to match the image-edge stroke colour. -->
+    <Handle
+      id={SEARCH_IN_HANDLE}
+      type="target"
+      position={Position.Left}
+      style="top: 35%"
+      title="Query · filter · upstream results"
+    />
+    <Handle
+      id={SEARCH_IMAGE_HANDLE}
+      type="target"
+      position={Position.Left}
+      style="top: 65%; background: #8b5cf6; border-color: #8b5cf6;"
+      title="Image (wire an Image node here)"
+    />
+    <span
+      class="pointer-events-none absolute left-1.5 -translate-y-1/2 text-[8px] leading-none text-muted-foreground"
+      style="top: 35%">in</span
+    >
+    <span
+      class="pointer-events-none absolute left-1.5 -translate-y-1/2 text-[8px] leading-none text-violet-400"
+      style="top: 65%">img</span
+    >
 
     <label class="mb-1 block text-[10px] text-muted-foreground" for="q-{id}">
       {isVisual ? 'Query (optional — image drives it)' : 'Query'}

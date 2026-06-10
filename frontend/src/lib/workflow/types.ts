@@ -32,6 +32,12 @@ export type RunStatus = 'idle' | 'running' | 'done' | 'error';
  *  One source of truth so the executor spec and the Inspector badge can't drift. */
 export const RERANK_TOP_N = 20;
 
+/** The Search node's two target ports: general upstream (query / filter /
+ *  results scope) vs the image input. Shared by the SearchNode handles, the
+ *  connection validation, and the persistence migration. */
+export const SEARCH_IN_HANDLE = 'in';
+export const SEARCH_IMAGE_HANDLE = 'image';
+
 /** A Search node's result count (`n`): default + allowed range. One source of
  *  truth for the default config, the persistence clamp, and the SearchNode input. */
 export const DEFAULT_N = 24;

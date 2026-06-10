@@ -39,6 +39,8 @@ import {
   MIN_N,
   NODE_KINDS,
   RERANK_TOP_N,
+  SEARCH_IMAGE_HANDLE,
+  SEARCH_IN_HANDLE,
   type ClipboardNode,
   type CombineMode,
   type NodeConfig,
@@ -230,10 +232,30 @@ class WorkflowGraph {
     ];
     // No `animated` here — edge animation is now run-driven (the canvas pulses
     // edges feeding a running node), so seeding it would just be stripped.
+    // Search targets carry an explicit port (its handles all have ids, so an
+    // edge without one wouldn't attach).
     this.edges = [
-      { id: 'e-img', source: 'image', target: 'search-visual', label: 'image' },
-      { id: 'e-v-scene', source: 'search-visual', target: 'search-scene', label: 'refine' },
-      { id: 'e-scene-said', source: 'search-scene', target: 'search-said', label: 'refine' },
+      {
+        id: 'e-img',
+        source: 'image',
+        target: 'search-visual',
+        targetHandle: SEARCH_IMAGE_HANDLE,
+        label: 'image',
+      },
+      {
+        id: 'e-v-scene',
+        source: 'search-visual',
+        target: 'search-scene',
+        targetHandle: SEARCH_IN_HANDLE,
+        label: 'refine',
+      },
+      {
+        id: 'e-scene-said',
+        source: 'search-scene',
+        target: 'search-said',
+        targetHandle: SEARCH_IN_HANDLE,
+        label: 'refine',
+      },
       { id: 'e-said-res', source: 'search-said', target: 'results' },
     ];
     this.seq = 0;
@@ -291,20 +313,41 @@ class WorkflowGraph {
    *  self-loop, no duplicate edge, and no edge that would create a cycle (the
    *  target must not already reach the source). Port direction is enforced by
    *  the node Handles (sinks expose no source port; sources no target port). */
-  canConnect(connection: { source: string | null; target: string | null }): boolean {
+  canConnect(connection: {
+    source: string | null;
+    target: string | null;
+    targetHandle?: string | null;
+  }): boolean {
     return this.connectionError(connection) === null;
   }
 
   /** Why a would-be connection is invalid (for user feedback), or null if it is
    *  valid — also the source of truth for `canConnect` and `isValidConnection`
    *  (which gates edge reconnection too). */
-  connectionError(connection: { source: string | null; target: string | null }): string | null {
+  connectionError(connection: {
+    source: string | null;
+    target: string | null;
+    targetHandle?: string | null;
+  }): string | null {
     const { source, target } = connection;
     if (!source || !target) return null; // not over a real target yet
     if (source === target) return "A node can't connect to itself";
     if (this.edges.some((e) => e.source === source && e.target === target))
       return 'Those nodes are already connected';
     if (this.reaches(this.edges, target, source)) return 'That would create a loop';
+    // The Search node's image port only takes an Image node — and vice versa,
+    // an Image feeding a Search must use that port (the general port would
+    // silently merge it anyway, but the wire should show what it carries).
+    const targetHandle = connection.targetHandle ?? null;
+    const sourceKind = this.kindOf(source);
+    if (targetHandle === SEARCH_IMAGE_HANDLE && sourceKind !== 'image')
+      return 'Only an Image node can feed the image input';
+    if (
+      sourceKind === 'image' &&
+      this.kindOf(target) === 'search' &&
+      targetHandle !== SEARCH_IMAGE_HANDLE
+    )
+      return "Wire the image into the Search node's image port (lower one)";
     return null;
   }
 
@@ -599,6 +642,7 @@ class WorkflowGraph {
       id: e.id,
       source: e.source,
       target: e.target,
+      ...(typeof e.targetHandle === 'string' ? { targetHandle: e.targetHandle } : {}),
       ...(typeof e.label === 'string' ? { label: e.label } : {}),
     }));
     const config: Record<string, PersistedConfig> = {};
@@ -665,12 +709,20 @@ class WorkflowGraph {
       data: {},
     }));
     const ids = new Set(nodes.map((n) => n.id));
+    const kindById = new Map(parsed.nodes.map((n) => [n.id, n.type]));
+    // A Search target's port: the stored handle, or (pre-two-port snapshots)
+    // inferred from the source — an Image feeds the image port, all else "in".
+    // Without one the edge wouldn't attach: every Search handle has an id.
+    const searchPort = (e: { source: string; targetHandle?: string | undefined }): string =>
+      e.targetHandle ??
+      (kindById.get(e.source) === 'image' ? SEARCH_IMAGE_HANDLE : SEARCH_IN_HANDLE);
     const edges: Edge[] = parsed.edges
       .filter((e) => ids.has(e.source) && ids.has(e.target)) // drop dangling edges
       .map((e) => ({
         id: e.id,
         source: e.source,
         target: e.target,
+        ...(kindById.get(e.target) === 'search' ? { targetHandle: searchPort(e) } : {}),
         ...(e.label ? { label: e.label } : {}),
       }));
     const config: Record<string, NodeConfig> = {};
