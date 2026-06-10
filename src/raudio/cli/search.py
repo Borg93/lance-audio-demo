@@ -64,7 +64,7 @@ def cmd_search(
             matches = iter_matching_words(h, terms)
             if matches:
                 for w in matches:
-                    typer.echo(f"     • [{timecode(w['start'], millis=True)}] {w['text'].strip()}")
+                    typer.echo(f"     • [{timecode(w.start, millis=True)}] {w.text.strip()}")
             else:
                 typer.echo("     (chunk matched, no exact word hit — phrase/stemming?)")
 

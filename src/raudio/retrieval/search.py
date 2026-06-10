@@ -14,12 +14,25 @@ from pathlib import Path
 from typing import Any
 
 import lancedb
+from pydantic import BaseModel
 
 # Tantivy boolean/proximity keywords we strip when extracting match terms.
 _QUERY_STOPWORDS: frozenset[str] = frozenset({"and", "or", "not", "near"})
 
 
-def parse_alignments_json(raw: Any) -> list[dict[str, Any]]:
+class WordMatch(BaseModel):
+    """One word-level alignment hit (the fields stored in the ``words`` struct).
+
+    ``score`` is optional — WhisperX leaves it null for some aligned words.
+    """
+
+    text: str
+    start: float
+    end: float
+    score: float | None = None
+
+
+def parse_alignments_json(raw: str | list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Decode the ``alignments_json`` JSONB column to a Python list.
 
     Returns an empty list on null, missing, malformed, or non-list input — so
@@ -47,23 +60,23 @@ def extract_query_terms(query: str) -> list[str]:
     return [t for t in tokens if t not in _QUERY_STOPWORDS]
 
 
-def iter_matching_words(chunk_row: dict[str, Any], terms: list[str]) -> list[dict[str, Any]]:
+def iter_matching_words(chunk_row: dict[str, Any], terms: list[str]) -> list[WordMatch]:
     """Walk a chunk row's word-level alignments and return words matching any term.
 
     Parses the ``alignments_json`` column (a JSON string). Comparison is
-    case-insensitive and ignores leading/trailing punctuation. Each returned
-    dict is ``{"text", "start", "end", "score"}``.
+    case-insensitive and ignores leading/trailing punctuation. Each hit is a
+    :class:`WordMatch` (``text`` / ``start`` / ``end`` / optional ``score``).
     """
     if not terms:
         return []
     alignments = parse_alignments_json(chunk_row.get("alignments_json"))
     wanted = set(terms)
-    hits: list[dict[str, Any]] = []
+    hits: list[WordMatch] = []
     for alignment in alignments or []:
         for word in alignment.get("words") or []:
             clean = re.sub(r"^\W+|\W+$", "", (word.get("text") or "").lower(), flags=re.UNICODE)
             if clean in wanted:
-                hits.append(word)
+                hits.append(WordMatch.model_validate(word))
     return hits
 
 
