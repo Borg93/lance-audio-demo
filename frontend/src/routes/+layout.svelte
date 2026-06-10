@@ -8,6 +8,7 @@
     Search,
     Map,
     FolderTree,
+    Share2,
     BookOpen,
     Workflow,
     type Icon as LucideIcon,
@@ -30,6 +31,12 @@
     },
     { href: '/atlas', label: 'Atlas', icon: Map, hint: 'Explore the embedding map of every chunk' },
     { href: '/tree', label: 'Tree', icon: FolderTree, hint: 'Browse topics as a zoomable treemap' },
+    {
+      href: '/graph',
+      label: 'Graph',
+      icon: Share2,
+      hint: 'Explore the knowledge graph — entities, relations & clips',
+    },
     {
       href: '/workflow',
       label: 'Workflow',

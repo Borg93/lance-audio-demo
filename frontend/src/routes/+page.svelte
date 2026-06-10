@@ -285,6 +285,30 @@
   onMount(() => {
     const topic = page.url.searchParams.get('topic');
     if (topic) runSearch({ q: '', topic, n: spec.n ?? 100, mode: spec.mode });
+    // Deep-link from the graph explorer: open a doc in the player at time `t`.
+    // Player media is keyed on doc_id; a minimal synthetic hit seeks to start=t.
+    const docId = page.url.searchParams.get('doc');
+    if (docId) {
+      const t = Number(page.url.searchParams.get('t'));
+      const start = Number.isFinite(t) ? Math.max(0, t) : 0;
+      active = {
+        _score: 0,
+        doc_id: docId,
+        audio_path: '',
+        speech_id: 0,
+        chunk_id: 0,
+        start,
+        end: start,
+        duration: null,
+        text: '',
+        language: null,
+        namn: null,
+        referenskod: null,
+        bildid: null,
+        extraid: null,
+        alignments: [],
+      };
+    }
   });
 
   /**

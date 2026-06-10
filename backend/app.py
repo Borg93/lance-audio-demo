@@ -27,6 +27,7 @@ from backend.core.lifespan import lifespan
 from backend.core.middleware import register_middleware
 from backend.core.probes import router as probes_router
 from backend.diarization.router import router as diarization_router
+from backend.graph.router import router as graph_router
 from backend.media.router import router as media_router
 from backend.search.router import router as search_router
 from backend.state import open_resources
@@ -62,6 +63,7 @@ def create_app(db_path: str | Path) -> FastAPI:
     app.include_router(atlas_router)
     app.include_router(topics_router)
     app.include_router(diarization_router)
+    app.include_router(graph_router)
 
     return app
 

@@ -10,6 +10,7 @@
         "apache-arrow": "^21.1.0",
         "bits-ui": "^2.0.0",
         "clsx": "^2.1.1",
+        "d3-force": "^3.0.0",
         "embedding-atlas": "^0.21.0",
         "lucide-svelte": "^0.468.0",
         "svelte": "^5.36.0",
@@ -24,6 +25,7 @@
         "@sveltejs/vite-plugin-svelte": "^6.0.0",
         "@tailwindcss/vite": "^4.0.0",
         "@types/bun": "^1.2.0",
+        "@types/d3-force": "^3.0.10",
         "@types/d3-hierarchy": "^3.1.7",
         "@types/d3-scale": "^4.0.9",
         "@types/d3-scale-chromatic": "^3.1.0",
@@ -272,6 +274,8 @@
     "@types/d3-contour": ["@types/d3-contour@3.0.6", "", { "dependencies": { "@types/d3-array": "*", "@types/geojson": "*" } }, "sha512-BjzLgXGnCWjUSYGfH1cpdo41/hgdWETu4YxpezoztawmqsvCeep+8QGfiY6YbDvfgHz/DkjeIkkZVJavB4a3rg=="],
 
     "@types/d3-drag": ["@types/d3-drag@3.0.7", "", { "dependencies": { "@types/d3-selection": "*" } }, "sha512-HE3jVKlzU9AaMazNufooRJ5ZpWmLIoc90A37WU2JMmeq28w1FQqCZswHZ3xR+SuxYftzHq6WU6KJHvqxKzTxxQ=="],
+
+    "@types/d3-force": ["@types/d3-force@3.0.10", "", {}, "sha512-ZYeSaCF3p73RdOKcjj+swRlZfnYpK1EbaDiYICEEp5Q6sUiqFaFQ9qgoshp5CzIyyb/yD09kD9o2zEltCexlgw=="],
 
     "@types/d3-hierarchy": ["@types/d3-hierarchy@3.1.7", "", {}, "sha512-tJFtNoYBtRtkNysX1Xq4sxtjK8YgoWUNpIiUee0/jHGRwqvzYxkq0hGVbbOGSz+JgFxxRu4K8nb3YpG3CMARtg=="],
 

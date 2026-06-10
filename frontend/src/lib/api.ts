@@ -727,3 +727,178 @@ export type TopicsResponse = z.infer<typeof TopicsResponseSchema>;
 export async function getTopics(fetcher: typeof fetch = fetch): Promise<TopicsResponse> {
   return asJson(await fetcher('/api/topics'), TopicsResponseSchema);
 }
+// ── Knowledge graph (Graph page) ──────────────────────────────────────────
+// `raudio feature graph` extracts entities/relations from transcripts into a
+// Kuzu graph. The Graph page is a Kuzu-Explorer-style shell: a Cypher cell with
+// Graph/Table/JSON result views plus an entity side panel. Every endpoint
+// returns `built: false` (instead of 404) while the graph hasn't been built.
+
+/** Entity ids are 16-char lowercase hex slugs. Validated before any id is sent
+ *  to (or embedded by) the backend — a non-slug never reaches a Cypher string. */
+const ENTITY_ID_RE = /^[0-9a-f]{16}$/;
+
+export function isEntityId(id: string): boolean {
+  return ENTITY_ID_RE.test(id);
+}
+
+export const GraphStatusSchema = z.object({
+  built: z.boolean(),
+  entities: z.number().int(),
+  relations: z.number().int(),
+  mentions: z.number().int(),
+  videos: z.number().int(),
+});
+export type GraphStatus = z.infer<typeof GraphStatusSchema>;
+
+export async function getGraphStatus(fetcher: typeof fetch = fetch): Promise<GraphStatus> {
+  return asJson(await fetcher('/api/graph/status'), GraphStatusSchema);
+}
+
+// A Cypher result cell: Kuzu values arrive stringified except numbers/nulls.
+const CypherValueSchema = z.union([z.string(), z.number(), z.null()]);
+export type CypherValue = z.infer<typeof CypherValueSchema>;
+
+export const GraphCypherResponseSchema = z.object({
+  built: z.boolean(),
+  columns: z.array(z.string()),
+  rows: z.array(z.array(CypherValueSchema)),
+  // Invalid Cypher is a NORMAL outcome for a shell: the backend answers 200
+  // with `error` set (columns/rows empty) and the UI renders it inline.
+  error: z.string().nullable(),
+});
+export type GraphCypherResponse = z.infer<typeof GraphCypherResponseSchema>;
+
+/** Run a read-only Cypher query against the knowledge graph. Query errors come
+ *  back in `error` (never thrown), mirroring a database shell. */
+export async function runGraphCypher(
+  query: string,
+  limit = 200,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphCypherResponse> {
+  const r = await fetcher('/api/graph/cypher', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, limit }),
+  });
+  return asJson(r, GraphCypherResponseSchema);
+}
+
+export const GraphMatchSchema = z.object({
+  entity_id: z.string(),
+  name: z.string(),
+  entity_type: z.string(),
+  mention_count: z.number().int(),
+  videos: z.number().int(),
+});
+export type GraphMatch = z.infer<typeof GraphMatchSchema>;
+
+const GraphSearchResponseSchema = z.object({
+  built: z.boolean(),
+  matches: z.array(GraphMatchSchema),
+});
+export type GraphSearchResponse = z.infer<typeof GraphSearchResponseSchema>;
+
+/** Entity name search (python-side substring on the lowercased name, top 10 by
+ *  mention_count) — drives the search dropdown. `q` never touches Cypher. */
+export async function searchGraphEntities(
+  q: string,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphSearchResponse> {
+  return asJson(await fetcher(`/api/graph/search?q=${encodeURIComponent(q)}`), GraphSearchResponseSchema);
+}
+
+const GraphEntitySchema = z.object({
+  entity_id: z.string(),
+  name: z.string(),
+  entity_type: z.string(),
+  mention_count: z.number().int(),
+});
+export type GraphEntity = z.infer<typeof GraphEntitySchema>;
+
+const GraphClipSchema = z.object({
+  chunk_id: z.string(),
+  doc_id: z.string(),
+  namn: z.string(),
+  start: z.number(),
+  end: z.number(),
+  text: z.string(),
+});
+export type GraphClip = z.infer<typeof GraphClipSchema>;
+
+const GraphNeighborSchema = z.object({
+  entity_id: z.string(),
+  name: z.string(),
+  entity_type: z.string(),
+  direction: z.enum(['out', 'in']),
+  description: z.string(),
+});
+export type GraphNeighbor = z.infer<typeof GraphNeighborSchema>;
+
+const GraphCooccurSchema = z.object({
+  entity_id: z.string(),
+  name: z.string(),
+  shared: z.number().int(),
+});
+export type GraphCooccur = z.infer<typeof GraphCooccurSchema>;
+
+export const GraphEntityResponseSchema = z.object({
+  built: z.boolean(),
+  entity: GraphEntitySchema.nullable(),
+  clips: z.array(GraphClipSchema),
+  neighbors: z.array(GraphNeighborSchema),
+  cooccur: z.array(GraphCooccurSchema),
+});
+export type GraphEntityResponse = z.infer<typeof GraphEntityResponseSchema>;
+
+/** One entity's detail card: where it's mentioned (clips), its RELATIONSHIP
+ *  neighbours, and the entities it co-occurs with. */
+export async function getGraphEntity(
+  entityId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphEntityResponse> {
+  if (!isEntityId(entityId)) throw new ApiError(400, `invalid entity id: ${entityId}`);
+  return asJson(
+    await fetcher(`/api/graph/entity/${encodeURIComponent(entityId)}`),
+    GraphEntityResponseSchema,
+  );
+}
+
+const GraphNodeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.string(),
+  mentions: z.number().int(),
+  videos: z.number().int(),
+});
+export type GraphNode = z.infer<typeof GraphNodeSchema>;
+
+const GraphEdgeSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+  description: z.string(),
+});
+export type GraphEdge = z.infer<typeof GraphEdgeSchema>;
+
+export const GraphSubgraphResponseSchema = z.object({
+  built: z.boolean(),
+  nodes: z.array(GraphNodeSchema),
+  edges: z.array(GraphEdgeSchema),
+});
+export type GraphSubgraphResponse = z.infer<typeof GraphSubgraphResponseSchema>;
+
+/** A renderable subgraph. No `entityId` → overview (top-`limit` entities by
+ *  mention_count + the kg_relationships edges among them); with `entityId` →
+ *  that node, its 1-hop RELATIONSHIP neighbours (both directions) and the
+ *  edges among that node set. */
+export async function getGraphSubgraph(
+  entityId?: string,
+  limit = 150,
+  fetcher: typeof fetch = fetch,
+): Promise<GraphSubgraphResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (entityId !== undefined) {
+    if (!isEntityId(entityId)) throw new ApiError(400, `invalid entity id: ${entityId}`);
+    params.set('entity_id', entityId);
+  }
+  return asJson(await fetcher(`/api/graph/subgraph?${params}`), GraphSubgraphResponseSchema);
+}
