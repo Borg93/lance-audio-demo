@@ -271,6 +271,27 @@ def cmd_extract_speaker_turns(
             help="Debug: diarize only the first N videos (0 = no limit). DO use this.",
         ),
     ] = 0,
+    num_shards: Annotated[
+        int,
+        typer.Option(
+            "--num-shards",
+            help=(
+                "Split the corpus across N parallel workers (1 = no sharding). "
+                "Diarization is CPU/pipeline-bound and barely uses the GPU, so "
+                "running several workers on one GPU multiplies throughput. Launch "
+                "N processes, one per --shard-index, each writing a disjoint slice "
+                "to speaker_turns_shard{i}.lance; fold them back with "
+                "`raudio merge-speaker-turns`."
+            ),
+        ),
+    ] = 1,
+    shard_index: Annotated[
+        int,
+        typer.Option(
+            "--shard-index",
+            help="This worker's shard in [0, num-shards). Only used when --num-shards > 1.",
+        ),
+    ] = 0,
 ) -> None:
     """Diarize each video → ``speaker_turns.lance`` (NEW append-only table).
 
@@ -286,26 +307,46 @@ def cmd_extract_speaker_turns(
     from tqdm import tqdm
 
     from ..ingest.audio import resolve_source
-    from ..media.diarize import Diarizer, existing_doc_ids, write_speaker_turns
+    from ..media.diarize import Diarizer, existing_doc_ids, shard_of, write_speaker_turns
 
     cfg: CliContext = ctx.obj
     db = lancedb.connect(str(cfg.db))
     _require_table(db, cfg.table, cfg.db)
     chunks_tbl = db.open_table(cfg.table)
-    turns_path = cfg.db / "speaker_turns.lance"
-    turns_exists = "speaker_turns" in db.list_tables().tables
+
+    if num_shards < 1:
+        raise typer.BadParameter("--num-shards must be >= 1")
+    sharded = num_shards > 1
+    if sharded and not 0 <= shard_index < num_shards:
+        raise typer.BadParameter(f"--shard-index must be in [0, {num_shards})")
+
+    # Shards stage to their own table; `merge-speaker-turns` folds them into the
+    # canonical `speaker_turns` afterwards (separate tables avoid concurrent-write
+    # commit conflicts that N appenders to one table would hit).
+    table_name = f"speaker_turns_shard{shard_index}" if sharded else "speaker_turns"
+    turns_path = cfg.db / f"{table_name}.lance"
+    main_path = cfg.db / "speaker_turns.lance"
+    existing_tables = db.list_tables().tables
+    turns_exists = table_name in existing_tables
 
     if jobs > 1:
         logger.info("--jobs %d ignored: diarization runs one video at a time on the GPU.", jobs)
 
     if turns_exists and not only_null:
-        typer.echo("  --all: dropping existing speaker_turns for a clean rebuild.", err=True)
-        db.drop_table("speaker_turns")
+        typer.echo(f"  --all: dropping existing {table_name} for a clean rebuild.", err=True)
+        db.drop_table(table_name)
         turns_exists = False
 
-    already = existing_doc_ids(turns_path) if (turns_exists and only_null) else set()
+    # Resume: skip videos this table already has and — in shard mode — anything
+    # already merged into the canonical table, so no worker ever re-diarizes a
+    # video another worker or an earlier single run already finished.
+    already: set[str] = set()
+    if only_null and turns_exists:
+        already |= existing_doc_ids(turns_path)
+    if sharded and "speaker_turns" in existing_tables:
+        already |= existing_doc_ids(main_path)
     if already:
-        typer.echo(f"  {len(already):,} video(s) already diarized.", err=True)
+        typer.echo(f"  {len(already):,} video(s) already diarized — skipping.", err=True)
 
     # Distinct (doc_id, audio_path) — one diarization per source video.
     rows = (
@@ -318,6 +359,8 @@ def cmd_extract_speaker_turns(
     for r in rows:
         seen.setdefault(r["doc_id"], r["audio_path"])
     docs = [(d, ap) for d, ap in seen.items() if d not in already]
+    if sharded:
+        docs = [(d, ap) for d, ap in docs if shard_of(d, num_shards) == shard_index]
     docs.sort(key=lambda t: t[0])
     if limit > 0:
         docs = docs[:limit]
@@ -336,13 +379,17 @@ def cmd_extract_speaker_turns(
             continue
         resolved.append((doc_id, src))
     if missing:
-        typer.echo(f"  warning: {missing} video(s) had no resolvable source MP4 — skipped.", err=True)
+        typer.echo(
+            f"  warning: {missing} video(s) had no resolvable source MP4 — skipped.", err=True
+        )
     if not resolved:
         typer.echo("Nothing diarizable.", err=True)
         return
 
+    shard_tag = f" [shard {shard_index}/{num_shards}]" if sharded else ""
     typer.echo(
-        f"Diarizing {len(resolved)} video(s) from {audio_root} (model={model}).", err=True
+        f"Diarizing {len(resolved)} video(s) from {audio_root}{shard_tag} (model={model}).",
+        err=True,
     )
     diarizer = Diarizer(model=model)
 
@@ -363,14 +410,105 @@ def cmd_extract_speaker_turns(
     # once after the batch loop (not per-append), idempotent via replace=True,
     # and only when the table actually has rows. Mirrors build_topics.py: the
     # index is an optimization, never required, so a failure just logs a skip.
-    if turns_path.exists():
-        turns_tbl = db.open_table("speaker_turns")
+    # Shards skip the index — it is (re)built once on the canonical table by
+    # `merge-speaker-turns`. A single (non-shard) run builds it inline as before.
+    if not sharded and turns_path.exists():
+        turns_tbl = db.open_table(table_name)
         if turns_tbl.count_rows() > 0:
             try:
                 turns_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)
                 logger.info("built BTREE scalar index on speaker_turns.doc_id")
             except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
                 logger.debug("scalar index (speaker_turns.doc_id) skipped: %s", e)
+
+
+@app.command("merge-speaker-turns")
+def cmd_merge_speaker_turns(
+    ctx: typer.Context,
+    drop_shards: Annotated[
+        bool,
+        typer.Option(
+            "--drop-shards/--keep-shards",
+            help="Delete the speaker_turns_shard* staging tables after a successful merge.",
+        ),
+    ] = True,
+) -> None:
+    """Fold ``speaker_turns_shard*.lance`` staging tables into ``speaker_turns.lance``.
+
+    The sharded ``extract-speaker-turns`` workers each write a disjoint slice to
+    their own staging table; this concatenates them (plus any existing canonical
+    rows, which win on a ``doc_id`` collision so re-running is safe), overwrites
+    ``speaker_turns``, rebuilds the ``doc_id`` BTREE index the backend's
+    ``GET /api/diarization/{doc_id}`` relies on, and drops the staging tables.
+    """
+    # NOTE (future / scale): this is a read-all + overwrite merge — correct and
+    # effectively instant at our size (speaker_turns is ~10^5 rows of 5 tiny
+    # columns), but it rewrites the whole canonical table each call. The native
+    # Lance distributed-write path — each worker `lance.fragment.write_fragments`
+    # into the canonical dataset, collect the `FragmentMetadata`, then one
+    # `LanceOperation.Append` commit — avoids the rewrite and is the cleaner,
+    # safer pattern to adopt if this table grows large or merges get frequent.
+    # We keep staging-table + overwrite for now because per-table per-video
+    # appends give crash durability (a dead worker resumes mid-shard), which the
+    # commit-once-at-the-end fragment path would sacrifice.
+    import lance
+    import lancedb
+    import pyarrow as pa
+
+    from ..model.schema import SPEAKER_TURNS_SCHEMA, SPEAKER_TURNS_STORAGE_VERSION
+
+    cfg: CliContext = ctx.obj
+    db = lancedb.connect(str(cfg.db))
+    existing_tables = db.list_tables().tables
+    shard_names = sorted(t for t in existing_tables if t.startswith("speaker_turns_shard"))
+    if not shard_names:
+        typer.echo("No speaker_turns_shard* staging tables found — nothing to merge.", err=True)
+        return
+
+    main_path = cfg.db / "speaker_turns.lance"
+    # Canonical rows first so an already-merged doc_id wins over a shard's copy.
+    sources = (["speaker_turns"] if "speaker_turns" in existing_tables else []) + shard_names
+
+    seen: set[str] = set()
+    parts: list[pa.Table] = []
+    for name in sources:
+        ds = lance.dataset(str(cfg.db / f"{name}.lance"))
+        if ds.count_rows() == 0:
+            continue
+        tbl = ds.to_table().cast(SPEAKER_TURNS_SCHEMA)
+        doc_col = tbl["doc_id"].to_pylist()
+        keep = pa.array([d not in seen for d in doc_col], pa.bool_())
+        parts.append(tbl.filter(keep))
+        seen.update(doc_col)
+
+    if not parts:
+        typer.echo("All source tables were empty — nothing to merge.", err=True)
+        return
+
+    merged = pa.concat_tables(parts)
+    lance.write_dataset(
+        merged,
+        str(main_path),
+        mode="overwrite",
+        data_storage_version=SPEAKER_TURNS_STORAGE_VERSION,
+    )
+    typer.echo(
+        f"  merged → speaker_turns.lance: {len(seen):,} video(s), {merged.num_rows:,} turn(s).",
+        err=True,
+    )
+
+    turns_tbl = db.open_table("speaker_turns")
+    if turns_tbl.count_rows() > 0:
+        try:
+            turns_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)
+            logger.info("rebuilt BTREE scalar index on speaker_turns.doc_id")
+        except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
+            logger.debug("scalar index (speaker_turns.doc_id) skipped: %s", e)
+
+    if drop_shards:
+        for name in shard_names:
+            db.drop_table(name)
+        typer.echo(f"  dropped {len(shard_names)} staging table(s).", err=True)
 
 
 @app.command("compact")

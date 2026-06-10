@@ -23,6 +23,7 @@ this module never takes a token argument.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import subprocess
 import tempfile
@@ -59,11 +60,19 @@ def _extract_wav_16k_mono(source: Path, dest: Path, *, timeout: float = 1800.0) 
     Raises :class:`RuntimeError` with the ffmpeg stderr tail on failure.
     """
     cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(source),
-        "-ar", str(TARGET_SAMPLE_RATE),
-        "-ac", "1",
-        "-f", "wav",
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source),
+        "-ar",
+        str(TARGET_SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-f",
+        "wav",
         str(dest),
     ]
     try:
@@ -126,6 +135,20 @@ class Diarizer:
         ]
         turns.sort(key=lambda t: t.start)
         return turns
+
+
+def shard_of(doc_id: str, num_shards: int) -> int:
+    """Deterministic shard index in ``[0, num_shards)`` for a ``doc_id``.
+
+    Uses a content hash (SHA-1), **not** the builtin ``hash()`` — the latter is
+    salted per process (``PYTHONHASHSEED``), so independent worker processes
+    would disagree on the partition and double-diarize or miss videos. With a
+    content hash every shard worker computes the same disjoint slice.
+    """
+    if num_shards <= 1:
+        return 0
+    digest = hashlib.sha1(doc_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % num_shards
 
 
 def existing_doc_ids(turns_path: Path) -> set[str]:
