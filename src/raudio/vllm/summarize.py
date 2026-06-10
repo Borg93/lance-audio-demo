@@ -48,6 +48,10 @@ class VLLMSummarizeClient:
         self.concurrency = concurrency
         self._t = VLLMTransport(summarize_url, timeout_s=timeout_s, pool_size=concurrency)
 
+    def close(self) -> None:
+        """Release the transport's HTTP connection pool."""
+        self._t.close()
+
     def summarize(self, texts: list[str]) -> list[str]:
         """Return one summary per text, in input order."""
         if not texts:

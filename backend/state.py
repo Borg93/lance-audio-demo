@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import httpx
 import lance
 import lancedb
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,6 +49,12 @@ class AppState(BaseModel):
     settings: Settings = Field(default_factory=get_settings)
     embedder: Any | None = None  # raudio.vllm.embedding.VLLMEmbeddingClient
     reranker: Any | None = None  # raudio.vllm.reranker.VLLMReranker
+    # One HTTP connection pool per process (health pings) — never per-request.
+    http: Any | None = None  # httpx.Client
+    # Memoized /points payloads keyed on (space, dataset version) — per-app, not
+    # module-global, so two app instances (e.g. tests) can't cross-contaminate.
+    # Writes are idempotent (same input → same bytes), so a plain dict suffices.
+    points_cache: dict[tuple[str, int], bytes] = Field(default_factory=dict)
 
 
 def open_resources(db_path: str | Path) -> AppState:
@@ -77,8 +84,9 @@ def open_resources(db_path: str | Path) -> AppState:
         chunk_frames_ds = lance.dataset(str(chunk_frames_path))
         has_embeddings = "frame_embedding" in chunk_frames_ds.schema.names
         logger.info(
-            f"opened chunk_frames ({chunk_frames_ds.count_rows()} row(s); "
-            f"has_embeddings={has_embeddings})"
+            "opened chunk_frames (%d row(s); has_embeddings=%s)",
+            chunk_frames_ds.count_rows(),
+            has_embeddings,
         )
 
     return AppState(
@@ -90,4 +98,5 @@ def open_resources(db_path: str | Path) -> AppState:
         chunk_frames_tbl=chunk_frames_tbl,
         chunk_frames_ds=chunk_frames_ds,
         settings=get_settings(),
+        http=httpx.Client(),
     )

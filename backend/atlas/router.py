@@ -26,13 +26,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Response
 
-from backend.atlas.points import (
-    POINTS_CACHE,
-    SPACES,
-    build_points,
-    is_projected,
-    space_cols,
-)
+from backend.atlas.points import SPACES, build_points, is_projected, space_cols
 from backend.core.exceptions import NotFoundError, ValidationError
 from backend.deps import StateDep
 from backend.schemas.atlas import AtlasSpace, AtlasStatusResponse, ChunkRowIds
@@ -102,12 +96,13 @@ def atlas_points(
         raise ValidationError(f"{space} 2D projection not built yet — run `{hint}`")
 
     # Memoize on (space, dataset version): the scan+encode is identical until the
-    # dataset is rewritten (version bump) or the backend restarts.
+    # dataset is rewritten (version bump) or the backend restarts. The cache lives
+    # on AppState (per app instance), never module-global.
     key = (space, state.chunks_ds.version)
-    body = POINTS_CACHE.get(key)
+    body = state.points_cache.get(key)
     if body is None:
         body = build_points(state, space)
-        POINTS_CACHE[key] = body
+        state.points_cache[key] = body
 
     return Response(
         content=body,

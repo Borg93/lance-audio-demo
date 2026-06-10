@@ -37,6 +37,10 @@ class VLLMTransport:
             limits=httpx.Limits(max_connections=pool_size * 2, max_keepalive_connections=pool_size),
         )
 
+    def close(self) -> None:
+        """Release the pooled HTTP connections."""
+        self._http.close()
+
     def post(self, path: str, body: dict[str, Any], *, into: type[_Resp]) -> _Resp:
         """POST ``body`` to ``{base_url}{path}`` and validate the JSON reply into ``into``.
 

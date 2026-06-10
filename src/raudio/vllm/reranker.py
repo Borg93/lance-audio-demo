@@ -59,6 +59,10 @@ class VLLMReranker:
         self.instruction = instruction
         self._t = VLLMTransport(rerank_url, timeout_s=timeout_s, pool_size=1)
 
+    def close(self) -> None:
+        """Release the transport's HTTP connection pool."""
+        self._t.close()
+
     def rerank(self, query: str, candidates: list[str]) -> list[float]:
         """Return one relevance score per candidate, in input order."""
         if not candidates:

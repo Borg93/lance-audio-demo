@@ -30,16 +30,6 @@ SPACES: dict[str, dict[str, str]] = {
     "caption": {"x": "atlas_cap_x", "y": "atlas_cap_y", "cluster": "atlas_cap_cluster"},
 }
 
-#: Memoized /points payloads keyed on (space, dataset version). The full 145k-row
-#: scan + dictionary-encode is identical for a given dataset version, so we build
-#: the Arrow IPC stream once per space and serve the cached *bytes* thereafter. The
-#: dataset version bumps on any rewrite (and a backend restart reopens `chunks_ds`
-#: anyway), invalidating stale entries. A plain dict suffices: writes are idempotent
-#: (same input → same bytes), so a concurrent double-compute overwrites with equal
-#: bytes.
-POINTS_CACHE: dict[tuple[str, int], bytes] = {}
-
-
 def space_cols(space: str) -> dict[str, str]:
     cols = SPACES.get(space)
     if cols is None:

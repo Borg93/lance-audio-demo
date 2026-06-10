@@ -28,10 +28,13 @@ router = APIRouter(prefix="/api", tags=["system"])
 @router.get("/health")
 def health(state: StateDep) -> HealthResponse:
     """Frontend status badge: pings vLLM embed/rerank, reports DB facts."""
+    # One pooled client per process (state.http); the module fallback only fires
+    # for bare AppState constructions in unit tests.
+    http = state.http if state.http is not None else httpx
 
     def _ping(url: str) -> VllmPing:
         try:
-            r = httpx.get(f"{url}/health", timeout=1.5)
+            r = http.get(f"{url}/health", timeout=1.5)
             return VllmPing(ok=r.status_code == 200, url=url)
         except Exception as e:  # noqa: BLE001
             # Keep the exception TYPE — httpx messages alone (e.g. a bare host)

@@ -48,3 +48,4 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resources = app.state.resources
         _best_effort_close(getattr(resources, "embedder", None))
         _best_effort_close(getattr(resources, "reranker", None))
+        _best_effort_close(getattr(resources, "http", None))

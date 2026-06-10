@@ -17,7 +17,7 @@ from typing import Any
 
 from lancedb.query import MatchQuery
 
-from backend.atlas.points import POINTS_CACHE, SPACES, build_points, is_projected
+from backend.atlas.points import SPACES, build_points, is_projected
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +43,14 @@ def _warm_fts(table: Any, column: str) -> None:
 
 
 def _warm_atlas_points(state: Any) -> int:
-    """Precompute the /points payload for every built space into its module cache."""
+    """Precompute the /points payload for every built space into the state cache."""
     warmed = 0
     for space in SPACES:
         if not is_projected(state, space):
             continue
         key = (space, state.chunks_ds.version)
-        if key not in POINTS_CACHE:
-            POINTS_CACHE[key] = build_points(state, space)
+        if key not in state.points_cache:
+            state.points_cache[key] = build_points(state, space)
         warmed += 1
     return warmed
 

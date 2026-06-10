@@ -71,6 +71,10 @@ class VLLMCaptionClient:
         self.concurrency = concurrency
         self._t = VLLMTransport(caption_url, timeout_s=timeout_s, pool_size=concurrency)
 
+    def close(self) -> None:
+        """Release the transport's HTTP connection pool."""
+        self._t.close()
+
     def caption(self, images: list[bytes]) -> list[str]:
         """Return one caption per image, in input order."""
         if not images:

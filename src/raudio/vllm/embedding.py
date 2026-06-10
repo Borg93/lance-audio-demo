@@ -72,6 +72,10 @@ class VLLMEmbeddingClient:
             embed_url, timeout_s=timeout_s, pool_size=max(text_concurrency, image_concurrency)
         )
 
+    def close(self) -> None:
+        """Release the transport's HTTP connection pool."""
+        self._t.close()
+
     def embed_text(self, texts: list[str]) -> np.ndarray:
         """Return an ``(N, EMBED_DIM) float32`` L2-normalized array."""
         if not texts:
