@@ -96,7 +96,18 @@
       : { paddingInner: 3, paddingOuter: 0, paddingTop: 0 },
   );
 
-  const color = scaleOrdinal<string, string>(schemeTableau10);
+  /** Fresh scale per displayed level, seeded with a deterministic domain (the
+   *  level's topics, largest-first — the render order). A component-lifetime
+   *  ordinal scale accumulates its domain across drills, so hues depended on
+   *  visit order and diverged from the Sankey's per-mount scale. */
+  // Noise is excluded from the domain (it renders muted, never a scheme hue),
+  // so toggling "Show noise" can't shift every real topic's colour by a slot.
+  // MUST stay identical to the Sankey's topNames filter.
+  const color = $derived(
+    scaleOrdinal<string, string>(schemeTableau10).domain(
+      (root.children ?? []).map((c) => c.data.name).filter((n) => n !== noiseLabel),
+    ),
+  );
   /** A node's hue = its broadest (depth-1) ancestor, so a topic + its
    *  sub-topics share a colour family across both views. */
   function nodeFill(node: HierarchyRectangularNode<TopicNode>): string {
@@ -107,10 +118,23 @@
 
   const isInteractive = (node: TopicNode) => node.name !== noiseLabel;
 
-  function onCell(node: TopicNode) {
-    if (!isInteractive(node)) return;
-    if (node.children?.length) drill = [...drill, node.name];
-    else showResults(node.name);
+  function onCell(node: HierarchyRectangularNode<TopicNode>) {
+    if (!isInteractive(node.data)) return;
+    if (node.data.children?.length) {
+      // Push the FULL name path from the displayed root down to the clicked
+      // branch: in Nested view a depth≥2 branch is NOT a direct child of
+      // `current`, and pushing its bare name would never resolve in `path` —
+      // worse, the unresolvable entry stayed in `drill` and silently broke
+      // all further drilling until a reload.
+      const names = node
+        .ancestors()
+        .reverse()
+        .slice(1) // drop the displayed root (= `current`)
+        .map((a) => a.data.name);
+      drill = [...drill, ...names];
+    } else {
+      showResults(node.data.name);
+    }
   }
 
   function showResults(name: string) {
@@ -237,20 +261,28 @@
                 {@const interactive = !isNoise}
                 {@const header = view === 'nested' && isBranch}
                 {@const label = fit(node.data.name, w)}
-                {@const hot = hovered === node.data.name}
+                <!-- Hover identity = the full path, NOT the name: topic names
+                     repeat across branches (the noise bucket everywhere, some
+                     sub-topics share their parent's name), and a name match
+                     co-highlighted every same-named cell. -->
+                {@const pathKey = node
+                  .ancestors()
+                  .map((a) => a.data.name)
+                  .join('›')}
+                {@const hot = hovered === pathKey}
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
                 <g
                   role={interactive ? 'button' : undefined}
                   tabindex={interactive ? 0 : undefined}
                   class={interactive ? 'cursor-pointer' : 'cursor-not-allowed'}
-                  onclick={() => onCell(node.data)}
+                  onclick={() => onCell(node)}
                   onkeydown={(e) => {
                     if (interactive && (e.key === 'Enter' || e.key === ' ')) {
                       e.preventDefault();
-                      onCell(node.data);
+                      onCell(node);
                     }
                   }}
-                  onmouseenter={() => (hovered = node.data.name)}
+                  onmouseenter={() => (hovered = pathKey)}
                   onmouseleave={() => (hovered = null)}
                 >
                   <title

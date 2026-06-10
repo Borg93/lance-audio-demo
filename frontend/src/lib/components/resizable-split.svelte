@@ -52,26 +52,55 @@
 
   let dragging = $state(false);
 
+  // Drag geometry is cached at pointerdown and fraction writes are coalesced
+  // to one per animation frame: pointermove fires far above frame rate on
+  // high-Hz mice, and EVERY fraction write re-lays-out both panes — on the
+  // Tree page that's a full d3 treemap/sankey layout plus a few-hundred-cell
+  // SVG rewrite, which made dragging the divider visibly laggy. Per-event
+  // getBoundingClientRect also forces a reflow; the rect can't change
+  // mid-drag (the container is the page split itself).
+  let dragRect: DOMRect | null = null;
+  let rafId = 0;
+  let pendingPos = 0;
+
   function onPointerDown(e: PointerEvent) {
     if (!container) return;
     dragging = true;
+    dragRect = container.getBoundingClientRect();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.preventDefault();
   }
 
   function onPointerMove(e: PointerEvent) {
-    if (!dragging || !container) return;
-    const rect = container.getBoundingClientRect();
-    const total = vertical ? rect.height : rect.width;
-    const pos = vertical ? e.clientY - rect.top : e.clientX - rect.left;
-    const minF = minLeft / total;
-    const maxF = 1 - minRight / total;
-    fraction = Math.max(minF, Math.min(maxF, pos / total));
+    if (!dragging || !dragRect) return;
+    pendingPos = vertical ? e.clientY - dragRect.top : e.clientX - dragRect.left;
+    if (rafId) return; // a frame is already scheduled — just update the target
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      if (!dragRect) return; // drag ended before the frame fired
+      const total = vertical ? dragRect.height : dragRect.width;
+      const minF = minLeft / total;
+      const maxF = 1 - minRight / total;
+      fraction = Math.max(minF, Math.min(maxF, pendingPos / total));
+    });
   }
 
   function onPointerUp(e: PointerEvent) {
     if (!dragging) return;
     dragging = false;
+    if (rafId) {
+      // Flush (don't drop) the pending frame: the divider must settle at the
+      // exact release point, and that position is what persists below.
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+      if (dragRect) {
+        const total = vertical ? dragRect.height : dragRect.width;
+        const minF = minLeft / total;
+        const maxF = 1 - minRight / total;
+        fraction = Math.max(minF, Math.min(maxF, pendingPos / total));
+      }
+    }
+    dragRect = null;
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     try {
       localStorage.setItem(storageKey, fraction.toFixed(3));
@@ -106,10 +135,21 @@
     onpointerup={onPointerUp}
     ondblclick={onDoubleClick}
     onkeydown={(e) => {
+      // Same px clamps as the pointer path (0.2/0.8 ignored minLeft/minRight
+      // and could violate them), and persist like a drag does.
+      if (!container) return;
       const dec = vertical ? 'ArrowUp' : 'ArrowLeft';
       const inc = vertical ? 'ArrowDown' : 'ArrowRight';
-      if (e.key === dec) fraction = Math.max(0.2, fraction - 0.02);
-      if (e.key === inc) fraction = Math.min(0.8, fraction + 0.02);
+      if (e.key !== dec && e.key !== inc) return;
+      const rect = container.getBoundingClientRect();
+      const total = vertical ? rect.height : rect.width;
+      const minF = minLeft / total;
+      const maxF = 1 - minRight / total;
+      const next = e.key === dec ? fraction - 0.02 : fraction + 0.02;
+      fraction = Math.max(minF, Math.min(maxF, next));
+      try {
+        localStorage.setItem(storageKey, fraction.toFixed(3));
+      } catch {}
     }}
     title="Drag to resize · double-click to reset"
     class="group relative flex items-center justify-center border-border bg-secondary/40

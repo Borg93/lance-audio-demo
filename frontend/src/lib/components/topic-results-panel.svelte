@@ -27,6 +27,9 @@
     loading = true;
     error = null;
     active = null;
+    // Drop the previous topic's hits immediately — keeping them rendered the
+    // old list under the NEW topic's header until the fetch landed.
+    hits = [];
     (async () => {
       try {
         const res = await search({ q: '', topic: name, n: BROWSE_N, mode: 'fts' });

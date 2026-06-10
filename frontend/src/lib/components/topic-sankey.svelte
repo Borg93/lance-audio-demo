@@ -74,10 +74,18 @@
       target: indexOf.get(l.target)!,
       value: l.target.value ?? 0,
     }));
-    return { nodes, links };
+    // Depth-1 names largest-first, noise excluded (it renders muted) — the
+    // treemap seeds its scale with the same ordered+filtered domain, so the
+    // two views can't drift apart and the noise toggle can't shift hues.
+    const topNames = (root.children ?? [])
+      .map((c) => c.data.name)
+      .filter((n) => n !== noiseLabel);
+    return { nodes, links, topNames };
   });
 
-  const color = scaleOrdinal<string, string>(schemeTableau10);
+  const color = $derived(
+    scaleOrdinal<string, string>(schemeTableau10).domain(graph.topNames),
+  );
   function nodeFill(node: FlowNode): string {
     return node.noise ? 'var(--color-muted)' : color(node.colorKey);
   }
@@ -118,14 +126,16 @@
                   data={link}
                   fill="none"
                   stroke={nodeFill(link.target)}
-                  stroke-opacity={hovered === link.target.name ? 0.65 : 0.3}
+                  stroke-opacity={hovered === link.target.key ? 0.65 : 0.3}
                   stroke-width={Math.max(1, link.width ?? 0)}
                 />
               {/each}
               {#each nodes as node (node.key)}
                 {@const h = node.y1 - node.y0}
                 {@const interactive = isInteractive(node)}
-                {@const hot = hovered === node.name}
+                <!-- Hover identity = the unique path key, not the name — topic
+                     names repeat across branches and co-highlighted. -->
+                {@const hot = hovered === node.key}
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
                 <g
                   role={interactive ? 'button' : undefined}
@@ -138,7 +148,7 @@
                       onSelect(node.name);
                     }
                   }}
-                  onmouseenter={() => (hovered = node.name)}
+                  onmouseenter={() => (hovered = node.key)}
                   onmouseleave={() => (hovered = null)}
                 >
                   <title
