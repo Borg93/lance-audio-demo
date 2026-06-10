@@ -7,6 +7,8 @@ directly. The two vLLM client slots stay ``None`` until first use so an
 FTS-only deployment never connects to a GPU server.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Any
@@ -53,7 +55,7 @@ def open_resources(db_path: str | Path) -> AppState:
     db_path = Path(db_path)
     db = lancedb.connect(str(db_path))
     names = db.list_tables().tables
-    logger.info(f"opened Lance DB {db_path} — tables: {names}")
+    logger.info("opened Lance DB %s — tables: %s", db_path, names)
 
     if "chunks" not in names:
         raise RuntimeError(f"'chunks' table missing in {db_path}")

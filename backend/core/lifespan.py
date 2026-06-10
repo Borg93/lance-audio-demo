@@ -13,6 +13,8 @@ needs no config — ``Settings`` already rides on ``app.state.resources`` — so
 there is nothing to close over.
 """
 
+from __future__ import annotations
+
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -22,7 +24,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from backend.warmup import warm_caches
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _best_effort_close(obj: object) -> None:
@@ -37,7 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         await run_in_threadpool(warm_caches, app.state.resources)
     except Exception:  # noqa: BLE001 — warmup must never block the server coming up
-        log.warning("cache warmup failed", exc_info=True)
+        logger.warning("cache warmup failed", exc_info=True)
     app.state.startup_complete = True
     try:
         yield

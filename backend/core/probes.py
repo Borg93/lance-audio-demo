@@ -11,23 +11,25 @@ from http import HTTPStatus
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from backend.schemas.health import Liveness, Readiness
+from backend.schemas.health import Liveness, Readiness, ReadinessStatus
 
 router = APIRouter(tags=["probes"])
 
 
 @router.get("/livez")
 def livez() -> Liveness:
-    return Liveness(status="ok")
+    return Liveness()
 
 
 @router.get("/readyz")
 def readyz(request: Request) -> JSONResponse:
     state = request.app.state
     if not getattr(state, "startup_complete", False):
-        body = Readiness(status="starting")
+        body = Readiness(status=ReadinessStatus.starting)
         return JSONResponse(status_code=HTTPStatus.SERVICE_UNAVAILABLE, content=body.model_dump())
     if getattr(state, "shutting_down", False):
-        body = Readiness(status="shutting_down")
+        body = Readiness(status=ReadinessStatus.shutting_down)
         return JSONResponse(status_code=HTTPStatus.SERVICE_UNAVAILABLE, content=body.model_dump())
-    return JSONResponse(status_code=HTTPStatus.OK, content=Readiness(status="ready").model_dump())
+    return JSONResponse(
+        status_code=HTTPStatus.OK, content=Readiness(status=ReadinessStatus.ready).model_dump()
+    )

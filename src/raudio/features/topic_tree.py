@@ -118,5 +118,5 @@ def build_topic_tree(db_path: str | Path) -> int:
     lance.write_dataset(
         table, str(topics_path), mode="overwrite", data_storage_version=CHUNK_STORAGE_VERSION
     )
-    logger.info(f"wrote topic tree: {len(rows)} chunks · {n_layers} layers → {topics_path}")
+    logger.info("wrote topic tree: %s chunks · %s layers → %s", len(rows), n_layers, topics_path)
     return len(rows)

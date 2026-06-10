@@ -22,9 +22,9 @@ from backend.media.blobs import (
     valid_doc_id,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["media"])
+router = APIRouter(prefix="/api", tags=["media"])
 
 
 def _doc_mime(ds: lance.LanceDataset, doc_id: str, column: str, default: str) -> str:
@@ -39,7 +39,7 @@ def _doc_mime(ds: lance.LanceDataset, doc_id: str, column: str, default: str) ->
     return default
 
 
-@router.get("/api/thumbnail/{doc_id}")
+@router.get("/thumbnail/{doc_id}")
 def thumbnail(doc_id: str, state: StateDep) -> Response:
     valid_doc_id(doc_id)
     if state.docs_ds is None:
@@ -58,7 +58,7 @@ def thumbnail(doc_id: str, state: StateDep) -> Response:
     )
 
 
-@router.get("/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}")
+@router.get("/chunk-frame/{doc_id}/{speech_id}/{chunk_id}")
 def chunk_frame(
     doc_id: str,
     speech_id: int,
@@ -103,7 +103,7 @@ def chunk_frame(
     try:
         blob = state.chunk_frames_ds.take_blobs("frame_blob", ids=[rowid])[0]
     except Exception as e:
-        log.warning("frame blob read failed", exc_info=True)
+        logger.warning("frame blob read failed", exc_info=True)
         raise NotFoundError("no frame for chunk") from e
     with blob as f:
         data = f.read()
@@ -114,7 +114,7 @@ def chunk_frame(
     )
 
 
-@router.get("/api/media/{doc_id}")
+@router.get("/media/{doc_id}")
 def media(doc_id: str, request: Request, state: StateDep) -> Response:
     valid_doc_id(doc_id)
     if state.docs_ds is None:

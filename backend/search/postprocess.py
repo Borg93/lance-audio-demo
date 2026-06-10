@@ -27,7 +27,7 @@ def _postprocess_hits(raw: list[dict[str, Any]], chunk_frames: Any = None) -> li
     """
     for h in raw:
         h["alignments"] = parse_alignments_json(h.pop("alignments_json", None))
-    _attach_captions(chunk_frames, raw)
+    attach_captions(chunk_frames, raw)
     return raw
 
 
@@ -36,7 +36,7 @@ def _chunk_key(hit: dict[str, Any]) -> ChunkKey:
     return (str(hit["doc_id"]), int(hit["speech_id"]), int(hit["chunk_id"]))
 
 
-def _attach_captions(chunk_frames, hits: list[dict[str, Any]]) -> None:
+def attach_captions(chunk_frames, hits: list[dict[str, Any]]) -> None:
     """Set ``hit['caption']`` from each chunk's representative frame (frame_idx=0).
 
     Captions live on ``chunk_frames``, not ``chunks``, so this one filtered scan

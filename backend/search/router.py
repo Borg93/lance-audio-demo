@@ -12,32 +12,18 @@ signatures at runtime, so the annotations stay real objects.
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
-from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from backend.deps import EmbedderFactoryDep, RerankerFactoryDep, StateDep
+from backend.schemas.search import DocTranscriptChunk, DocTranscriptResponse
 from backend.search.service import run_search
 from backend.search.spec import SearchMode, SearchSpec
 from raudio.retrieval.search import parse_alignments_json
 
-router = APIRouter(tags=["search"])
+router = APIRouter(prefix="/api", tags=["search"])
 
 
-class DocTranscriptChunk(BaseModel):
-    speech_id: int
-    chunk_id: int
-    start: float
-    end: float
-    text: str
-    alignments: list[dict[str, Any]]
-
-
-class DocTranscriptResponse(BaseModel):
-    doc_id: str
-    chunks: list[DocTranscriptChunk]
-
-
-@router.get("/api/search")
+@router.get("/search")
 def search_get(
     state: StateDep,
     get_embedder: EmbedderFactoryDep,
@@ -84,7 +70,7 @@ def search_get(
     )
 
 
-@router.post("/api/search")
+@router.post("/search")
 async def search_post(
     state: StateDep,
     get_embedder: EmbedderFactoryDep,
@@ -138,7 +124,7 @@ async def search_post(
     )
 
 
-@router.get("/api/chunk-alignments/{doc_id}/{speech_id}/{chunk_id}")
+@router.get("/chunk-alignments/{doc_id}/{speech_id}/{chunk_id}")
 def chunk_alignments(state: StateDep, doc_id: str, speech_id: int, chunk_id: int) -> dict[str, Any]:
     """Per-word alignments for one chunk — lazy-fetched by the player when a hit is
     opened. Search results omit the multi-KB ``alignments_json`` blob (it was ~93%
@@ -152,7 +138,7 @@ def chunk_alignments(state: StateDep, doc_id: str, speech_id: int, chunk_id: int
     return {"alignments": alignments}
 
 
-@router.get("/api/doc-transcript/{doc_id}")
+@router.get("/doc-transcript/{doc_id}")
 def doc_transcript(state: StateDep, doc_id: str) -> DocTranscriptResponse:
     """Whole-document, chunk-segmented transcript — ordered by start time. One lazy
     fetch drives both a clickable chunk timeline and (flattened) the player's

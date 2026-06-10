@@ -15,6 +15,10 @@ import logging
 import time
 from typing import Any
 
+from lancedb.query import MatchQuery
+
+from backend.atlas.points import POINTS_CACHE, SPACES, build_points, is_projected
+
 logger = logging.getLogger(__name__)
 
 # Any token loads the inverted index into cache; matches aren't needed.
@@ -35,27 +39,18 @@ def _warm_fts(table: Any, column: str) -> None:
     """Run a 1-row FTS query to load ``column``'s inverted index into cache."""
     if table is None or column not in table.schema.names:
         return
-    from lancedb.query import MatchQuery
-
     table.search(MatchQuery(_FTS_PROBE, column), query_type="fts").limit(1).to_list()
 
 
 def _warm_atlas_points(state: Any) -> int:
     """Precompute the /points payload for every built space into its module cache."""
-    from backend.atlas.points import (
-        _POINTS_CACHE,
-        _SPACES,
-        _build_points,
-        _is_projected,
-    )
-
     warmed = 0
-    for space in _SPACES:
-        if not _is_projected(state, space):
+    for space in SPACES:
+        if not is_projected(state, space):
             continue
         key = (space, state.chunks_ds.version)
-        if key not in _POINTS_CACHE:
-            _POINTS_CACHE[key] = _build_points(state, space)
+        if key not in POINTS_CACHE:
+            POINTS_CACHE[key] = build_points(state, space)
         warmed += 1
     return warmed
 

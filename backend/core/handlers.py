@@ -6,6 +6,8 @@ it maps every :class:`~backend.core.exceptions.DomainError` and FastAPI's
 (>=500) are logged with the traceback; client-class are not (they're expected).
 """
 
+from __future__ import annotations
+
 import logging
 from http import HTTPStatus
 
@@ -15,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 from backend.core.exceptions import DomainError
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _problem(exc: DomainError) -> dict[str, str | int]:
@@ -31,7 +33,7 @@ def register_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def _domain(_: Request, exc: DomainError) -> JSONResponse:
         if exc.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
-            log.exception("domain error", exc_info=exc)
+            logger.exception("domain error", exc_info=exc)
         return JSONResponse(
             status_code=exc.status_code,
             content=_problem(exc),

@@ -7,6 +7,8 @@ badge without the API depending on them.
 
 from typing import Annotated
 
+import httpx
+import pyarrow as pa
 from fastapi import APIRouter, Query
 
 from backend.deps import StateDep
@@ -20,16 +22,14 @@ from backend.schemas.system import (
     VllmPing,
 )
 
-router = APIRouter(tags=["system"])
+router = APIRouter(prefix="/api", tags=["system"])
 
 
-@router.get("/api/health")
+@router.get("/health")
 def health(state: StateDep) -> HealthResponse:
     """Frontend status badge: pings vLLM embed/rerank, reports DB facts."""
 
     def _ping(url: str) -> VllmPing:
-        import httpx
-
         try:
             r = httpx.get(f"{url}/health", timeout=1.5)
             return VllmPing(ok=r.status_code == 200, url=url)
@@ -54,15 +54,13 @@ def health(state: StateDep) -> HealthResponse:
 _COLUMN_EXCLUDE = {"alignments_json"}
 
 
-@router.get("/api/columns")
+@router.get("/columns")
 def columns(state: StateDep) -> list[FilterColumn]:
     """Filterable scalar columns of the ``chunks`` table (name + friendly kind).
 
     Lets the UI show *what* can go in a WHERE filter. Vector / blob / list /
     embedding columns are omitted — they can't appear in a SQL filter anyway.
     """
-    import pyarrow as pa
-
     out: list[FilterColumn] = []
     for field in state.chunks.schema:
         name = field.name
@@ -83,7 +81,7 @@ def columns(state: StateDep) -> list[FilterColumn]:
     return out
 
 
-@router.get("/api/documents")
+@router.get("/documents")
 def documents(
     state: StateDep,
     page: Annotated[int, Query(ge=1)] = 1,

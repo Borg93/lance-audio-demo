@@ -134,30 +134,23 @@ def detect_and_sort(
 ) -> dict[str, tuple[str, float]]:
     """Detect the spoken language of each top-level file in ``audio_dir``.
 
-    Parameters
-    ----------
-    audio_dir
-        Directory containing mixed-language audio/video files.
-    model
-        Hugging Face model id. ``facebook/mms-lid-*`` (default) or a
-        multilingual Whisper like ``openai/whisper-large-v3``.
-    sample_seconds
-        Length of each audio clip fed to the classifier (30s default).
-    num_windows
-        Number of clips sampled, evenly spread across ~5–95% of each file
-        (duration-aware). Spreading across the whole recording avoids judging
-        a long file by its intro and keeps short files from being skipped.
-    move
-        If ``True`` (default), move each file into ``audio_dir/<lang>/``.
-    dry_run
-        Print what would happen without moving files.
+    Args:
+        audio_dir: Directory containing mixed-language audio/video files.
+        model: Hugging Face model id. ``facebook/mms-lid-*`` (default) or a
+            multilingual Whisper like ``openai/whisper-large-v3``.
+        sample_seconds: Length of each audio clip fed to the classifier (30s
+            default).
+        num_windows: Number of clips sampled, evenly spread across ~5–95% of
+            each file (duration-aware). Spreading across the whole recording
+            avoids judging a long file by its intro and keeps short files from
+            being skipped.
+        move: If ``True`` (default), move each file into ``audio_dir/<lang>/``.
+        dry_run: Print what would happen without moving files.
 
-    Returns
-    -------
-    dict
-        ``{filename: (lang_code, probability)}``. ``lang_code`` is the
-        2-letter ISO 639-1 code whenever we can map it from MMS's 639-3
-        output; otherwise the raw code passes through.
+    Returns:
+        ``{filename: (lang_code, probability)}``. ``lang_code`` is the 2-letter
+        ISO 639-1 code whenever we can map it from MMS's 639-3 output;
+        otherwise the raw code passes through.
     """
     if not audio_dir.is_dir():
         raise SystemExit(f"Audio directory not found: {audio_dir}")
@@ -169,7 +162,7 @@ def detect_and_sort(
         and f.suffix.lower() in AUDIO_VIDEO_EXTS
     )
     if not files:
-        logger.warning(f"no audio/video files found directly in {audio_dir}/ (subdirs ignored)")
+        logger.warning("no audio/video files found directly in %s/ (subdirs ignored)", audio_dir)
         return {}
 
     if model.startswith("facebook/mms-lid"):
@@ -186,7 +179,7 @@ def detect_and_sort(
     for f in files:
         duration = _probe_duration_s(f)
         if duration <= 0.0:
-            logger.warning(f"{f.name}: no readable audio; skipping")
+            logger.warning("%s: no readable audio; skipping", f.name)
             continue
 
         votes: dict[str, float] = {}
@@ -206,7 +199,7 @@ def detect_and_sort(
             votes[lang_raw] = votes.get(lang_raw, 0.0) + prob
             sampled += 1
         if not votes:
-            logger.warning(f"{f.name}: no usable audio; skipping")
+            logger.warning("%s: no usable audio; skipping", f.name)
             continue
 
         lang_raw = max(votes, key=lambda k: votes[k])
@@ -215,7 +208,7 @@ def detect_and_sort(
         results[f.name] = (lang, prob_avg)
 
         supported = "✓" if lang in DEFAULT_EMISSIONS_MODEL else "!"
-        logger.info(f"{supported} {f.name}: {lang} (p={prob_avg:.3f})")
+        logger.info("%s %s: %s (p=%.3f)", supported, f.name, lang, prob_avg)
 
         if move and not dry_run:
             target_dir = audio_dir / lang
@@ -223,7 +216,7 @@ def detect_and_sort(
             shutil.move(str(f), str(target_dir / f.name))
 
     if move and not dry_run:
-        logger.info(f"sorted {len(results)} file(s) into {audio_dir}/<lang>/ subfolders")
+        logger.info("sorted %s file(s) into %s/<lang>/ subfolders", len(results), audio_dir)
         for lang in sorted({v[0] for v in results.values()}):
             if lang in DEFAULT_EMISSIONS_MODEL:
                 logger.info(
@@ -248,7 +241,7 @@ def _mms_probe(model_id: str, cache_dir: Path, device: str) -> LangProbe:
     import torch
     from transformers import AutoFeatureExtractor, Wav2Vec2ForSequenceClassification
 
-    logger.info(f"loading {model_id} on {device}")
+    logger.info("loading %s on %s", model_id, device)
     processor = AutoFeatureExtractor.from_pretrained(model_id, cache_dir=str(cache_dir))
     loaded = Wav2Vec2ForSequenceClassification.from_pretrained(model_id, cache_dir=str(cache_dir))
     # transformers' stubs mistype the from_pretrained/.to() chain (it infers a
@@ -275,7 +268,7 @@ def _whisper_probe(model_id: str, cache_dir: Path, device: str) -> LangProbe:
     from easytranscriber.utils import hf_to_ct2_converter
     from transformers import WhisperProcessor
 
-    logger.info(f"loading {model_id} on {device}")
+    logger.info("loading %s on %s", model_id, device)
     model_path = hf_to_ct2_converter(model_id, cache_dir=str(cache_dir))
     whisper = ctranslate2.models.Whisper(model_path.as_posix(), device=device)
     processor = WhisperProcessor.from_pretrained(model_id, cache_dir=str(cache_dir))

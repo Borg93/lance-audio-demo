@@ -60,7 +60,7 @@ class _ValueCheckpoint:
                 if line.strip():
                     rec = json.loads(line)
                     out[int(rec["id"])] = rec["v"]
-        logger.info(f"resuming blob-compute from {self.path}: {len(out)} value(s) already computed")
+        logger.info("resuming blob-compute from %s: %s value(s) already computed", self.path, len(out))
         return out
 
     def extend(self, pairs: list[tuple[int, Any]]) -> None:
@@ -132,7 +132,7 @@ def upsert_scan_column(
             progress(batch.num_rows)
         return pa.RecordBatch.from_arrays([out], names=[name])
 
-    logger.info(f"adding column {name} ({output_type}) to {total} row(s) via add_columns")
+    logger.info("adding column %s (%s) to %s row(s) via add_columns", name, output_type, total)
     ds.add_columns(udf, read_columns=read_columns, batch_size=batch_rows)
     return total
 
@@ -150,10 +150,10 @@ def _fill_null_scan_column(
     """Fill only ``NULL`` rows of an existing column via ``merge_insert`` on the key."""
     pending = ds.to_table(columns=[*key_columns, *read_columns], filter=f"{name} IS NULL")
     if pending.num_rows == 0:
-        logger.info(f"{name} already populated — nothing to fill")
+        logger.info("%s already populated — nothing to fill", name)
         return 0
 
-    logger.info(f"filling {pending.num_rows} NULL {name} row(s) via merge_insert")
+    logger.info("filling %s NULL %s row(s) via merge_insert", pending.num_rows, name)
     for batch in pending.to_batches(max_chunksize=batch_rows):
         update = pa.table(
             {**{k: batch.column(k) for k in key_columns}, name: compute(batch)}
@@ -192,7 +192,7 @@ def upsert_blob_column(
     ds = lance.dataset(str(dataset_path))
     if name in ds.schema.names:
         if not overwrite:
-            logger.info(f"{name} already exists — nothing to do (pass overwrite=True)")
+            logger.info("%s already exists — nothing to do (pass overwrite=True)", name)
             return 0
         ds.drop_columns([name])
         ds = lance.dataset(str(dataset_path))
@@ -223,7 +223,7 @@ def upsert_blob_column(
         out = pa.array([value_by_row_id[r] for r in row_ids], type=output_type)
         return pa.RecordBatch.from_arrays([out], names=[name])
 
-    logger.info(f"attaching column {name} ({output_type}) for {len(value_by_row_id)} row(s)")
+    logger.info("attaching column %s (%s) for %s row(s)", name, output_type, len(value_by_row_id))
     ds.add_columns(attach, read_columns=["_rowid"], batch_size=batch_rows)
     ckpt.cleanup()  # column is durably attached — the sidecar is no longer needed
     return total
@@ -262,7 +262,7 @@ def ensure_vector_index(
     """
     nulls = table.count_rows(filter=f"{column} IS NULL")
     if nulls > 0:
-        logger.warning(f"skipping index on {column}: {nulls} row(s) still NULL")
+        logger.warning("skipping index on %s: %s row(s) still NULL", column, nulls)
         return False
     row_count = table.count_rows()
     if row_count < num_partitions:
@@ -301,9 +301,9 @@ def ensure_fts_index(
     """
     nulls = table.count_rows(filter=f"{column} IS NULL")
     if nulls > 0:
-        logger.warning(f"skipping FTS index on {column}: {nulls} row(s) still NULL")
+        logger.warning("skipping FTS index on %s: %s row(s) still NULL", column, nulls)
         return False
-    logger.info(f"building FTS index on {column} (language={language})")
+    logger.info("building FTS index on %s (language=%s)", column, language)
     table.create_fts_index(
         column,
         replace=True,

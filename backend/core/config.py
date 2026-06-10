@@ -9,6 +9,8 @@ Env vars are ``RAUDIO_*`` (see aliases). ``cors_origins`` accepts either a JSON
 list or a bare comma-separated string (``RAUDIO_CORS_ORIGINS=https://a,https://b``).
 """
 
+from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
 

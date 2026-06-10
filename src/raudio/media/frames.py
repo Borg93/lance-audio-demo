@@ -332,7 +332,7 @@ def write_chunk_frames(
         if frame.error:
             n_fail += 1
             if n_fail <= 5:
-                logger.warning(f"frame extraction failed: {frame.doc_id}@{frame.time_sec:.2f}s — {frame.error}")
+                logger.warning("frame extraction failed: %s@%.2fs — %s", frame.doc_id, frame.time_sec, frame.error)
         pending.append(frame)
         if len(pending) >= batch:
             flush()

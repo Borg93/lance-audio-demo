@@ -9,10 +9,11 @@ the request via dependency injection.
 
 The retrieval mechanics are split into cohesive sibling modules
 (``constants`` / ``filters`` / ``postprocess`` / ``rerank`` / ``vector`` /
-``frames``); this module owns ONLY the mode dispatch and re-exports the public +
-test-facing names (so external imports of ``_build_where_clause``, ``_rrf_fuse``,
-``_frame_search``, ``_postprocess_hits``, ``_vector_search``, ``_attach_captions``
-keep resolving from here).
+``frames``); this module owns ONLY the mode dispatch and re-exports the
+test-facing names (so test imports of ``_build_where_clause``, ``_rrf_fuse``,
+``_frame_search``, ``_postprocess_hits``, ``_vector_search`` keep resolving
+from here). Cross-package consumers import public names from the sibling
+modules directly (e.g. ``backend.search.postprocess.attach_captions``).
 """
 
 from __future__ import annotations
@@ -31,13 +32,13 @@ from backend.search.constants import (
     _VECTOR_REFINE_FACTOR,
 )
 
-# Re-export block: tests + atlas/router import a few private helpers by name from
-# this module; they live in the split sibling modules now, so we import and list
-# them in __all__ to keep those imports resolving. (`_frame_fts_search` and
+# Re-export block: tests import a few private helpers by name from this module;
+# they live in the split sibling modules now, so we import and list them in
+# __all__ to keep those imports resolving. (`_frame_fts_search` and
 # `_rerank_by_text` below are ordinary body-used imports, not re-exports.)
 from backend.search.filters import _build_where_clause
 from backend.search.frames import _frame_fts_search, _frame_search
-from backend.search.postprocess import _attach_captions, _postprocess_hits, _rrf_fuse
+from backend.search.postprocess import _postprocess_hits, _rrf_fuse
 from backend.search.rerank import _rerank_by_text
 from backend.search.spec import SearchSpec
 from backend.search.vector import _vector_search
@@ -49,10 +50,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# `run_search` is the public entrypoint; the underscore names are test/atlas-facing
-# re-exports (external imports depend on them — do not remove).
+# `run_search` is the public entrypoint; the underscore names are test-facing
+# re-exports (test imports depend on them — do not remove).
 __all__ = [
-    "_attach_captions",
     "_build_where_clause",
     "_frame_search",
     "_postprocess_hits",

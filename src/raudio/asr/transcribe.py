@@ -114,6 +114,6 @@ def run_transcribe(
     )
 
     out_dir = output_root / "alignments"
-    logger.info(f"done — alignment JSONs written to {out_dir}/")
-    logger.info(f"  next: raudio ingest {out_dir}/*.json")
+    logger.info("done — alignment JSONs written to %s/", out_dir)
+    logger.info("  next: raudio ingest %s/*.json", out_dir)
     return out_dir

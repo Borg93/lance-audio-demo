@@ -39,7 +39,7 @@ _PAYLOAD_COLUMNS = [c for c in _HIT_COLUMNS if c != "_score"]
 _FRAME_EMBED_COLUMN = "frame_embedding"
 _CAPTION_EMBED_COLUMN = "caption_embedding"
 # Plain-text caption column on chunk_frames (the Gemma Swedish caption). Surfaced
-# on every hit for the list/table views — see _attach_captions.
+# on every hit for the list/table views — see attach_captions.
 _CAPTION_COLUMN = "caption"
 
 # IVF_PQ recall knobs. Lance's default probes too few partitions for good recall;

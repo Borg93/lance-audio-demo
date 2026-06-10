@@ -1,6 +1,8 @@
 """Response models for the system endpoints (``/api/health``, ``/api/columns``,
 ``/api/documents``)."""
 
+from __future__ import annotations
+
 from enum import StrEnum
 
 from pydantic import BaseModel, Field

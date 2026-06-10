@@ -6,6 +6,8 @@ clamp rather than reject, so the GET/POST handlers construct ``SearchSpec(...)``
 directly without a factory.
 """
 
+from __future__ import annotations
+
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, field_validator

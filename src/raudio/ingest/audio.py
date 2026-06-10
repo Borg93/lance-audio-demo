@@ -36,7 +36,7 @@ def resolve_source(audio_path: str, audio_root: str | Path | None) -> Path | Non
         p = Path(audio_root) / audio_path
 
     if not p.exists():
-        logger.warning(f"media source not found: {p}")
+        logger.warning("media source not found: %s", p)
         return None
     return p
 

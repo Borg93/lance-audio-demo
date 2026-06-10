@@ -107,24 +107,16 @@ def download_manifest(
 ) -> dict[str, list[str]]:
     """Download every media file listed in ``csv_path`` into ``output_dir``.
 
-    Parameters
-    ----------
-    csv_path
-        The ``video_batcher.csv`` file.
-    output_dir
-        Destination directory. Created if missing. Each file lands as
-        ``<output_dir>/{bildid}.mp4``.
-    limit
-        Only download the first N rows (useful for testing).
-    concurrency
-        Number of simultaneous downloads (keep modest — these are gigabyte
-        files from a single server).
-    timeout
-        Per-request total timeout in seconds.
+    Args:
+        csv_path: The ``video_batcher.csv`` file.
+        output_dir: Destination directory. Created if missing. Each file lands
+            as ``<output_dir>/{bildid}.mp4``.
+        limit: Only download the first N rows (useful for testing).
+        concurrency: Number of simultaneous downloads (keep modest — these are
+            gigabyte files from a single server).
+        timeout: Per-request total timeout in seconds.
 
-    Returns
-    -------
-    dict
+    Returns:
         Mapping of status → list of ``bildid`` — e.g.
         ``{"ok": [...], "skipped": [...], "http 404": [...], "error: ReadTimeout": [...]}``.
     """
@@ -135,7 +127,7 @@ def download_manifest(
     if limit is not None:
         rows = rows[:limit]
     if not rows:
-        logger.warning(f"no rows with `bildid` in {csv_path}; nothing to do")
+        logger.warning("no rows with `bildid` in %s; nothing to do", csv_path)
         return {}
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -148,5 +140,5 @@ def download_manifest(
 
     logger.info("summary:")
     for status in sorted(buckets):
-        logger.info(f"  {status:20s} {len(buckets[status]):>5}")
+        logger.info("  %-20s %5s", status, len(buckets[status]))
     return buckets

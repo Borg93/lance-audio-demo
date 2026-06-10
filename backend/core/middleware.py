@@ -11,6 +11,8 @@ OpenTelemetry's ASGI instrumentation — not ``BaseHTTPMiddleware``.
 Content-Length / Accept-Ranges visible to seek video.
 """
 
+from __future__ import annotations
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

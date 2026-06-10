@@ -6,6 +6,8 @@ encode them into one Apache Arrow IPC stream (float16 coords + int keys + a few
 this to the ``/api/atlas`` routes; :mod:`backend.warmup` precomputes it on boot.
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
@@ -22,7 +24,7 @@ from raudio.features.topic_tree import topic_layer_columns
 #: frame-embedding map (``raudio feature atlas --space visual``). Each space's
 #: X column doubling as the "is this space built?" signal — mirrors how
 #: ``search/service.py`` gates semantic search on ``text_embedding`` presence.
-_SPACES: dict[str, dict[str, str]] = {
+SPACES: dict[str, dict[str, str]] = {
     "text": {"x": "atlas_x", "y": "atlas_y", "cluster": "atlas_cluster"},
     "visual": {"x": "atlas_img_x", "y": "atlas_img_y", "cluster": "atlas_img_cluster"},
     "caption": {"x": "atlas_cap_x", "y": "atlas_cap_y", "cluster": "atlas_cap_cluster"},
@@ -35,18 +37,18 @@ _SPACES: dict[str, dict[str, str]] = {
 #: anyway), invalidating stale entries. A plain dict suffices: writes are idempotent
 #: (same input → same bytes), so a concurrent double-compute overwrites with equal
 #: bytes.
-_POINTS_CACHE: dict[tuple[str, int], bytes] = {}
+POINTS_CACHE: dict[tuple[str, int], bytes] = {}
 
 
-def _space_cols(space: str) -> dict[str, str]:
-    cols = _SPACES.get(space)
+def space_cols(space: str) -> dict[str, str]:
+    cols = SPACES.get(space)
     if cols is None:
         raise ValidationError("unknown space (text|visual|caption)")
     return cols
 
 
-def _is_projected(state: AppState, space: str = "text") -> bool:
-    return _space_cols(space)["x"] in state.chunks.schema.names
+def is_projected(state: AppState, space: str = "text") -> bool:
+    return space_cols(space)["x"] in state.chunks.schema.names
 
 
 def _dictionary(column: pa.ChunkedArray) -> pa.Array:
@@ -80,7 +82,7 @@ def _doc_file_stems(doc_dict: pa.Array, doc_ids: list[str], audio_paths: list[st
     return [stem_by_doc.get(d, d) for d in doc_dict.to_pylist()]
 
 
-def _build_points(state: AppState, space: str) -> bytes:
+def build_points(state: AppState, space: str) -> bytes:
     """The expensive part of /points: full-table scan → one Arrow IPC stream.
 
     Builds a single ``pyarrow.Table`` (float16 coords, ~3 sig-digit precision —
@@ -89,7 +91,7 @@ def _build_points(state: AppState, space: str) -> bytes:
     colour columns) and serializes it to Arrow IPC **stream** bytes. Pulled out
     so :func:`backend.atlas.router.atlas_points` can memoize the bytes per (space, version).
     """
-    cols = _space_cols(space)
+    cols = space_cols(space)
     x_col, y_col, cluster_col = cols["x"], cols["y"], cols["cluster"]
     schema = set(state.chunks.schema.names)
     columns = ["doc_id", "audio_path", "speech_id", "chunk_id", x_col, y_col]

@@ -99,9 +99,9 @@ def generate_thumbnails(
 
         status = "ok" if ok else "failed"
         buckets.setdefault(status, []).append(src.stem)
-        logger.info(f"[{status:7s}] {src.name} → {dest.name}")
+        logger.info("[%-7s] %s → %s", status, src.name, dest.name)
 
-    logger.info(f"processed {total} file(s) from {input_dir}/ → {output_dir}/")
+    logger.info("processed %s file(s) from %s/ → %s/", total, input_dir, output_dir)
     for status in sorted(buckets):
-        logger.info(f"  {status:10s} {len(buckets[status]):>5}")
+        logger.info("  %-10s %5s", status, len(buckets[status]))
     return buckets

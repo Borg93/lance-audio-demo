@@ -385,34 +385,27 @@ def ingest_many(
     of ``audio_root`` / ``media_base_uri`` / ``thumbnail_dir`` is supplied).
     Builds the FTS + scalar indexes once at the end.
 
-    Parameters
-    ----------
-    db_path
-        Filesystem path to the Lance database directory.
-    docs
-        Iterable of parsed :class:`AudioMetadata`.
-    audio_root
-        Root directory used to resolve each document's ``audio_path`` into a
-        local ``file://`` URI for the ``documents`` table's ``media_blob``
-        column (a Blob V2 *External* reference — the URI, never the bytes).
-    media_base_uri
-        Overrides the media URI base so ``media_blob`` points at e.g.
-        ``hf://…`` / ``s3://…`` instead of a local ``file://`` path.
-    table_name
-        Name of the chunks table. Defaults to ``"chunks"``.
-    metadata_csv
-        Optional ``video_batcher`` CSV (``referenskod;namn;extraid;bildid``).
-        Rows are joined to transcripts by ``bildid == Path(audio_path).stem``;
-        matched values populate the ``referenskod`` / ``namn`` / ``bildid`` /
-        ``extraid`` columns in both tables.
-    thumbnail_dir
-        Directory of ``<audio stem>.jpg`` files; a matching file is loaded as
-        the document's inline ``thumbnail`` blob (missing files stay null).
-    fts_language
-        Tantivy stemmer language for the FTS index over ``text``.
-    doc_language
-        ISO 639-1 code written to every document row (e.g. inferred from the
-        alignments directory name by the CLI).
+    Args:
+        db_path: Filesystem path to the Lance database directory.
+        docs: Iterable of parsed :class:`AudioMetadata`.
+        audio_root: Root directory used to resolve each document's
+            ``audio_path`` into a local ``file://`` URI for the ``documents``
+            table's ``media_blob`` column (a Blob V2 *External* reference —
+            the URI, never the bytes).
+        media_base_uri: Overrides the media URI base so ``media_blob`` points
+            at e.g. ``hf://…`` / ``s3://…`` instead of a local ``file://`` path.
+        table_name: Name of the chunks table. Defaults to ``"chunks"``.
+        metadata_csv: Optional ``video_batcher`` CSV
+            (``referenskod;namn;extraid;bildid``). Rows are joined to
+            transcripts by ``bildid == Path(audio_path).stem``; matched values
+            populate the ``referenskod`` / ``namn`` / ``bildid`` / ``extraid``
+            columns in both tables.
+        thumbnail_dir: Directory of ``<audio stem>.jpg`` files; a matching file
+            is loaded as the document's inline ``thumbnail`` blob (missing
+            files stay null).
+        fts_language: Tantivy stemmer language for the FTS index over ``text``.
+        doc_language: ISO 639-1 code written to every document row (e.g.
+            inferred from the alignments directory name by the CLI).
     """
     db = lancedb.connect(str(db_path))
 
@@ -471,7 +464,7 @@ def ingest_many(
         try:
             table.create_scalar_index(col, index_type="BTREE", replace=True)
         except Exception as e:  # noqa: BLE001
-            logger.debug(f"scalar index ({col}) skipped: {e}")
+            logger.debug("scalar index (%s) skipped: %s", col, e)
 
     # Always write the documents table so metadata + media_uri + thumbnail
     # travel with the chunks. `audio_root` is used to resolve `file://` URIs

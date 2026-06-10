@@ -1,5 +1,7 @@
 """Request/response models for the atlas endpoints (``/api/atlas/*``)."""
 
+from __future__ import annotations
+
 from enum import StrEnum
 
 from pydantic import BaseModel
@@ -10,7 +12,7 @@ class AtlasSpace(StrEnum):
 
     A ``StrEnum`` so FastAPI validates ``?space=`` at the route boundary (422 on
     an unknown value) and the member compares/hashes equal to its string value —
-    so it indexes ``_SPACES`` (whose keys are the same literals) directly, and
+    so it indexes ``SPACES`` (whose keys are the same literals) directly, and
     the ``warmup`` loop that iterates the dict's string keys is unaffected (the
     ``(space, version)`` cache key stays the same hashable tuple either way).
     """

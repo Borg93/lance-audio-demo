@@ -14,6 +14,8 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from lancedb.query import MatchQuery
+
 from backend.core.exceptions import ValidationError
 from backend.search.constants import (
     _CAPTION_COLUMN,
@@ -111,7 +113,6 @@ def _frame_fts_search(
     """
     if not query or chunk_frames is None or _CAPTION_COLUMN not in chunk_frames.schema.names:
         return []
-    from lancedb.query import MatchQuery
 
     def rank(*, scoped: bool) -> list[dict[str, Any]]:
         qb = (

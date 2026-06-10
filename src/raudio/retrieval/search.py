@@ -107,22 +107,16 @@ def nearest_chunks(
 ) -> list[dict[str, Any]]:
     """BM25 full-text search. Returns a list of row dicts ordered by relevance.
 
-    Parameters
-    ----------
-    db_path
-        Filesystem path to the Lance database directory.
-    query
-        Free-form query string. Phrase queries with quotes work, as does
-        Tantivy's boolean syntax (``+must -mustnot "phrase"``).
-    table_name
-        Name of the chunk-centric table. Defaults to ``"chunks"``.
-    limit
-        Max number of hits.
-    include_alignments
-        If ``True``, include the nested per-word alignments on each row.
-    where
-        Optional SQL filter expression evaluated after the FTS ranking, e.g.
-        ``"language = 'en'"`` or ``"audio_path LIKE '%dickens%'"``.
+    Args:
+        db_path: Filesystem path to the Lance database directory.
+        query: Free-form query string. Phrase queries with quotes work, as
+            does Tantivy's boolean syntax (``+must -mustnot "phrase"``).
+        table_name: Name of the chunk-centric table. Defaults to ``"chunks"``.
+        limit: Max number of hits.
+        include_alignments: If ``True``, include the nested per-word alignments
+            on each row.
+        where: Optional SQL filter expression evaluated after the FTS ranking,
+            e.g. ``"language = 'en'"`` or ``"audio_path LIKE '%dickens%'"``.
     """
     db = lancedb.connect(str(db_path))
     table = db.open_table(table_name)

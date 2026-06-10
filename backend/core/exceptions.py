@@ -19,6 +19,8 @@ instead). The handler that turns these into problem+json responses lives in
 :mod:`backend.core.handlers`.
 """
 
+from __future__ import annotations
+
 from http import HTTPStatus
 
 from fastapi import HTTPException

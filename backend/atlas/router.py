@@ -27,15 +27,16 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Query, Response
 
 from backend.atlas.points import (
-    _POINTS_CACHE,
-    _SPACES,
-    _build_points,
-    _is_projected,
-    _space_cols,
+    POINTS_CACHE,
+    SPACES,
+    build_points,
+    is_projected,
+    space_cols,
 )
 from backend.core.exceptions import NotFoundError, ValidationError
 from backend.deps import StateDep
 from backend.schemas.atlas import AtlasSpace, AtlasStatusResponse, ChunkRowIds
+from backend.search.postprocess import attach_captions
 from raudio.retrieval.search import parse_alignments_json
 
 router = APIRouter(prefix="/api/atlas", tags=["atlas"])
@@ -43,7 +44,7 @@ router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 #: Media type for the /points Arrow IPC stream response.
 _ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 
-#: Rows per ``_attach_captions`` call when decorating a selection with frame captions.
+#: Rows per ``attach_captions`` call when decorating a selection with frame captions.
 _FRAME_CAPTION_BATCH_SIZE = 500
 
 
@@ -81,8 +82,8 @@ def atlas_status(
     (back-compatible with the old single-space shape).
     """
     names = set(state.chunks.schema.names)
-    spaces = {name: cols["x"] in names for name, cols in _SPACES.items()}
-    cols = _space_cols(space)
+    spaces = {name: cols["x"] in names for name, cols in SPACES.items()}
+    cols = space_cols(space)
     projected = cols["x"] in names
     rows = state.chunks.count_rows(filter=f"{cols['x']} IS NOT NULL") if projected else 0
     return AtlasStatusResponse(projected=projected, rows=rows, space=space, spaces=spaces)
@@ -94,7 +95,7 @@ def atlas_points(
     space: Annotated[AtlasSpace, Query(description="Projection space to read.")] = AtlasSpace.text,
 ) -> Response:
     """One Apache Arrow IPC stream for the scatter renderer (coords + codes + keys)."""
-    if not _is_projected(state, space):
+    if not is_projected(state, space):
         hint = (
             "raudio feature atlas" if space == "text" else f"raudio feature atlas --space {space}"
         )
@@ -103,10 +104,10 @@ def atlas_points(
     # Memoize on (space, dataset version): the scan+encode is identical until the
     # dataset is rewritten (version bump) or the backend restarts.
     key = (space, state.chunks_ds.version)
-    body = _POINTS_CACHE.get(key)
+    body = POINTS_CACHE.get(key)
     if body is None:
-        body = _build_points(state, space)
-        _POINTS_CACHE[key] = body
+        body = build_points(state, space)
+        POINTS_CACHE[key] = body
 
     return Response(
         content=body,
@@ -121,14 +122,12 @@ def _attach_frame_captions(frames: Any, rows: list[dict[str, Any]]) -> None:
     number of ``chunk_frames`` scans low per selection; a no-op when frames or
     captions are absent (captions are decorative).
     """
-    from backend.search.service import _attach_captions
-
     if frames is None or not rows:
         return
-    # _attach_captions filters with `doc_id IN (...)`, so large batches are
+    # attach_captions filters with `doc_id IN (...)`, so large batches are
     # cheap — a 1000-point lasso is ~2 scans (≈360ms, benchmarked).
     for start in range(0, len(rows), _FRAME_CAPTION_BATCH_SIZE):
-        _attach_captions(frames, rows[start : start + _FRAME_CAPTION_BATCH_SIZE])
+        attach_captions(frames, rows[start : start + _FRAME_CAPTION_BATCH_SIZE])
 
 
 @router.get("/chunk/{doc_id}/{speech_id}/{chunk_id}")
