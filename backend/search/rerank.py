@@ -34,6 +34,8 @@ def _rerank_by_text(
         return hits[:n]
     head = hits[:rerank_n]
     tail = hits[rerank_n:]
-    scores = get_reranker().rerank(query, [h["text"] for h in head])
+    # `or ""`: scene/frame-joined hits can carry a null text — the reranker
+    # rejects null documents, and an empty string scores neutrally instead.
+    scores = get_reranker().rerank(query, [h.get("text") or "" for h in head])
     head = [h for _, h in sorted(zip(scores, head, strict=False), key=lambda p: -p[0])]
     return (head + tail)[:n]

@@ -27,6 +27,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from pydantic import BaseModel, ConfigDict
 
 from backend.core.exceptions import ServiceUnavailableError, ValidationError
@@ -91,12 +92,21 @@ class _SearchContext(BaseModel):
 
 
 def _maybe_rerank(ctx: _SearchContext, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Apply the optional cross-encoder head rerank per the spec toggle."""
+    """Apply the optional cross-encoder head rerank per the spec toggle.
+
+    The client getter maps *connection* failures to 503; a failure during the
+    rerank call itself (server restarting, mid-request drop) would otherwise
+    surface as a raw 500, so it gets the same mapping here.
+    """
     if not ctx.spec.rerank:
         return hits
-    return _rerank_by_text(
-        ctx.get_reranker, ctx.rerank_query, hits, rerank_n=ctx.spec.rerank_n, n=ctx.spec.n
-    )
+    try:
+        return _rerank_by_text(
+            ctx.get_reranker, ctx.rerank_query, hits, rerank_n=ctx.spec.rerank_n, n=ctx.spec.n
+        )
+    except httpx.HTTPError as e:
+        logger.warning("rerank call failed", exc_info=True)
+        raise ServiceUnavailableError("rerank service unavailable") from e
 
 
 def _search_fts(ctx: _SearchContext) -> list[dict[str, Any]]:

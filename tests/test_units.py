@@ -8,6 +8,8 @@ everywhere (unlike the dataset-gated smoke tests in ``test_backend_smoke.py``).
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from backend.media.blobs import parse_range, valid_doc_id
 from backend.search.service import _build_where_clause, _rrf_fuse
@@ -129,7 +131,9 @@ class TestParseAlignmentsJson:
         "bad",
         [None, "", "not json", '{"a": 1}', 42],  # null / empty / malformed / non-list / scalar
     )
-    def test_non_list_or_malformed_is_empty(self, bad: object) -> None:
+    # `Any`, not `object`: the parametrize values are deliberately OUTSIDE the
+    # declared input union — the test pins the defensive empty-list fallback.
+    def test_non_list_or_malformed_is_empty(self, bad: Any) -> None:
         assert parse_alignments_json(bad) == []
 
 
