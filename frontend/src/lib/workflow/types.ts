@@ -21,6 +21,11 @@ export const NODE_KINDS = [
 /** A node's `type` (used to pick its component) is its kind. */
 export type NodeKind = (typeof NODE_KINDS)[number];
 
+/** Runtime guard for xyflow's `Node.type: string | undefined`. */
+export function isNodeKind(v: string | undefined): v is NodeKind {
+  return v !== undefined && (NODE_KINDS as readonly string[]).includes(v);
+}
+
 export type RunStatus = 'idle' | 'running' | 'done' | 'error';
 
 /** Head size the cross-encoder reranker re-scores when a Search has rerank on.

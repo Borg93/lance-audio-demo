@@ -85,7 +85,9 @@
 
   let pointSize = $state(0); // 0 = auto
   let filterAlpha = $state(8); // 0..120 — opacity of EXCLUDED points (search-filtered OR lasso-not-selected)
-  let selectionCount = $state(0);
+  // Derived straight from the store — the selection is also cleared OUTSIDE this
+  // component (routes/+page, the workflow Atlas modal), so a manual copy desyncs.
+  const selectionCount = $derived(crossFilter.selectedIds.size);
   let tableLoading = $state(false);
   let mode = $state<'lasso' | 'pan'>('lasso');
 
@@ -149,7 +151,6 @@
       // lines up with the f16 GPU positions (both derive from these bits).
       fitBounds = boundsOf(xs, ys);
       crossFilter.resetForSpace(buildKeyIndex(p.docs, p.doc, p.speech_id, p.chunk_id));
-      selectionCount = 0;
       onSelectionHits?.([], 0);
     } catch (e) {
       pts = null;
@@ -421,12 +422,6 @@
   });
   const ALL_COLOR_BY: ColorBy[] = ['cluster', 'language', 'topic', 'doc_topic', 'doc', 'none'];
   const isColorBy = (v: string): v is ColorBy => (ALL_COLOR_BY as string[]).includes(v);
-  let colorByValue = $state<string>('cluster');
-  $effect(() => {
-    // The Select binds a plain string; narrow it to the store's literal union
-    // via the known options (type guard, no `as`).
-    if (isColorBy(colorByValue)) crossFilter.colorBy = colorByValue;
-  });
 
   // Toolbar: the size/opacity sliders live in a ⚙ popover to keep the bar clean.
   let showSettings = $state(false);
@@ -484,7 +479,6 @@
   // Resolved by stable `_rowid` (one per point from /points) — the backend takes
   // exactly these rows, so even a max-size selection lists in a few hundred ms.
   async function loadTableForIndices(idx: number[]): Promise<void> {
-    selectionCount = idx.length;
     if (idx.length === 0) {
       onSelectionHits?.([], 0);
       return;
@@ -497,7 +491,7 @@
       // table under a misleading "N chunks" header. A cache-busted /points
       // (api.ts) restores rowids; this is just the belt-and-braces guard.
       console.warn('atlas: /points payload has no rowid — cannot list selection (stale cache?)');
-      selectionCount = 0;
+      crossFilter.clearSelection(); // also undims the map so state stays consistent
       onSelectionHits?.([], 0);
       return;
     }
@@ -511,18 +505,19 @@
       onSelectionHits?.(hits, idx.length);
     } catch (e) {
       console.error('atlas: failed to load selection', e);
-      onSelectionHits?.([], idx.length);
+      // Report total 0 (matching the no-rowid guard above) — never a phantom
+      // "N chunks" header over an empty table.
+      onSelectionHits?.([], 0);
     } finally {
       tableLoading = false;
     }
   }
 
   // ── GpuScatter callbacks ──────────────────────────────────────────────────
-  // hover → nearest index → tooltip + crossFilter.hovered (anchored at cursor)
+  // hover → nearest index → tooltip (anchored at cursor)
   function onScatterHover(dataX: number, dataY: number): void {
     const i = pickIndex(dataX, dataY);
     hoverIndex = i;
-    crossFilter.hovered = i;
     if (i != null) {
       hoverX = lastPointerX;
       hoverY = lastPointerY;
@@ -530,7 +525,6 @@
   }
   function onScatterHoverEnd(): void {
     hoverIndex = null;
-    crossFilter.hovered = null;
   }
 
   // click a point → load full hit into the shared player
@@ -579,7 +573,6 @@
 
   function clearSelection(): void {
     crossFilter.clearSelection();
-    selectionCount = 0;
     onSelectionHits?.([], 0);
   }
 
@@ -713,9 +706,17 @@
           </button>
         </div>
 
-        <!-- colour by -->
+        <!-- colour by: a function binding straight to the singleton — the ui
+             Select binds a plain string, so the setter narrows it to the
+             store's ColorBy union at the boundary (no shadow $state to clobber
+             the persisted value on remount). -->
         <Select
-          bind:value={colorByValue}
+          bind:value={
+            () => crossFilter.colorBy,
+            (v) => {
+              if (isColorBy(v)) crossFilter.colorBy = v;
+            }
+          }
           options={colorOptions}
           class="h-7 w-32"
           ariaLabel="Colour points by"

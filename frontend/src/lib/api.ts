@@ -115,7 +115,7 @@ export function relevanceOf(hit: Hit, mode?: SearchMode): number | null {
   }
 }
 
-export const DocumentSchema = z.object({
+const DocumentSchema = z.object({
   doc_id: z.string(),
   audio_path: z.string(),
   duration: z.number().nullable().optional(),
@@ -126,7 +126,7 @@ export const DocumentSchema = z.object({
 });
 export type Document = z.infer<typeof DocumentSchema>;
 
-export const DocumentsResponseSchema = z.object({
+const DocumentsResponseSchema = z.object({
   total: z.number().int(),
   page: z.number().int(),
   docs: z.array(DocumentSchema),
@@ -173,22 +173,57 @@ export interface SearchSpec {
 
 export class ApiError extends Error {
   constructor(
-    public status: number,
-    public detail: string,
+    public readonly status: number,
+    public readonly detail: string,
   ) {
     super(`api ${status}: ${detail}`);
+    this.name = 'ApiError';
   }
 }
 
+// The backend emits RFC 9457 problem+json: DomainError → { detail, title };
+// FastAPI 422 → { title: 'Validation Error', errors: [...] } with NO `detail`
+// (its `detail` is an array of objects — never render that). Parse both keys.
+const ProblemSchema = z.object({ detail: z.string().optional(), title: z.string().optional() });
+
+async function apiErrorFrom(r: Response): Promise<ApiError> {
+  const body: unknown = await r.json().catch(() => null);
+  const parsed = ProblemSchema.safeParse(body);
+  // `||` not `??`: statusText is typically '' over HTTP/2 and must fall through.
+  const detail =
+    (parsed.success ? (parsed.data.detail ?? parsed.data.title) : undefined) ||
+    r.statusText ||
+    `HTTP ${r.status}`;
+  return new ApiError(r.status, detail);
+}
+
 async function asJson<T>(r: Response, schema: z.ZodType<T>): Promise<T> {
-  if (!r.ok) {
-    const body = await r.json().catch(() => ({}));
-    throw new ApiError(r.status, body?.detail ?? r.statusText);
-  }
+  if (!r.ok) throw await apiErrorFrom(r);
   return schema.parse(await r.json());
 }
 
 const HitsArraySchema = z.array(HitSchema);
+
+/** The 11 spec fields shared verbatim by both transport branches of `search`.
+ *  FormData and URLSearchParams both satisfy the structural `append` shape, so
+ *  the marshalling lives once. `q`/`n`/`mode` + the GET-only fuzziness/phrase
+ *  stay in the branches. */
+function appendCommonSearchParams(
+  out: { append(name: string, value: string): void },
+  spec: SearchSpec,
+): void {
+  if (spec.rerank) out.append('rerank', 'true');
+  if (spec.rerank && spec.rerankN !== undefined) out.append('rerank_n', String(spec.rerankN));
+  if (spec.weight !== undefined) out.append('weight', String(spec.weight));
+  if (spec.qVec) out.append('q_vec', spec.qVec);
+  if (spec.where) out.append('where', spec.where);
+  if (spec.prefilter === false) out.append('prefilter', 'false');
+  if (spec.language) out.append('language', spec.language);
+  if (spec.namn) out.append('namn', spec.namn);
+  if (spec.referenskod) out.append('referenskod', spec.referenskod);
+  if (spec.extraid) out.append('extraid', spec.extraid);
+  if (spec.topic) out.append('topic', spec.topic);
+}
 
 /** Run a search. Uses POST + multipart when an image is attached; GET otherwise. */
 export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): Promise<Hit[]> {
@@ -201,35 +236,15 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
     if (spec.q) fd.append('q', spec.q);
     fd.append('n', n);
     fd.append('mode', mode);
-    if (spec.rerank) fd.append('rerank', 'true');
-    if (spec.rerank && spec.rerankN !== undefined) fd.append('rerank_n', String(spec.rerankN));
-    if (spec.weight !== undefined) fd.append('weight', String(spec.weight));
-    if (spec.qVec) fd.append('q_vec', spec.qVec);
-    if (spec.where) fd.append('where', spec.where);
-    if (spec.prefilter === false) fd.append('prefilter', 'false');
-    if (spec.language) fd.append('language', spec.language);
-    if (spec.namn) fd.append('namn', spec.namn);
-    if (spec.referenskod) fd.append('referenskod', spec.referenskod);
-    if (spec.extraid) fd.append('extraid', spec.extraid);
-    if (spec.topic) fd.append('topic', spec.topic);
+    appendCommonSearchParams(fd, spec);
     const r = await fetcher('/api/search', { method: 'POST', body: fd });
     return asJson(r, HitsArraySchema);
   }
 
   const params = new URLSearchParams({ q: spec.q, n, mode });
-  if (spec.fuzziness) params.set('fuzziness', String(spec.fuzziness));
-  if (spec.phrase) params.set('phrase', 'true');
-  if (spec.rerank) params.set('rerank', 'true');
-  if (spec.rerank && spec.rerankN !== undefined) params.set('rerank_n', String(spec.rerankN));
-  if (spec.weight !== undefined) params.set('weight', String(spec.weight));
-  if (spec.qVec) params.set('q_vec', spec.qVec);
-  if (spec.where) params.set('where', spec.where);
-  if (spec.prefilter === false) params.set('prefilter', 'false');
-  if (spec.language) params.set('language', spec.language);
-  if (spec.namn) params.set('namn', spec.namn);
-  if (spec.referenskod) params.set('referenskod', spec.referenskod);
-  if (spec.extraid) params.set('extraid', spec.extraid);
-  if (spec.topic) params.set('topic', spec.topic);
+  if (spec.fuzziness) params.append('fuzziness', String(spec.fuzziness));
+  if (spec.phrase) params.append('phrase', 'true');
+  appendCommonSearchParams(params, spec);
   const r = await fetcher(`/api/search?${params}`);
   return asJson(r, HitsArraySchema);
 }
@@ -278,7 +293,7 @@ export type DocTranscript = z.infer<typeof DocTranscriptSchema>;
 // fetch is evicted so a transient failure can be retried.
 // Bounded LRU (Map keeps insertion order): keep only the most-recently-opened
 // docs so heavy browsing on a low-end machine can't grow this without limit —
-// each entry holds a whole document's per-word alignments. ~24 is plenty for
+// each entry holds a whole document's per-word alignments. ~50 is plenty for
 // back-and-forth navigation.
 const MAX_DOC_TRANSCRIPTS = 50;
 const docTranscriptCache = new Map<string, Promise<DocTranscript>>();
@@ -349,15 +364,14 @@ export type DiarizationResponse = z.infer<typeof DiarizationResponseSchema>;
 export async function getDiarization(
   docId: string,
   fetcher: typeof fetch = fetch,
-): Promise<{ built: boolean; turns: DiarTurn[]; speakers: string[] }> {
+): Promise<DiarizationResponse> {
   const r = await fetcher(`/api/diarization/${encodeURIComponent(docId)}`);
-  const data = await asJson(r, DiarizationResponseSchema);
-  return { built: data.built, turns: data.turns, speakers: data.speakers };
+  return asJson(r, DiarizationResponseSchema);
 }
 
 // ── Health ──────────────────────────────────────────────────────────────
 const PingSchema = z.object({ ok: z.boolean(), url: z.string(), error: z.string().optional() });
-export const HealthSchema = z.object({
+const HealthSchema = z.object({
   db: z.object({
     path: z.string(),
     tables: z.array(z.string()),
@@ -385,7 +399,7 @@ export async function listDocuments(
 }
 
 // ── Filterable columns ───────────────────────────────────────────────────
-export const ColumnSchema = z.object({ name: z.string(), type: z.string() });
+const ColumnSchema = z.object({ name: z.string(), type: z.string() });
 export type ColumnInfo = z.infer<typeof ColumnSchema>;
 
 /** The chunks table's filterable scalar columns (name + friendly type). */
@@ -577,10 +591,7 @@ export async function getAtlasPoints(
   // precision. The backend's version-keyed _POINTS_CACHE + the HTTP max-age=300
   // would otherwise serve stale float32 bytes a JS f16 decoder would misread.
   const r = await fetcher(`/api/atlas/points?space=${space}&v=6`);
-  if (!r.ok) {
-    const body = await r.json().catch(() => ({}));
-    throw new ApiError(r.status, body?.detail ?? r.statusText);
-  }
+  if (!r.ok) throw await apiErrorFrom(r);
 
   const buf = await r.arrayBuffer();
   const table = tableFromIPC(new Uint8Array(buf));
@@ -613,7 +624,7 @@ export async function getAtlasPoints(
     data.space = spaceMeta;
   // `docFiles` rides in metadata (one entry per distinct doc, not per point), so
   // it can't be a table column; it's JSON, aligned with the `doc` dictionary.
-  if (docFilesMeta) data.docFiles = JSON.parse(docFilesMeta) as string[];
+  if (docFilesMeta) data.docFiles = z.array(z.string()).parse(JSON.parse(docFilesMeta));
 
   const rowid = table.getChild('rowid');
   if (rowid) data.rowid = numberColumn(rowid); // int64 → number[] (BigInt otherwise)
@@ -641,7 +652,9 @@ export async function getAtlasPoints(
     data.doc_topics = docTopic.labels;
   }
 
-  if (typeof data.count !== 'number' || data.x.length !== data.count) {
+  // `count` is statically number — the meaningful guard is NaN (a bad/missing
+  // metadata value survives `Number(...)` as NaN) + the length cross-check.
+  if (!Number.isFinite(data.count) || data.x.length !== data.count) {
     throw new ApiError(500, 'malformed /api/atlas/points payload');
   }
   return data;
@@ -697,7 +710,7 @@ const TopicNodeSchema: z.ZodType<TopicNode> = z.lazy(() =>
   }),
 );
 
-export const TopicsResponseSchema = z.object({
+const TopicsResponseSchema = z.object({
   built: z.boolean(),
   layers: z.number().int(),
   n_chunks: z.number().int(),

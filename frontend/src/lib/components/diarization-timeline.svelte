@@ -18,11 +18,15 @@
   let scope = $state<'chunk' | 'video'>('chunk');
   const canChunk = $derived(chunkStart != null && chunkEnd != null && chunkEnd > chunkStart);
 
-  const win = $derived.by(() =>
-    scope === 'chunk' && canChunk
-      ? { lo: chunkStart as number, hi: chunkEnd as number }
-      : { lo: 0, hi: Math.max(duration, 0.001) },
-  );
+  const win = $derived.by(() => {
+    if (scope === 'chunk') {
+      // Same condition as canChunk, restated so TS narrows via locals (no `as`).
+      const lo = chunkStart;
+      const hi = chunkEnd;
+      if (lo != null && hi != null && hi > lo) return { lo, hi };
+    }
+    return { lo: 0, hi: Math.max(duration, 0.001) };
+  });
   const span = $derived(Math.max(0.001, win.hi - win.lo));
 
   // Every distinct speaker (first-appearance) — STABLE colour basis, so a speaker
@@ -42,10 +46,17 @@
   });
 
   const PALETTE = [
-    'bg-sky-500', 'bg-emerald-500', 'bg-amber-500', 'bg-violet-500',
-    'bg-rose-500', 'bg-teal-500', 'bg-orange-500', 'bg-indigo-500',
+    'bg-sky-500',
+    'bg-emerald-500',
+    'bg-amber-500',
+    'bg-violet-500',
+    'bg-rose-500',
+    'bg-teal-500',
+    'bg-orange-500',
+    'bg-indigo-500',
   ];
-  const colorOf = (spk: string): string => PALETTE[allSpeakers.indexOf(spk) % PALETTE.length] ?? PALETTE[0]!;
+  const colorOf = (spk: string): string =>
+    PALETTE[allSpeakers.indexOf(spk) % PALETTE.length] ?? PALETTE[0]!;
 
   const activeSpeaker = $derived(
     turns.find((t) => currentTime >= t.start && currentTime < t.end)?.speaker ?? null,

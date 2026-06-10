@@ -2,15 +2,26 @@
   import '../app.css';
   import { browser } from '$app/environment';
   import { page } from '$app/state';
-  import type { ComponentType, Snippet } from 'svelte';
-  import { AudioLines, Search, Map, FolderTree, BookOpen, Workflow } from 'lucide-svelte';
+  import type { Snippet } from 'svelte';
+  import {
+    AudioLines,
+    Search,
+    Map,
+    FolderTree,
+    BookOpen,
+    Workflow,
+    type Icon as LucideIcon,
+  } from 'lucide-svelte';
   import * as Sidebar from '$lib/components/ui/sidebar';
   import ThemeToggle from '$lib/components/theme-toggle.svelte';
   import StatusBadge from '$lib/components/status-badge.svelte';
 
   let { children }: { children: Snippet } = $props();
 
-  const NAV: { href: string; label: string; icon: ComponentType; hint: string }[] = [
+  // `typeof LucideIcon` (not Svelte 5's `Component<…>`): lucide-svelte 0.468
+  // still types its icons as legacy class components, so this is the accurate
+  // common type for this dependency version.
+  const NAV: { href: string; label: string; icon: typeof LucideIcon; hint: string }[] = [
     {
       href: '/',
       label: 'Search',

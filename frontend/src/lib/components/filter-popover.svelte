@@ -44,10 +44,17 @@
 
   // ── Filterable columns (from the backend) ──────────────────────────────
   let columns = $state<ColumnInfo[]>([]);
+  let columnsState = $state<'loading' | 'ready' | 'error'>('loading');
   $effect(() => {
     listColumns()
-      .then((c) => (columns = c))
-      .catch(() => (columns = []));
+      .then((c) => {
+        columns = c;
+        columnsState = 'ready';
+      })
+      .catch(() => {
+        columns = [];
+        columnsState = 'error';
+      });
   });
 
   // Per-column hide, persisted so a decluttered list survives reloads.
@@ -216,6 +223,11 @@
         <span class="text-[10px] text-muted-foreground/70">
           Pick a column, an operator, a value, then Add — the search re-runs immediately.
         </span>
+        {#if columnsState === 'error'}
+          <span class="text-[10px] text-destructive">
+            Couldn't load columns — is the backend running?
+          </span>
+        {/if}
       </div>
 
       <!-- Language quick filter -->
@@ -261,8 +273,14 @@
                 {c.name}
               </button>
             {/each}
-            {#if columns.length === 0}
+            {#if columnsState === 'loading'}
               <span class="text-[11px] text-muted-foreground">Loading columns…</span>
+            {:else if columnsState === 'error'}
+              <span class="text-[11px] text-destructive">
+                Couldn't load columns — is the backend running?
+              </span>
+            {:else if columns.length === 0}
+              <span class="text-[11px] text-muted-foreground">No filterable columns.</span>
             {/if}
           </div>
         {/if}

@@ -88,6 +88,9 @@ function topoOrder(deps: RunDeps, incoming: Map<string, string[]>): string[] | n
  *  dependent's `Promise.all`. */
 async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Promise<NodeOutput> {
   const kind = deps.kindOf(id);
+  // kindOf is null only for an unknown/corrupt node id — nothing to run. Handled
+  // here so the switch below stays exhaustive over NodeKind.
+  if (kind === null) return { spec: {}, hits: null };
   const cfg = deps.config(id);
 
   // Merge upstream outputs. `inSpec` = WHAT to search; `scope` = the union of
@@ -226,7 +229,9 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
             else scopedDocs = sc.count;
           }
         }
-        if (wheres.length) spec.where = wheres.join(' AND ');
+        // Parenthesize each clause: a user filter like `a = 1 OR b = 2` must not
+        // let OR-precedence swallow the ANDed scope clause.
+        if (wheres.length) spec.where = wheres.map((w) => `(${w})`).join(' AND ');
 
         const t0 = performance.now();
         const hits = await search(spec);
@@ -254,8 +259,11 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
         });
         return { spec: {}, hits: scope };
       }
-      default:
-        return { spec: {}, hits: null };
+      default: {
+        // Compile-time exhaustiveness: adding a NodeKind without a case errors here.
+        const _exhaustive: never = kind;
+        return _exhaustive;
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

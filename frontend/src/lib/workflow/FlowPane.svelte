@@ -17,7 +17,7 @@
   } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import { useColorMode } from '$lib/theme.svelte';
-  import { graph, NODE_KINDS, type NodeKind } from '$lib/workflow/graph.svelte';
+  import { graph, isNodeKind } from '$lib/workflow/graph.svelte';
   import { nodeTypes } from '$lib/workflow/node-types';
   import { ARROW_MARKER } from '$lib/workflow/edges';
   import ReconnectableEdge from '$lib/workflow/ReconnectableEdge.svelte';
@@ -67,6 +67,12 @@
     msgTimer = setTimeout(() => (invalidMsg = null), INVALID_TOAST_MS);
   }
 
+  // Don't let a pending toast timer outlive the component (same standard as the
+  // autosave effect's cleanup above).
+  $effect(() => () => {
+    if (msgTimer) clearTimeout(msgTimer);
+  });
+
   function validate(connection: Connection | Edge): boolean {
     const reason = graph.connectionError(connection);
     if (reason && connection.source && connection.target) pendingReason = reason;
@@ -87,8 +93,9 @@
   function onDrop(e: DragEvent): void {
     e.preventDefault();
     const kind = e.dataTransfer?.getData(NODE_DND_MIME);
-    if (!kind || !(NODE_KINDS as readonly string[]).includes(kind)) return;
-    graph.addNode(kind as NodeKind, screenToFlowPosition({ x: e.clientX, y: e.clientY }));
+    // getData's '' falsy case is covered — '' is not in NODE_KINDS.
+    if (!isNodeKind(kind)) return;
+    graph.addNode(kind, screenToFlowPosition({ x: e.clientX, y: e.clientY }));
   }
   function onDragOver(e: DragEvent): void {
     e.preventDefault();
@@ -97,13 +104,12 @@
 
   // ── Keyboard: undo/redo + copy/paste (ignored while typing) ──────────────────
   function isTyping(t: EventTarget | null): boolean {
-    const el = t as HTMLElement | null;
-    if (!el) return false;
+    if (!(t instanceof HTMLElement)) return false;
     return (
-      el.tagName === 'INPUT' ||
-      el.tagName === 'TEXTAREA' ||
-      el.tagName === 'SELECT' ||
-      el.isContentEditable
+      t.tagName === 'INPUT' ||
+      t.tagName === 'TEXTAREA' ||
+      t.tagName === 'SELECT' ||
+      t.isContentEditable
     );
   }
   function onKeydown(e: KeyboardEvent): void {
@@ -150,13 +156,12 @@
     }}
     onpanecontextmenu={({ event }) => {
       event.preventDefault();
-      const me = event as MouseEvent;
       menu = {
-        x: me.clientX,
-        y: me.clientY,
+        x: event.clientX,
+        y: event.clientY,
         mode: 'pane',
         nodeId: null,
-        flow: screenToFlowPosition({ x: me.clientX, y: me.clientY }),
+        flow: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
       };
     }}
     onconnectstart={() => {

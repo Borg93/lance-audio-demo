@@ -213,9 +213,9 @@
           accept="image/*"
           class="hidden"
           onchange={(e) => {
-            const f = (e.currentTarget as HTMLInputElement).files?.[0];
+            const f = e.currentTarget.files?.[0];
             if (f && f.type.startsWith('image/')) imageFile = f;
-            (e.currentTarget as HTMLInputElement).value = '';
+            e.currentTarget.value = '';
           }}
         />
         <SearchSettings

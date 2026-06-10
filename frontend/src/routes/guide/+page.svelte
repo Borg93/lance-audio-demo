@@ -7,7 +7,9 @@
    * animations so the "several searches at once, then merge" flow reads as
    * motion. Content verified against backend/search/service.py.
    */
-  import { Search, Map, Sparkles, ArrowRight } from 'lucide-svelte';
+  // `Map as MapIcon` (same aliasing as routes/+page.svelte): the bare icon name
+  // would shadow the global Map constructor used by rrfRows' rankOf below.
+  import { Search, Map as MapIcon, Sparkles, ArrowRight } from 'lucide-svelte';
 
   let tab = $state<'search' | 'atlas'>('search');
 
@@ -176,16 +178,19 @@
   const keywordRanked = ['C', 'A', 'B'];
   const meaningRanked = ['A', 'C', 'D'];
   const rrfRows = (() => {
-    const rankOf = (list: string[]) =>
-      Object.fromEntries(list.map((c, i) => [c, i])) as Record<string, number>;
+    // A Map + explicit undefined check: rank 0 (= position #1) is VALID — a
+    // truthiness test would drop every #1-ranked clip's contribution.
+    const rankOf = (list: string[]) => new Map(list.map((c, i) => [c, i]));
     const kr = rankOf(keywordRanked);
     const mr = rankOf(meaningRanked);
     const clips = [...new Set([...keywordRanked, ...meaningRanked])];
     return clips
       .map((clip) => {
         const parts: { src: string; rank: number }[] = [];
-        if (kr[clip]) parts.push({ src: '⌨️', rank: kr[clip] });
-        if (mr[clip]) parts.push({ src: '💬', rank: mr[clip] });
+        const k = kr.get(clip);
+        if (k !== undefined) parts.push({ src: '⌨️', rank: k });
+        const m = mr.get(clip);
+        if (m !== undefined) parts.push({ src: '💬', rank: m });
         const score = parts.reduce((a, p) => a + 1 / (K + p.rank), 0);
         return { clip, parts, score, inBoth: parts.length === 2 };
       })
@@ -716,7 +721,7 @@
               ? 'border-primary text-foreground'
               : 'text-muted-foreground hover:text-foreground border-transparent')}
         >
-          <Map class="size-4" /> Atlas
+          <MapIcon class="size-4" /> Atlas
         </button>
       </div>
     </div>
@@ -872,7 +877,7 @@
             {#each LANES as lane, i (lane.name)}
               <div
                 use:reveal={{ delay: i * 80 }}
-                class="reveal lane-card bg-surface2 border-border relative overflow-hidden rounded-lg border p-2.5 text-center"
+                class="reveal bg-surface2 border-border relative overflow-hidden rounded-lg border p-2.5 text-center"
               >
                 <div class="{lane.text} text-xs font-semibold">{lane.name}</div>
                 <div class="text-muted-foreground text-[10px]">{lane.sub}</div>
@@ -1377,9 +1382,9 @@
           —
           <code class="font-mono">all</code> runs <em>four equal legs</em>, so your text
           <em>also</em>
-          drives a literal Keyword/BM25 leg and a Scene/caption leg. The dial you picked and the
-          Balance slider stop mattering; the image is simply added as a fourth equal voice (never a
-          gate). Image with no text stays a single <code class="font-mono">visual</code> pass.
+          drives a literal Keyword/BM25 leg and a Scene/caption leg. The dial you picked and the Balance
+          slider stop mattering; the image is simply added as a fourth equal voice (never a gate). Image
+          with no text stays a single <code class="font-mono">visual</code> pass.
         </div>
       </section>
 
@@ -1396,9 +1401,9 @@
           class="reveal mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs leading-relaxed text-muted-foreground"
         >
           <span class="font-medium text-emerald-600 dark:text-emerald-300">✓ Verified live</span>
-          against the running backend: Keyword, Vector, Hybrid, rerank, the Balance slider, Image (a
-          posted frame self-matched at&nbsp;#1) and <code class="font-mono">all</code> all return
-          real results; a name filter returned
+          against the running backend: Keyword, Vector, Hybrid, rerank, the Balance slider, Image (a posted
+          frame self-matched at&nbsp;#1) and <code class="font-mono">all</code> all return real
+          results; a name filter returned
           <strong class="text-foreground">15</strong> hits with prefilter vs
           <strong class="text-foreground">0</strong>
           with postfilter; fuzziness&nbsp;2 recovered a typo that fuzziness&nbsp;0 missed. The chunk IDs
@@ -2070,9 +2075,6 @@
 
   /* lane "scan" bar — all lanes share one timing (no stagger) so the sweep
    * reads as "all four searches run at the same time". */
-  .lane-card {
-    color: transparent; /* the scan bar inherits via its own bg class, not currentColor */
-  }
   .lane-scan {
     position: absolute;
     bottom: 0;

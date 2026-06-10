@@ -27,6 +27,13 @@
   }
 </script>
 
+<!-- Escape dismisses the menu (role="menu" keyboard contract). -->
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === 'Escape') onClose();
+  }}
+/>
+
 <!-- Backdrop: any click (or another right-click) dismisses the menu. -->
 <div
   class="fixed inset-0 z-40"
@@ -43,6 +50,7 @@
   style="left: {menu.x}px; top: {menu.y}px;"
   role="menu"
   tabindex="-1"
+  {@attach (el) => el.focus()}
 >
   {#if menu.mode === 'node' && menu.nodeId && cfg}
     <button

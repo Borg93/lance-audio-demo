@@ -16,12 +16,11 @@
   import PlayerPane from '$lib/components/player-pane.svelte';
   import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
   import type { Hit } from '$lib/api';
-  import { Loader2, Columns3, Check } from 'lucide-svelte';
+  import { Columns3, Check } from 'lucide-svelte';
 
   let active = $state<Hit | null>(null);
   let tableHits = $state<Hit[]>([]);
   let selectionTotal = $state(0);
-  let tableLoading = $state(false);
 
   // Columns the user can show. `caption` (the frame's Swedish caption) is joined
   // from chunk_frames by the /chunks endpoint — it isn't a column on chunks.
@@ -61,7 +60,6 @@
   function onSelectionHits(hits: Hit[], total: number): void {
     tableHits = hits;
     selectionTotal = total;
-    tableLoading = false;
   }
 </script>
 
@@ -92,9 +90,7 @@
       <div class="flex h-full min-h-0 flex-col border-t border-border bg-card/30">
         <div class="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs">
           <span class="font-medium text-foreground">Selection</span>
-          {#if tableLoading}
-            <Loader2 class="size-3.5 animate-spin text-muted-foreground" />
-          {:else if selectionTotal > 0}
+          {#if selectionTotal > 0}
             <span class="text-muted-foreground">
               {selectionTotal.toLocaleString()} chunks
               {#if selectionTotal > tableHits.length}

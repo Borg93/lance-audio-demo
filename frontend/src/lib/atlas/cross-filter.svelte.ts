@@ -59,19 +59,20 @@ export { hitKey };
 const EMPTY: ReadonlySet<number> = new Set<number>();
 
 class CrossFilter {
+  // All collection fields are `$state.raw` — every mutator below REPLACES the
+  // collection (never mutates in place), so raw both works and documents the
+  // replace-don't-mutate contract.
   /** Point indices the user picked on the map (untruncated — drives dimming). */
-  selectedIds = $state<Set<number>>(new Set());
+  selectedIds = $state.raw<Set<number>>(new Set());
   /** Point indices of the current search+facet results; null ⇒ no active filter. */
-  filteredIds = $state<Set<number> | null>(null);
+  filteredIds = $state.raw<Set<number> | null>(null);
   /** Which projection the map is showing; the page may read it to fetch per space. */
   space = $state<AtlasSpace>('text');
   /** Colour channel for the scatter. */
   colorBy = $state<ColorBy>('cluster');
   /** Per-colour-mode hidden codes (a code only means something within its own
    *  colour channel). Keyed by ColorBy; recoloured to background on the map. */
-  hiddenByMode = $state<Map<ColorBy, Set<number>>>(new Map());
-  /** Hovered point index (for the analysis popover); null ⇒ nothing hovered. */
-  hovered = $state<number | null>(null);
+  hiddenByMode = $state.raw<Map<ColorBy, Set<number>>>(new Map());
 
   /** `doc|speech|chunk → index` for the CURRENT space (rebuilt on space swap). */
   keyToIndex = $state.raw<Map<string, number>>(new Map());
@@ -157,7 +158,6 @@ class CrossFilter {
     this.selectedIds = new Set();
     this.filteredIds = null;
     this.hiddenByMode = new Map();
-    this.hovered = null;
   }
 }
 

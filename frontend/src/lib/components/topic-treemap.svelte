@@ -35,12 +35,21 @@
   let showNoise = $state(false);
   let hovered = $state<string | null>(null);
 
-  // Drill stack: branches descended into below the root. The breadcrumb is the
-  // root prop + this stack (kept separate so referencing the prop stays
-  // reactive); `current` is the deepest node shown.
-  let drill = $state<TopicNode[]>([]);
-  const path = $derived<TopicNode[]>([hierarchy, ...drill]);
-  const current = $derived<TopicNode>(drill.at(-1) ?? hierarchy);
+  // Drill stack: NAMES of the branches descended into below the root, resolved
+  // against the `hierarchy` prop each time — never against the pruned display
+  // copy, so the noise toggle (and its hidden-count hint) keeps working after a
+  // drill. `current` is the deepest node shown.
+  let drill = $state<string[]>([]);
+  const path = $derived.by((): TopicNode[] => {
+    const nodes: TopicNode[] = [hierarchy];
+    for (const name of drill) {
+      const next = nodes.at(-1)?.children?.find((c) => c.name === name);
+      if (!next) break;
+      nodes.push(next);
+    }
+    return nodes;
+  });
+  const current = $derived(path.at(-1) ?? hierarchy);
 
   /** Drop the noise bucket (recursively) so real topics fill the canvas. */
   function pruneNoise(node: TopicNode): TopicNode {
@@ -88,7 +97,7 @@
 
   function onCell(node: TopicNode) {
     if (!isInteractive(node)) return;
-    if (node.children?.length) drill = [...drill, node];
+    if (node.children?.length) drill = [...drill, node.name];
     else showResults(node.name);
   }
 
@@ -191,7 +200,10 @@
               view === 'nested'
                 ? nodes.filter((n) => n.depth >= 1)
                 : nodes.filter((n) => n.depth === 1)}
-            {#each visible as node, i (i)}
+            {#each visible as node (node
+              .ancestors()
+              .map((a) => a.data.name)
+              .join('›'))}
               {@const w = node.x1 - node.x0}
               {@const h = node.y1 - node.y0}
               {@const isBranch = !!node.data.children?.length}

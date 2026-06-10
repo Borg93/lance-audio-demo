@@ -34,6 +34,7 @@ import { runGraph } from './executor';
 import { dedupeHits } from './scope';
 import {
   DEFAULT_N,
+  isNodeKind,
   MAX_N,
   MIN_N,
   NODE_KINDS,
@@ -49,7 +50,7 @@ import {
 import { safeParseGraph, type PersistedConfig, type PersistedGraph } from './persistence';
 
 // Re-export the public vocabulary so components keep importing it from here.
-export { DEFAULT_N, MAX_N, MIN_N, NODE_KINDS, RERANK_TOP_N };
+export { DEFAULT_N, isNodeKind, MAX_N, MIN_N, NODE_KINDS, RERANK_TOP_N };
 export type { NodeKind, RunStatus, CombineMode, RefineScope, NodeConfig, NodeRuntime };
 
 const STORAGE_KEY = 'raudio-workflow-graph-v1';
@@ -138,7 +139,11 @@ class WorkflowGraph {
   /** The Svelte Flow edges — bound into <SvelteFlow bind:edges>. */
   edges = $state.raw<Edge[]>([]);
 
-  /** Per-node user input, keyed by node id. */
+  /** Per-node user input, keyed by node id. Deep `$state` ON PURPOSE: node
+   *  components mutate fields in place (`bind:value={cfg.q}`,
+   *  `bind:checked={cfg.rerank}`, the Inspector's label bind), and the autosave
+   *  `$effect` tracks those deep writes via `snapshot()`. Must NOT become
+   *  `$state.raw` — that would silently de-reactify every such bind. */
   config = $state<Record<string, NodeConfig>>({});
   /** Per-node run state, keyed by node id. */
   runtime = $state<Record<string, NodeRuntime>>({});
@@ -191,8 +196,8 @@ class WorkflowGraph {
 
   /** Kind of a node by id (its Svelte Flow `type`). */
   kindOf(id: string): NodeKind | null {
-    const n = this.nodes.find((x) => x.id === id);
-    return n ? (n.type as NodeKind) : null;
+    const t = this.nodes.find((x) => x.id === id)?.type;
+    return isNodeKind(t) ? t : null;
   }
 
   /**
@@ -237,6 +242,7 @@ class WorkflowGraph {
     this.inspectedNodeId = null;
     this.selectedNodeIds = [];
     this.selectedEdgeIds = [];
+    this.pasteCount = 0;
     this.lastCheckpoint = this.snapshot();
   }
 
@@ -269,7 +275,10 @@ class WorkflowGraph {
     return newId;
   }
 
-  /** Patch one node's user input (reassigns the record so reactivity fires). */
+  /** Patch one node's user input. `config` is deep `$state`, so components'
+   *  in-place `bind:` mutations are equally reactive — this helper exists for
+   *  multi-field patches and call-site ergonomics (falls back to
+   *  `defaultConfig()` when the id has no config yet). */
   setConfig(id: string, patch: Partial<NodeConfig>): void {
     const prev = this.config[id] ?? defaultConfig();
     this.config = { ...this.config, [id]: { ...prev, ...patch } };
@@ -405,15 +414,17 @@ class WorkflowGraph {
     this.clipboard = this.selectedNodeIds.flatMap((id) => {
       const node = this.nodes.find((n) => n.id === id);
       const cfg = this.config[id];
-      if (!node || !cfg) return [];
+      if (!node || !cfg || !isNodeKind(node.type)) return [];
       return [
         {
-          type: node.type as NodeKind,
+          type: node.type,
           config: { ...cfg, image: null },
           position: { ...node.position },
         },
       ];
     });
+    // A fresh copy starts a fresh paste cascade — don't inherit the old offset.
+    this.pasteCount = 0;
   }
 
   /** Paste the clipboard nodes (fresh ids, cascading offset, selected on the
@@ -561,14 +572,22 @@ class WorkflowGraph {
   /** JSON snapshot of the serialisable graph. Reads nodes/edges/config deeply,
    *  so calling it inside a `$effect` tracks every change (drives autosave). */
   snapshot(): string {
-    const nodes = this.nodes.map((n) => ({
-      id: n.id,
-      type: n.type as NodeKind,
-      position: { x: n.position.x, y: n.position.y },
-      // Persist resized sink-node dimensions so they survive reload + undo/redo.
-      ...(n.width != null ? { width: n.width } : {}),
-      ...(n.height != null ? { height: n.height } : {}),
-    }));
+    // flatMap + guard: dropping a corrupt node beats emitting it — an invalid
+    // `type` would fail the whole PersistedGraphSchema parse on restore.
+    const nodes = this.nodes.flatMap((n) =>
+      isNodeKind(n.type)
+        ? [
+            {
+              id: n.id,
+              type: n.type,
+              position: { x: n.position.x, y: n.position.y },
+              // Persist resized sink-node dimensions so they survive reload + undo/redo.
+              ...(n.width != null ? { width: n.width } : {}),
+              ...(n.height != null ? { height: n.height } : {}),
+            },
+          ]
+        : [],
+    );
     // `animated` is intentionally NOT persisted — it's transient run state set by
     // the canvas, so persisting it would churn autosave/history during a run.
     const edges = this.edges.map((e) => ({

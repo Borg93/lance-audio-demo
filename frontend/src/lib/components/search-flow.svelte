@@ -13,7 +13,7 @@
     </span>
   </div>
 
-  <!-- 2) THE 3 JUDGES -->
+  <!-- 2) THE 4 JUDGES -->
   <div class="flex flex-col gap-1.5">
     <div class="font-semibold text-foreground">The 4 judges</div>
     <p class="text-muted-foreground">
@@ -295,8 +295,8 @@
         identity recognition.
       </li>
       <li>
-        No speaker diarization — nothing links who is <em>on screen</em> to who is
-        <em>speaking</em>.
+        Speaker diarization shows <em>who speaks when</em>, but nothing links who is
+        <em>on screen</em> to who is <em>speaking</em>.
       </li>
       <li>The reranker is text-only; it never uses the image.</li>
       <li>Multi-leg fusion (up to 4 judges) is equal-weight — there is no per-leg weight yet.</li>

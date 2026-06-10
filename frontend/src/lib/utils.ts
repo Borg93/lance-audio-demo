@@ -25,7 +25,7 @@ export function fmtTime(s: number): string {
 }
 
 /** Escape HTML special characters for safe innerHTML interpolation. */
-export function escapeHtml(s: string | null | undefined): string {
+function escapeHtml(s: string | null | undefined): string {
   return String(s ?? '').replace(
     /[&<>]/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] ?? c,

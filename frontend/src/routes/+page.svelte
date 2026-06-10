@@ -10,6 +10,7 @@
     type SearchSpec,
     type Document,
   } from '$lib/api';
+  import { z } from 'zod';
   import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
   import SearchBar from '$lib/components/search-bar.svelte';
   import ActiveFilters from '$lib/components/active-filters.svelte';
@@ -54,7 +55,7 @@
   /** True once a page returns fewer hits than requested → backend exhausted. */
   let allLoaded = $state(false);
 
-  /** Distinct document count + per-document hit breakdown for the current results. */
+  /** Distinct document count for the current results. */
   const docCount = $derived(new Set(hits.map((h) => h.doc_id)).size);
 
   // ── Document browse (when query is empty) ──
@@ -63,6 +64,7 @@
   let docsTotal = $state(0);
   let docsPage = $state(1);
   let loadingDocs = $state(false);
+  let docsError = $state<string | null>(null);
 
   // ── Layout ──
   let view = $state<'list' | 'grid' | 'table' | 'map'>('list');
@@ -114,17 +116,19 @@
     }
   }
   // Which result columns the table view shows (persisted). Defaults to a
-  // readable subset; the chooser bar toggles any of TABLE_COLUMNS.
-  let tableCols = $state<string[]>([
-    'thumbnail',
-    'score',
-    'namn',
-    'start',
-    'end',
-    'duration',
-    'text',
-    'caption',
-  ]);
+  // readable subset; the chooser bar toggles any of TABLE_COLUMNS. Direct init
+  // (not a one-shot $effect): this page is client-rendered, so localStorage is
+  // available at init time and the restore can't clobber later user toggles.
+  function loadTableCols(): string[] {
+    try {
+      const v = localStorage.getItem('raudio-table-cols-v4');
+      if (v) return z.array(z.string()).parse(JSON.parse(v));
+    } catch {
+      /* ignore */
+    }
+    return ['thumbnail', 'score', 'namn', 'start', 'end', 'duration', 'text', 'caption'];
+  }
+  let tableCols = $state<string[]>(loadTableCols());
 
   // Columns shown in the browse-mode (pre-search) documents table. Documents
   // carry fewer fields than search hits, so this is its own small set.
@@ -137,17 +141,6 @@
     { key: 'duration', label: 'Dur', get: (d) => (d.duration != null ? fmtTime(d.duration) : '') },
     { key: 'audio_path', label: 'File', get: (d) => d.audio_path },
   ];
-  $effect(() => {
-    if (typeof localStorage === 'undefined') return;
-    const v = localStorage.getItem('raudio-table-cols-v4');
-    if (v) {
-      try {
-        tableCols = JSON.parse(v) as string[];
-      } catch {
-        /* ignore */
-      }
-    }
-  });
   function toggleCol(key: string) {
     tableCols = tableCols.includes(key) ? tableCols.filter((k) => k !== key) : [...tableCols, key];
     try {
@@ -156,13 +149,13 @@
       /* ignore */
     }
   }
-  // Grid column count, persisted in localStorage so it sticks.
-  let gridCols = $state<number>(3);
-  $effect(() => {
-    if (typeof localStorage === 'undefined') return;
+  // Grid column count, persisted in localStorage so it sticks (direct init —
+  // same reasoning as loadTableCols above).
+  function loadGridCols(): number {
     const v = localStorage.getItem('raudio-gridcols');
-    if (v) gridCols = Math.max(2, Math.min(6, Number(v) || 3));
-  });
+    return v ? Math.max(2, Math.min(6, Number(v) || 3)) : 3;
+  }
+  let gridCols = $state<number>(loadGridCols());
   function setGridCols(n: number) {
     gridCols = n;
     try {
@@ -176,12 +169,18 @@
   const isBrowsing = $derived(!spec.q && !spec.image && !spec.topic);
   const docsTotalPages = $derived(Math.max(1, Math.ceil(docsTotal / PER_PAGE)));
 
+  // Supersession counter: FilterPopover auto-applies onchange, so searches can
+  // overlap — only the LATEST call may write results. Plain let (never rendered).
+  let searchSeq = 0;
+
   async function runSearch(next: SearchSpec) {
+    const seq = ++searchSeq; // supersede any in-flight search/loadMore, incl. on clear
     // Reset paging on a new search.
     spec = { ...next, n: next.n ?? PAGE_STEP };
     allLoaded = false;
     if (!spec.q && !spec.image && !spec.topic) {
       hits = [];
+      loadingHits = false; // a superseded call's guarded finally won't reset it
       return;
     }
     // A new search supersedes any prior map selection so the Map-view table +
@@ -194,14 +193,17 @@
     error = null;
     try {
       const requested = spec.n ?? PAGE_STEP;
-      hits = await search(spec);
+      const result = await search(spec);
+      if (seq !== searchSeq) return; // a newer search superseded this one
+      hits = result;
       active = null;
-      if (hits.length < requested) allLoaded = true;
+      if (result.length < requested) allLoaded = true;
     } catch (e) {
+      if (seq !== searchSeq) return;
       hits = [];
       error = e instanceof ApiError ? e.detail : e instanceof Error ? e.message : 'unknown error';
     } finally {
-      loadingHits = false;
+      if (seq === searchSeq) loadingHits = false;
     }
   }
 
@@ -209,14 +211,20 @@
   async function loadMore() {
     if (loadingMore || allLoaded) return;
     loadingMore = true;
+    const seq = ++searchSeq;
     try {
       const nextN = (spec.n ?? PAGE_STEP) + PAGE_STEP;
-      hits = await search({ ...spec, n: nextN });
-      spec = { ...spec, n: nextN };
-      if (hits.length < nextN) allLoaded = true;
+      const result = await search({ ...spec, n: nextN });
+      if (seq === searchSeq) {
+        hits = result;
+        spec = { ...spec, n: nextN };
+        if (result.length < nextN) allLoaded = true;
+      }
     } catch {
       // Silent on load-more errors — keep the hits already shown.
     } finally {
+      // Unguarded: runSearch never resets loadingMore, so a superseded
+      // load-more must release the button itself.
       loadingMore = false;
     }
   }
@@ -224,17 +232,32 @@
   /** Load documents whenever in browse mode + page changes. */
   $effect(() => {
     if (!isBrowsing) return;
+    let cancelled = false;
     loadingDocs = true;
+    docsError = null;
     listDocuments(docsPage, PER_PAGE)
       .then((r) => {
+        if (cancelled) return;
         docs = r.docs;
         docsTotal = r.total;
       })
-      .catch(() => {
+      .catch((e) => {
+        if (cancelled) return;
         docs = [];
         docsTotal = 0;
+        docsError =
+          e instanceof ApiError
+            ? e.detail
+            : e instanceof Error
+              ? e.message
+              : 'failed to load documents';
       })
-      .finally(() => (loadingDocs = false));
+      .finally(() => {
+        if (!cancelled) loadingDocs = false;
+      });
+    return () => {
+      cancelled = true;
+    };
   });
 
   /**
@@ -256,12 +279,6 @@
     }
   }
 
-  /**
-   * When user clicks a doc tile, just open it in the player with a synthetic
-   * full-document "hit" pointing at start=0. Earlier I auto-set the `namn`
-   * filter — it then silently stuck across the next search and produced 0
-   * hits. Now nothing is implicitly filtered.
-   */
   // Hand-off from the Tree page: `/?topic=<name>` opens Search already filtered
   // to that topic — a filter-only browse (no query text), backed by the
   // topic-only branch in `run_search`. Runs once on mount.
@@ -270,6 +287,12 @@
     if (topic) runSearch({ q: '', topic, n: spec.n ?? 100, mode: spec.mode });
   });
 
+  /**
+   * When user clicks a doc tile, just open it in the player with a synthetic
+   * full-document "hit" pointing at start=0. Earlier I auto-set the `namn`
+   * filter — it then silently stuck across the next search and produced 0
+   * hits. Now nothing is implicitly filtered.
+   */
   function openDoc(doc: Document) {
     active = {
       _score: 0,
@@ -446,6 +469,10 @@
               {#if loadingDocs && docs.length === 0}
                 <div class="flex h-full items-center justify-center text-sm text-muted-foreground">
                   <Loader2 class="size-4 animate-spin mr-2" /> Loading documents…
+                </div>
+              {:else if docsError}
+                <div class="flex h-full items-center justify-center px-6 text-center text-sm">
+                  <span class="text-destructive">Error: {docsError}</span>
                 </div>
               {:else if view === 'grid'}
                 <div

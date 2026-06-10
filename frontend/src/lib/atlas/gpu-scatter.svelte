@@ -651,6 +651,13 @@ fn fs(@location(0) rgb : vec3f, @location(1) quad : vec2f,
     onHoverEnd();
   }
 
+  // OS-interrupted gesture (incoming call, browser takeover): abandon the drag
+  // WITHOUT committing a pick or lasso — a cancel is not an up.
+  function onPointerCancel(): void {
+    drag = null;
+    clearLassoOverlay();
+  }
+
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
     const [cx, cy] = localCss(e);
@@ -732,6 +739,7 @@ fn fs(@location(0) rgb : vec3f, @location(1) quad : vec2f,
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     onpointerleave={onPointerLeave}
+    onpointercancel={onPointerCancel}
     onwheel={onWheel}
   ></canvas>
   <canvas

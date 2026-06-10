@@ -52,7 +52,6 @@ const PersistedEdgeSchema = z.object({
   source: z.string(),
   target: z.string(),
   label: z.string().optional(),
-  animated: z.boolean().optional(),
 });
 
 /** A structurally-bad node (unknown kind, missing position) fails the whole

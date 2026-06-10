@@ -165,20 +165,23 @@
     if (!col) return filteredHits;
     const dir = sortDir === 'asc' ? 1 : -1;
     // Sort a shallow copy — never the source array.
-    return [...filteredHits].sort((a, b) => compareCells(col, a, b) * dir);
+    return [...filteredHits].sort((a, b) => compareCells(col, a, b, dir));
   });
 
-  /** Compare two hits on column `col` for ascending order. Numeric nulls sort
-   *  last (always after present values, regardless of direction is handled by
-   *  the caller's sign — here we just push nulls to the high end). */
-  function compareCells(col: TableColumn, a: Hit, b: Hit): number {
+  /** Compare two hits on column `col`. `dir` (1 = asc, -1 = desc) applies only
+   *  to present values; nulls always sort last regardless of direction (the
+   *  sign must not flip them to the top on a descending sort). */
+  function compareCells(col: TableColumn, a: Hit, b: Hit, dir: number): number {
     const va = cellValue(col, a);
     const vb = cellValue(col, b);
     if (va === null && vb === null) return 0;
     if (va === null) return 1;
     if (vb === null) return -1;
-    if (typeof va === 'number' && typeof vb === 'number') return va - vb;
-    return String(va).localeCompare(String(vb));
+    const base =
+      typeof va === 'number' && typeof vb === 'number'
+        ? va - vb
+        : String(va).localeCompare(String(vb));
+    return base * dir;
   }
 </script>
 
@@ -220,6 +223,7 @@
                 inputmode={c.numeric ? 'decimal' : 'text'}
                 bind:value={filters[c.key]}
                 placeholder={c.numeric ? 'min ≥' : 'filter'}
+                aria-label={c.numeric ? `Minimum ${c.label}` : `Filter ${c.label}`}
                 class="w-full rounded border border-border bg-background px-1.5 py-0.5 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
               />
             {/if}
