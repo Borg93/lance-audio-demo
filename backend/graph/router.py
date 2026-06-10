@@ -374,10 +374,13 @@ def get_subgraph(
         node_ids = set(ranked[:limit])
 
     nodes = [n for eid in node_ids if (n := _node(res, eid)) is not None]
+    # dedupe undirected: collapse both per-mention repeats AND a reversed pair
+    # so an edge never renders twice in the force layout.
     seen: set[tuple[str, str]] = set()
     edges: list[GraphEdge] = []
     for src, tgt, desc in res.rels:
-        if src in node_ids and tgt in node_ids and (src, tgt) not in seen:
-            seen.add((src, tgt))
+        key = (src, tgt) if src <= tgt else (tgt, src)
+        if src in node_ids and tgt in node_ids and key not in seen:
+            seen.add(key)
             edges.append(GraphEdge(source=src, target=tgt, description=desc))
     return SubgraphResponse(built=True, nodes=nodes, edges=edges)

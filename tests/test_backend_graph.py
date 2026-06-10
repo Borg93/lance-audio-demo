@@ -50,6 +50,9 @@ _MENTIONS = [
 _RELATIONSHIPS = [
     ("1111111111111111", "2222222222222222", "Regeringen styr Sverige.", "doc0:0:0"),
     ("3333333333333333", "4444444444444444", "Anna Lindberg bor i Stockholm.", "doc0:0:1"),
+    # same undirected pair, reversed + a second chunk — the subgraph view must
+    # collapse these into ONE edge (no double-render in the force layout).
+    ("2222222222222222", "1111111111111111", "Sverige har en regering.", "doc1:0:0"),
 ]
 
 
@@ -210,3 +213,16 @@ def test_entity_known_id_resolves(tmp_path: Path) -> None:
         body = client.get("/api/graph/entity/1111111111111111").json()
     assert body["entity"]["name"] == "Sverige"
     assert len(body["clips"]) == 3  # Sverige is mentioned in 3 chunks
+
+
+def test_subgraph_dedupes_reverse_edges(tmp_path: Path) -> None:
+    """Sverige↔Regeringen appears as a->b, b->a and across two chunks — the
+    overview subgraph must render it as a single undirected edge."""
+    db = _db_with_chunks(tmp_path)
+    _write_graph(db)
+    with TestClient(create_app(db)) as client:
+        body = client.get("/api/graph/subgraph?limit=50").json()
+    pairs = [tuple(sorted((e["source"], e["target"]))) for e in body["edges"]]
+    assert len(pairs) == len(set(pairs))  # no duplicate undirected pair
+    sv, reg = "1111111111111111", "2222222222222222"
+    assert sum(1 for p in pairs if p == tuple(sorted((sv, reg)))) == 1
