@@ -85,6 +85,36 @@
     },
   ];
 
+  // Plain-language questions with their Cypher — rendered in the help panel,
+  // one click fills the REPL and runs (all verified against the live engine).
+  const HELP_EXAMPLES = [
+    {
+      label: 'Who are the most-mentioned people?',
+      query:
+        "MATCH (a:Entity) WHERE a.entity_type = 'PERSON' RETURN a.name, a.mention_count ORDER BY a.mention_count DESC LIMIT 20",
+    },
+    {
+      label: 'Find entities matching a word (e.g. miljö)',
+      query: "MATCH (a:Entity) WHERE a.name_lower CONTAINS 'miljö' RETURN a.name, a.entity_type, a.mention_count LIMIT 20",
+    },
+    {
+      label: 'In which clips is Stockholm mentioned?',
+      query:
+        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk) WHERE a.name_lower = 'stockholm' RETURN c.namn, c.start_s, c.text LIMIT 25",
+    },
+    {
+      label: 'Which pairs appear together most often?',
+      query:
+        'MATCH (a:Entity)-[:MENTIONS]->(c:Chunk)<-[:MENTIONS]-(b:Entity) WHERE a.entity_id < b.entity_id RETURN a.name, b.name, count(c.chunk_id) AS shared ORDER BY shared DESC LIMIT 15',
+    },
+  ];
+
+  function runExample(query: string): void {
+    cypherText = query;
+    cypherOpen = true;
+    void runCypher();
+  }
+
   // ── page state ──────────────────────────────────────────────────────────
   let status = $state<GraphStatus | null>(null);
   let view = $state<View>('graph');
@@ -423,6 +453,21 @@
               the Cypher/Table view.
             </li>
           </ul>
+          <p class="text-foreground mt-2 mb-1 font-medium">Try a question (click to run)</p>
+          <div class="space-y-1">
+            {#each HELP_EXAMPLES as ex (ex.label)}
+              <button
+                class="border-border bg-background hover:bg-secondary/60 block w-full rounded border px-2 py-1 text-left"
+                onclick={() => runExample(ex.query)}
+              >
+                <span class="text-foreground">{ex.label}</span>
+                <code class="text-muted-foreground mt-0.5 block truncate font-mono text-[10px]">{ex.query}</code>
+              </button>
+            {/each}
+          </div>
+          <p class="mt-1.5">
+            Full schema + more examples: <code>docs/GRAPH.md</code>.
+          </p>
         </div>
       {/if}
     </div>
