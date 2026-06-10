@@ -57,6 +57,66 @@ def _sql_quote(value: str) -> str:
     return value.replace("'", "''")
 
 
+def compact_search(
+    state: AppState,
+    *,
+    query: str,
+    mode: str,
+    n: int,
+    language: str | None = None,
+    video_name: str | None = None,
+    topic: str | None = None,
+) -> list[dict[str, Any]]:
+    """Run a search and compact the hits — shared by the data tool AND the
+    Prefab results app, so the two can't drift on filters or hit shape."""
+    try:
+        spec = SearchSpec(
+            q=query,
+            mode=SearchMode(mode),
+            n=min(n, _MAX_HITS),
+            language=language,
+            namn=video_name,
+            topic=topic,
+        )
+    except (PydanticValidationError, ValueError) as exc:
+        raise ToolError(f"invalid search arguments: {exc}") from exc
+    try:
+        hits = run_search(
+            state.chunks,
+            state.chunk_frames_tbl,
+            get_embedder=lambda: ensure_embedder(state),
+            get_reranker=lambda: ensure_reranker(state),
+            spec=spec,
+            image_bytes=None,
+        )
+    except DomainError as exc:
+        raise ToolError(str(exc.detail)) from exc
+    return [_compact_hit(h) for h in hits]
+
+
+def transcript_window(
+    state: AppState, *, doc_id: str, center_s: float, window_s: float
+) -> dict[str, Any]:
+    """Transcript segments around one moment — shared by the data tool AND the
+    clip app (which renders the same segments next to the video)."""
+    half = min(max(window_s, 1.0), 300.0)
+    lo, hi = center_s - half, center_s + half
+    flt = f"doc_id = '{_sql_quote(doc_id)}' AND \"end\" >= {lo} AND start <= {hi}"
+    rows = state.chunks_ds.to_table(
+        columns=["namn", "start", "end", "text"], filter=flt
+    ).to_pylist()
+    if not rows:
+        raise ToolError(f"no transcript in that window — unknown doc_id {doc_id!r}?")
+    rows.sort(key=lambda r: r["start"])
+    return {
+        "doc_id": doc_id,
+        "video": rows[0].get("namn"),
+        "window_s": [lo, hi],
+        "segments": [{"start_s": r["start"], "end_s": r["end"], "text": r["text"]} for r in rows],
+        "text": " ".join(r["text"] for r in rows),
+    }
+
+
 def register_tools(mcp: FastMCP, state: AppState) -> None:
     """Register the tool set, closing over the app's shared :class:`AppState`."""
 
@@ -79,29 +139,15 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
         ``language`` (ISO code, e.g. "sv"), ``video_name`` (substring of the
         video title), ``topic`` (an exact topic name from ``list_topics``).
         """
-        try:
-            spec = SearchSpec(
-                q=query,
-                mode=SearchMode(mode),
-                n=min(n, _MAX_HITS),
-                language=language,
-                namn=video_name,
-                topic=topic,
-            )
-        except PydanticValidationError as exc:
-            raise ToolError(f"invalid search arguments: {exc}") from exc
-        try:
-            hits = run_search(
-                state.chunks,
-                state.chunk_frames_tbl,
-                get_embedder=lambda: ensure_embedder(state),
-                get_reranker=lambda: ensure_reranker(state),
-                spec=spec,
-                image_bytes=None,
-            )
-        except DomainError as exc:
-            raise ToolError(str(exc.detail)) from exc
-        return [_compact_hit(h) for h in hits]
+        return compact_search(
+            state,
+            query=query,
+            mode=mode,
+            n=n,
+            language=language,
+            video_name=video_name,
+            topic=topic,
+        )
 
     @mcp.tool
     def get_transcript_window(
@@ -115,24 +161,7 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
         ``doc_id`` and its ``start_s`` as ``center_s`` to read what was said
         around the match (±``window_s`` seconds, capped at ±300).
         """
-        half = min(max(window_s, 1.0), 300.0)
-        lo, hi = center_s - half, center_s + half
-        flt = f"doc_id = '{_sql_quote(doc_id)}' AND \"end\" >= {lo} AND start <= {hi}"
-        rows = state.chunks_ds.to_table(
-            columns=["namn", "start", "end", "text"], filter=flt
-        ).to_pylist()
-        if not rows:
-            raise ToolError(f"no transcript in that window — unknown doc_id {doc_id!r}?")
-        rows.sort(key=lambda r: r["start"])
-        return {
-            "doc_id": doc_id,
-            "video": rows[0].get("namn"),
-            "window_s": [lo, hi],
-            "segments": [
-                {"start_s": r["start"], "end_s": r["end"], "text": r["text"]} for r in rows
-            ],
-            "text": " ".join(r["text"] for r in rows),
-        }
+        return transcript_window(state, doc_id=doc_id, center_s=center_s, window_s=window_s)
 
     @mcp.tool
     def find_similar_voices(doc_id: str, t: float, n: int = 8) -> dict[str, Any]:

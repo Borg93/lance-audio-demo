@@ -51,6 +51,8 @@ async def test_lists_the_curated_tools(mcp: Any) -> None:
         "find_similar_voices",
         "query_knowledge_graph",
         "list_topics",
+        "show_search_results",
+        "show_clip",
     } <= names
 
 
@@ -108,6 +110,51 @@ async def test_list_topics_or_clean_error(mcp: Any) -> None:
             return
     assert data["n_chunks"] > 0
     assert data["hierarchy"]["children"]
+
+
+async def test_show_search_results_renders_app_with_llm_summary(mcp: Any) -> None:
+    from fastmcp import Client
+
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+        # App tools carry the MCP Apps linkage so hosts know to render a UI.
+        assert (tools["show_search_results"].meta or {}).get("ui"), "missing _meta.ui"
+        result = await client.call_tool(
+            "show_search_results", {"query": "jag", "mode": "fts", "n": 5}
+        )
+    summary = result.content[0].text  # type: ignore[union-attr]
+    assert "interactive table" in summary or "No hits" in summary
+    if "doc_id=" in summary:
+        # The structured side is the serialized Prefab component tree.
+        assert result.structured_content, "missing Prefab structured content"
+        assert "DataTable" in str(result.structured_content)
+
+
+async def test_show_clip_returns_player_payload(mcp: Any) -> None:
+    import json
+
+    from fastmcp import Client
+
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+        ui_meta = (tools["show_clip"].meta or {}).get("ui") or {}
+        assert ui_meta.get("resourceUri") == "ui://raudio/clip.html"
+        # The linked ui:// resource must be fetchable (that's what hosts render).
+        html = await client.read_resource("ui://raudio/clip.html")
+        assert "<video" in html[0].text  # type: ignore[union-attr]
+
+        hits = (
+            await client.call_tool("search_chunks", {"query": "jag", "mode": "fts", "n": 1})
+        ).data
+        if not hits:
+            pytest.skip("no fts hits in local dataset")
+        result = await client.call_tool(
+            "show_clip", {"doc_id": hits[0]["doc_id"], "start_s": hits[0]["start_s"]}
+        )
+    clip = json.loads(result.content[0].text)  # type: ignore[union-attr]
+    assert clip["doc_id"] == hits[0]["doc_id"]
+    assert clip["media_url"].endswith(f"/api/media/{hits[0]['doc_id']}")
+    assert clip["segments"], "clip payload must carry transcript segments"
 
 
 async def test_knowledge_graph_query_or_clean_error(mcp: Any) -> None:

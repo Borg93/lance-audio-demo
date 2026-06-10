@@ -16,6 +16,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 from fastmcp.server.http import StarletteWithLifespan
 
+from backend.mcp.apps import register_app_tools
 from backend.mcp.tools import register_tools
 from backend.state import AppState
 
@@ -27,13 +28,17 @@ Content questions: start with `search_chunks`, then expand promising hits with
 Entity/connection questions: `query_knowledge_graph`. Corpus overview / exact
 topic names: `list_topics`. Transcripts and topic names are Swedish — query in
 Swedish for keyword (fts) search; semantic mode tolerates other languages.
-Cite findings as (doc_id, start_s) so they can be deep-linked to the video."""
+Cite findings as (doc_id, start_s) so they can be deep-linked to the video.
+When the user wants to BROWSE or WATCH rather than read your summary, use the
+interactive tools: `show_search_results` (sortable results table) and
+`show_clip` (video player + transcript at a moment)."""
 
 
 def build_mcp(state: AppState) -> FastMCP:
     """The MCP server with all tools registered against this app's state."""
     mcp = FastMCP(name="raudio", instructions=_INSTRUCTIONS)
     register_tools(mcp, state)
+    register_app_tools(mcp, state)
     return mcp
 
 
