@@ -62,6 +62,25 @@ def is_junk(name: str) -> bool:
     )
 
 
+_DESC_MAX = 160
+
+
+def truncate_desc(text: str, limit: int = _DESC_MAX) -> str:
+    """Cap a relationship description at a word boundary with an ellipsis.
+
+    A hard ``text[:120]`` slice cut mid-word (``...har en etablerad ans``) on
+    169 edges. Trim back to the last space within budget and append ``…`` so
+    the UI shows a complete-looking phrase; fall back to a hard slice only when
+    a single word already exceeds the budget.
+    """
+    text = " ".join(text.split())  # collapse the <SEP>-join whitespace too
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    spaced = cut.rsplit(" ", 1)[0]
+    return (spaced if len(spaced) >= limit // 2 else cut).rstrip() + "…"
+
+
 def slug(name: str) -> str:
     return hashlib.sha1(name.strip().lower().encode("utf-8")).hexdigest()[:16]
 
@@ -159,8 +178,8 @@ def main() -> None:
             # happens across shards and renders as double edges)
             s, t = sorted((slug(src_name), slug(tgt_name)))
             # merged descriptions are <SEP>-joined; keep the first fragment so
-            # the raw delimiter never leaks into the UI
-            desc = (data.get("description") or data.get("keywords") or "").split(SEP)[0][:120]
+            # the raw delimiter never leaks into the UI, then word-boundary cap
+            desc = truncate_desc((data.get("description") or data.get("keywords") or "").split(SEP)[0])
             cks = keys_of(data.get("source_id")) or {next(iter(ent_chunks[s]), "")}
             for ck in cks:
                 if not ck or (s, t, ck) in seen_rels:
