@@ -38,7 +38,8 @@ STOPWORDS = {
     "åhörarna", "frågeställaren", "frågor", "frågan", "kronor", "procent",
 }
 
-_NUMERIC = re.compile(r"[\d\s.,:%–—-]+")
+_NUMERIC = re.compile(r"[\d\s.,:%–—()-]+")  # incl. parens so '(2007-2011)' is junk
+_HAS_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
 # bare amounts ("55 Miljoner", "4 Procent", "106 År") — but NOT decades
 # ("1980-talet"), which are real discourse concepts
 _AMOUNT = re.compile(r"\d[\d\s.,]*\s*(procent|kronor|miljoner|miljarder|år|%)")
@@ -70,6 +71,7 @@ def is_junk(name: str) -> bool:
         len(name) <= 1
         or len(name) > 90
         or low in STOPWORDS
+        or not _HAS_LETTER.search(name)  # no alphabetic char → not an entity
         or bool(_NUMERIC.fullmatch(name))
         or bool(_AMOUNT.fullmatch(low))
         or _is_sentence(name)

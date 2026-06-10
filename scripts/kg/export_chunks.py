@@ -38,13 +38,21 @@ def main() -> None:
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    written = 0
+    written, skipped_empty = 0, 0
     with out_path.open("w", encoding="utf-8") as fh:
         for crs in by_doc.values():
             crs.sort(key=lambda r: (int(r["speech_id"]), int(r["chunk_id"])))
             for row in crs[: args.max_per_doc] if args.max_per_doc else crs:
                 if args.limit and written >= args.limit:
                     break
+                # Empty-text chunks have nothing to extract and make LightRAG
+                # raise "Set of Tasks/Futures is empty" (the doc is marked FAILED
+                # and skipped). Drop them at the source so they never enter the
+                # build and never burn an LLM call.
+                text = (row["text"] or "").strip()
+                if not text:
+                    skipped_empty += 1
+                    continue
                 fh.write(
                     json.dumps(
                         {
@@ -54,7 +62,7 @@ def main() -> None:
                             "namn": row["namn"] or row["doc_id"],
                             "start": float(row["start"]),
                             "end": float(row["end"]),
-                            "text": row["text"] or "",
+                            "text": text,
                         },
                         ensure_ascii=False,
                     )
@@ -64,7 +72,10 @@ def main() -> None:
             if args.limit and written >= args.limit:
                 break
 
-    print(f"wrote {written} chunks from {len(by_doc)} docs -> {out_path}")
+    print(
+        f"wrote {written} chunks from {len(by_doc)} docs -> {out_path} "
+        f"(skipped {skipped_empty} empty-text chunks)"
+    )
 
 
 if __name__ == "__main__":
