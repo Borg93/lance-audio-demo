@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastmcp.utilities.lifespan import combine_lifespans
 
 from backend.atlas.router import router as atlas_router
 from backend.core.config import get_settings
@@ -28,6 +29,7 @@ from backend.core.middleware import register_middleware
 from backend.core.probes import router as probes_router
 from backend.diarization.router import router as diarization_router
 from backend.graph.router import router as graph_router
+from backend.mcp.server import build_mcp_app
 from backend.media.router import router as media_router
 from backend.search.router import router as search_router
 from backend.state import open_resources
@@ -46,11 +48,19 @@ def create_app(db_path: str | Path) -> FastAPI:
     readiness flags, which a lifespan-less TestClient rightly skips. We set
     the readiness flags to False here so ``/readyz`` is well-defined even
     without the lifespan.
+
+    The MCP sub-app's lifespan is combined with ours because FastMCP's session
+    manager starts there — without it every ``/mcp`` request 500s. A
+    lifespan-less TestClient therefore can't exercise ``/mcp`` (the REST
+    surface is unaffected); MCP tests drive the tools through the in-memory
+    client instead.
     """
     settings = get_settings()
-    app = FastAPI(title="raudio api", lifespan=lifespan)
+    resources = open_resources(db_path)
+    mcp_app = build_mcp_app(resources)
+    app = FastAPI(title="raudio api", lifespan=combine_lifespans(lifespan, mcp_app.lifespan))
 
-    app.state.resources = open_resources(db_path)
+    app.state.resources = resources
     app.state.startup_complete = False
     app.state.shutting_down = False
 
@@ -66,6 +76,10 @@ def create_app(db_path: str | Path) -> FastAPI:
     app.include_router(diarization_router)
     app.include_router(voice_router)
     app.include_router(graph_router)
+
+    # MCP endpoint (streamable HTTP) at /mcp/ — hosts connect with e.g.
+    #   claude mcp add raudio --transport http http://localhost:8000/mcp/
+    app.mount("/mcp", mcp_app)
 
     return app
 
