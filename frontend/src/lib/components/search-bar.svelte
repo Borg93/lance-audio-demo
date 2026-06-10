@@ -4,7 +4,8 @@
   import HelpPopover from './help-popover.svelte';
   import SearchSettings from './search-settings.svelte';
   import type { SearchSpec, SearchMode } from '$lib/api';
-  import { Paperclip, Search, X, ImagePlus } from 'lucide-svelte';
+  import { voiceSearch } from '$lib/voice-search.svelte';
+  import { AudioLines, Loader2, Paperclip, Search, X, ImagePlus } from 'lucide-svelte';
 
   type Props = {
     spec: SearchSpec;
@@ -102,6 +103,27 @@
   }
 
   let fileInput = $state<HTMLInputElement | null>(null);
+
+  // ── Voice clip attach ("find this voice" from an uploaded snippet) ──
+  // Gated on voiceSearch.built (the page's one-shot status probe). Picking a
+  // file auto-applies: requestUpload() queues it on the shared store and the
+  // search page consumes it — no submit step, mirroring the image affordance.
+  let audioInput = $state<HTMLInputElement | null>(null);
+  /** Inline error for a rejected clip (too large) — never sent to the API. */
+  let audioError = $state<string | null>(null);
+  /** Mirrors the backend cap (`backend/voice/service.py` _MAX_UPLOAD_BYTES);
+   *  bigger files would 400 server-side, so they're refused client-side. */
+  const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+
+  function pickAudio(f: File) {
+    audioError = null;
+    if (f.size > MAX_AUDIO_BYTES) {
+      const mb = (f.size / (1024 * 1024)).toFixed(1);
+      audioError = `"${f.name}" is ${mb} MB — voice clips are capped at 25 MB. Trim to a few seconds of one person speaking.`;
+      return;
+    }
+    voiceSearch.requestUpload(f);
+  }
 
   function dropZone(node: HTMLElement) {
     const onDragOver = (e: DragEvent) => e.preventDefault();
@@ -218,6 +240,34 @@
             e.currentTarget.value = '';
           }}
         />
+        {#if voiceSearch.built}
+          <Button
+            type="button"
+            variant="outline"
+            size="default"
+            disabled={voiceSearch.uploadPending}
+            title="Attach a short audio clip (≤ 25 MB) — find everywhere this voice speaks"
+            onclick={() => audioInput?.click()}
+          >
+            {#if voiceSearch.uploadPending}
+              <Loader2 class="size-4 animate-spin" />
+            {:else}
+              <AudioLines class="size-4" />
+            {/if}
+            Voice
+          </Button>
+          <input
+            bind:this={audioInput}
+            type="file"
+            accept="audio/*,video/mp4,.m4a,.mp3,.wav"
+            class="hidden"
+            onchange={(e) => {
+              const f = e.currentTarget.files?.[0];
+              e.currentTarget.value = '';
+              if (f) pickAudio(f);
+            }}
+          />
+        {/if}
         <SearchSettings
           bind:resultN
           bind:rerank
@@ -281,6 +331,10 @@
           Search
         </Button>
       </div>
+    {/if}
+
+    {#if audioError}
+      <p class="text-[11px] text-destructive" role="alert">{audioError}</p>
     {/if}
 
     {#if imagePreview && imageFile}

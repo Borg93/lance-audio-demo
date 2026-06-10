@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import logging
 import wave
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import numpy as np
 from pydantic import BaseModel
@@ -222,12 +222,15 @@ class VoiceEncoder:
         """
         import torch
 
+        # The wrapper's samples→frames method; cast because nn.Module.__getattr__
+        # types every dynamic attribute as Tensor | Module.
+        num_frames = cast(Callable[[int], int], self._model.num_frames)
         max_len = max(w.shape[0] for w in waveforms)
         batch = torch.zeros(len(waveforms), 1, max_len)
-        weights = torch.zeros(len(waveforms), int(self._model.num_frames(max_len)))
+        weights = torch.zeros(len(waveforms), int(num_frames(max_len)))
         for i, w in enumerate(waveforms):
             batch[i, 0, : w.shape[0]] = torch.from_numpy(w)
-            weights[i, : int(self._model.num_frames(w.shape[0]))] = 1.0
+            weights[i, : int(num_frames(w.shape[0]))] = 1.0
         with torch.inference_mode():
             embeddings = self._model(batch.to(self._device), weights=weights.to(self._device))
         return embeddings.cpu().numpy().astype(np.float32)
@@ -247,9 +250,7 @@ class VoiceEncoder:
         belongs to ``kept_turns[i]``.
         """
         wav = load_wav_16k_mono(wav_path)
-        return embed_turn_slices(
-            self, wav, turns, batch_size=batch_size, min_duration=min_duration
-        )
+        return embed_turn_slices(self, wav, turns, batch_size=batch_size, min_duration=min_duration)
 
 
 def write_speaker_embeddings(

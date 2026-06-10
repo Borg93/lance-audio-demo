@@ -682,6 +682,8 @@ def cmd_embed_speaker_turns(
                 end=float(r["end"]),
             )
         )
+    for doc_turns in turns_by_doc.values():
+        doc_turns.sort(key=lambda t: t.turn_id)
 
     # doc_id → audio_path from chunks (same mapping extract-speaker-turns used).
     chunk_rows = (
@@ -748,9 +750,7 @@ def cmd_embed_speaker_turns(
             yield doc_id, kept, embeddings
 
     n_embeddings = write_speaker_embeddings(emb_path, _per_video(), create=not emb_exists)
-    typer.echo(
-        f"  wrote {n_embeddings} embedding(s) across {len(resolved)} video(s).", err=True
-    )
+    typer.echo(f"  wrote {n_embeddings} embedding(s) across {len(resolved)} video(s).", err=True)
 
     # Indexes on the canonical table only — shards defer to
     # `merge-speaker-embeddings`, which rebuilds them after the fold.

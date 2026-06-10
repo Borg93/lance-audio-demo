@@ -10,49 +10,27 @@ ranking exact.
 
 from __future__ import annotations
 
+import io
+import wave
 from pathlib import Path
 
+import httpx
 import lance
 import numpy as np
 import pyarrow as pa
 import pytest
 from backend import create_app
+from backend.voice import service as voice_service
 from fastapi.testclient import TestClient
 
 from fakes import make_doc
 from raudio.ingest.ingest import ingest_many
-
-VOICE_DIM = 256
-
-# Inline mirror of the voice-table design (the canonical pa.schema constants
-# land in raudio.model.schema with the embed-speaker-turns pipeline work).
-SPEAKER_EMBEDDINGS_SCHEMA = pa.schema(
-    [
-        pa.field("doc_id", pa.string(), nullable=False),
-        pa.field("turn_id", pa.int32(), nullable=False),
-        pa.field("speaker_label", pa.string(), nullable=False),
-        pa.field("start", pa.float32()),
-        pa.field("end", pa.float32()),
-        pa.field("duration", pa.float32()),
-        pa.field("embedding", pa.list_(pa.float32(), VOICE_DIM)),
-    ]
-)
-SPEAKERS_SCHEMA = pa.schema(
-    [
-        pa.field("doc_id", pa.string(), nullable=False),
-        pa.field("speaker_label", pa.string(), nullable=False),
-        pa.field("n_turns", pa.int32()),
-        pa.field("total_duration", pa.float32()),
-        pa.field("embedding", pa.list_(pa.float32(), VOICE_DIM)),
-        pa.field("speaker_cluster", pa.int32()),
-        pa.field("speaker_name", pa.string()),
-    ]
-)
+from raudio.model.schema import SPEAKER_EMBEDDINGS_SCHEMA, SPEAKERS_SCHEMA, VOICE_EMBED_DIM
 
 
 def _unit(axis: int, leak_axis: int | None = None, leak: float = 0.0) -> np.ndarray:
     """L2-normalized one-hot(ish) voiceprint — exact cosine geometry for tests."""
-    v = np.zeros(VOICE_DIM, dtype=np.float32)
+    v = np.zeros(VOICE_EMBED_DIM, dtype=np.float32)
     v[axis] = 1.0
     if leak_axis is not None:
         v[leak_axis] = leak
@@ -68,7 +46,7 @@ VY_C = _unit(1)
 
 
 def _embedding_array(vecs: list[np.ndarray]) -> pa.Array:
-    return pa.array([v.tolist() for v in vecs], type=pa.list_(pa.float32(), VOICE_DIM))
+    return pa.array([v.tolist() for v in vecs], type=pa.list_(pa.float32(), VOICE_EMBED_DIM))
 
 
 def _write_speaker_embeddings(
@@ -363,3 +341,136 @@ class TestResultCap:
         client, d = client_many
         body = _similar(client, doc_id=d, turn_id=0, n=500, exclude_same_doc=False)
         assert len(body["hits"]) == 100  # 120 candidates, n clamped (not 422)
+
+
+def _wav_bytes(seconds: float, sample_rate: int = 16_000) -> bytes:
+    """A tiny in-memory 16 kHz mono PCM16 WAV (a quiet 220 Hz tone) — stdlib wave."""
+    n = round(seconds * sample_rate)
+    t = np.arange(n, dtype=np.float64)
+    pcm = (0.1 * np.sin(2 * np.pi * 220.0 * t / sample_rate) * 32767.0).astype("<i2")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+class _FakeVoiceEncoder:
+    """TurnBatchEncoder fake — one fixed raw (deliberately non-unit) row per waveform."""
+
+    def __init__(self, vec: np.ndarray) -> None:
+        self.vec = vec
+        self.calls: list[list[np.ndarray]] = []
+
+    def embed_batch(self, waveforms: list[np.ndarray]) -> np.ndarray:
+        self.calls.append(waveforms)
+        return np.stack([self.vec * 3.0 for _ in waveforms]).astype(np.float32)
+
+
+def _upload(client: TestClient, data: bytes, **params) -> httpx.Response:
+    # n rides as a query param (like the GET); the multipart body is file-only.
+    return client.post(
+        "/api/voice/similar",
+        params={k: str(v) for k, v in params.items()},
+        files={"file": ("snippet.wav", data, "audio/wav")},
+    )
+
+
+class TestUploadSimilar:
+    """POST /api/voice/similar — the upload anchor form.
+
+    Hermetic + offline: a fake encoder is pre-set on the lazy ``voice_encoder``
+    slot (the first thing ``ensure_voice_encoder`` checks), so no model loads
+    and no network is touched. ffmpeg IS exercised for real — the WAVs are
+    generated in-memory with stdlib ``wave``.
+    """
+
+    @staticmethod
+    def _inject(client: TestClient, vec: np.ndarray) -> _FakeVoiceEncoder:
+        fake = _FakeVoiceEncoder(vec)
+        client.app.state.resources.voice_encoder = fake
+        return fake
+
+    def test_upload_ranks_hits_by_voice(self, client_built) -> None:
+        client, (a, b, _) = client_built
+        fake = self._inject(client, VX)
+        r = _upload(client, _wav_bytes(1.0))
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # No Lance-side anchor — the query was the snippet itself.
+        assert body["query"] == {
+            "doc_id": None,
+            "speaker_label": None,
+            "turn_id": None,
+            "turn_start": None,
+            "turn_end": None,
+        }
+        hits = body["hits"]
+        assert hits and fake.calls  # ranking came from the injected encoder
+        assert [h["_distance"] for h in hits] == sorted(h["_distance"] for h in hits)
+        # The snippet IS voice X: B's turn matches exactly, A's leaked variant next.
+        assert hits[0]["doc_id"] == b
+        assert hits[0]["_distance"] < 1e-5
+        assert (hits[1]["doc_id"], hits[1]["speaker_label"]) == (a, "SPEAKER_00")
+        # Same uniform Hit shape (+ voice fields) as the GET path.
+        assert {"doc_id", "text", "start", "end", "alignments", "turn_score"} <= hits[0].keys()
+
+    def test_long_upload_embeds_first_30s_only(self, client_built) -> None:
+        client, _ = client_built
+        fake = self._inject(client, VX)
+        assert _upload(client, _wav_bytes(31.0)).status_code == 200
+        (waveforms,) = fake.calls  # one embed_batch call …
+        (wav,) = waveforms  # … with the capped snippet as a single "turn"
+        assert wav.shape[0] == 30 * 16_000
+
+    def test_too_short_snippet_is_400(self, client_built) -> None:
+        client, _ = client_built
+        self._inject(client, VX)
+        r = _upload(client, _wav_bytes(0.2))
+        assert r.status_code == 400
+        assert "too short" in r.json()["detail"]
+
+    def test_undecodable_upload_is_400(self, client_built) -> None:
+        client, _ = client_built
+        self._inject(client, VX)
+        r = _upload(client, b"\x00\x01definitely-not-audio" * 16)
+        assert r.status_code == 400
+        assert "decode" in r.json()["detail"]
+
+    def test_oversize_upload_is_400(self, client_built, monkeypatch) -> None:
+        client, _ = client_built
+        self._inject(client, VX)
+        # Shrink the cap instead of allocating 25 MB: the service reads the
+        # module global at call time, so the real length check is exercised.
+        monkeypatch.setattr(voice_service, "_MAX_UPLOAD_BYTES", 1024)
+        r = _upload(client, _wav_bytes(1.0))  # ~32 KB > 1 KiB cap
+        assert r.status_code == 400
+        assert "too large" in r.json()["detail"]
+
+    @pytest.mark.parametrize("bad", ["zeros", "nan"])
+    def test_degenerate_embedding_is_400(self, client_built, bad: str) -> None:
+        # Silence-shaped failures: a zero raw embedding survives l2_normalize
+        # as zeros (norm floor), NaN survives as NaN — both must 400, not feed
+        # the kNN an undefined cosine query.
+        client, _ = client_built
+        fill = 0.0 if bad == "zeros" else np.nan
+        self._inject(client, np.full(VOICE_EMBED_DIM, fill, dtype=np.float32))
+        r = _upload(client, _wav_bytes(1.0))
+        assert r.status_code == 400
+        assert "voiceprint" in r.json()["detail"]
+
+    def test_n_limits_and_clamps(self, client_built) -> None:
+        client, _ = client_built
+        self._inject(client, VX)
+        assert len(_upload(client, _wav_bytes(1.0), n=2).json()["hits"]) == 2
+        # Oversized n is clamped (never a 422) by the same shared
+        # rank_similar_turns the GET's test_n_is_capped_at_100 pins at 100.
+        r = _upload(client, _wav_bytes(1.0), n=500)
+        assert r.status_code == 200
+        assert len(r.json()["hits"]) == 4  # every planted turn, not an error
+
+    def test_unbuilt_tables_is_503(self, client_unbuilt) -> None:
+        self._inject(client_unbuilt, VX)
+        assert _upload(client_unbuilt, _wav_bytes(1.0)).status_code == 503

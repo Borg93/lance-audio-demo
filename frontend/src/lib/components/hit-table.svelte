@@ -1,6 +1,6 @@
 <script lang="ts" module>
   import type { Hit } from '$lib/api';
-  import { relevanceOf } from '$lib/api';
+  import { relevanceOf, isVoiceHit } from '$lib/api';
   import { fmtTime } from '$lib/utils';
 
   /** A table column. `render` gives the displayed string. Set `numeric` for
@@ -39,6 +39,14 @@
     { key: 'bildid', label: 'Bild ID', render: (h) => h.bildid ?? '' },
     { key: 'extraid', label: 'Internal ID', render: (h) => h.extraid ?? '' },
     { key: 'language', label: 'Lang', render: (h) => h.language ?? '' },
+    {
+      // Voice-search results only (blank for text hits): the matched diarized
+      // turn — per-video speaker label plus the turn's time span.
+      key: 'speaker',
+      label: 'Speaker',
+      render: (h) =>
+        isVoiceHit(h) ? `${h.speaker_label} · ${fmtTime(h.turn_start)}–${fmtTime(h.turn_end)}` : '',
+    },
     {
       key: 'speech_id',
       label: 'Speech',

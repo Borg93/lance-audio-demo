@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import {
     type Hit,
     type DocTranscriptChunk,
@@ -7,6 +9,7 @@
     getDiarization,
     mediaUrl,
   } from '$lib/api';
+  import { voiceSearch } from '$lib/voice-search.svelte';
   import { fmtTime } from '$lib/utils';
   import { ChevronRight, Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptWindow from './transcript-window.svelte';
@@ -91,6 +94,36 @@
       cancelled = true;
     };
   });
+
+  // Gate for the timeline's "Find this voice" buttons: the shared voiceSearch
+  // status probe (idempotent, never throws — `built` stays false on failure so
+  // the affordance simply never shows). onMount, not init, so a prerender
+  // never fetches.
+  onMount(() => {
+    voiceSearch.probe();
+  });
+
+  // "Find this voice" → queue the request on the shared voiceSearch store,
+  // then navigate to the Search page, which consumes `pending` in an $effect.
+  // A store + goto('/') — NOT a `/?voice_*` URL — because when this pane is
+  // already hosted on "/" a same-route goto() does not remount the page, and
+  // +page.svelte reads those params in onMount only; the store path works from
+  // every PlayerPane host (search, tree panel, atlas overlay, workflow
+  // inspector). External `/?voice_doc=…` deep-links still work on fresh loads.
+  const findVoice = (pick: { speaker: string } | { turnId: number }) => {
+    const h = hit;
+    if (!h) return;
+    // Chip label: the video filename stem (mirrors hit-card). Synthetic
+    // deep-link hits carry audio_path '' → omit so the chip shows doc_id.
+    const stem = h.audio_path.replace(/\.[^.]+$/, '');
+    voiceSearch.request(
+      'speaker' in pick
+        ? { docId: h.doc_id, speaker: pick.speaker }
+        : { docId: h.doc_id, turnId: pick.turnId },
+      stem || undefined,
+    );
+    void goto('/');
+  };
 
   // Which chunk the playhead is in. Reactive on currentTime + docChunks + hit.
   // 1) time-based: the chunk whose [start,end) contains currentTime.
@@ -390,6 +423,8 @@
                   {chunkStart}
                   {chunkEnd}
                   onSeek={seekTo}
+                  voiceEnabled={voiceSearch.built}
+                  onFindVoice={findVoice}
                 />
               </div>
               <div class="min-h-0 flex-1 overflow-y-auto border-t border-border/70 text-sm leading-7">

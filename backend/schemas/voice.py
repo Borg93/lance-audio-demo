@@ -27,10 +27,16 @@ class VoiceAnchor(BaseModel):
     stable only within ``doc_id``. The turn fields are ``None`` for the
     per-speaker-centroid anchor form (``doc_id`` + ``speaker``), which ranks
     against the speaker's duration-weighted mean voiceprint, not one turn.
+
+    For the upload form (``POST /similar``) **every** field is ``None`` — the
+    anchor was the uploaded snippet itself, not a Lance row. One nullable model
+    for both routes (rather than an upload-query variant) keeps the response
+    schema single-shaped for the frontend; the GET always sets ``doc_id`` +
+    ``speaker_label``.
     """
 
-    doc_id: str
-    speaker_label: str
+    doc_id: str | None = None
+    speaker_label: str | None = None
     turn_id: int | None = None
     turn_start: float | None = None
     turn_end: float | None = None

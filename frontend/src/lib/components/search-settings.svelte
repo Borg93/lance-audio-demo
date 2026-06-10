@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Popover } from 'bits-ui';
   import { Settings2 } from 'lucide-svelte';
+  import { voiceSearch } from '$lib/voice-search.svelte';
   import {
     Field,
     Select,
@@ -160,6 +161,24 @@
         <Field label="Keyword match style" class="border-t border-border pt-3">
           <RadioGroup bind:value={style} options={matchOptions} />
         </Field>
+      {/if}
+
+      {#if voiceSearch.built}
+        <!-- Voice search ("Find this voice") is query-by-example, not a text
+             mode — its only knob lives here. Bound straight to the shared
+             store; the search page re-runs an active voice query on change. -->
+        <div class="flex flex-col gap-1 border-t border-border pt-3">
+          <Field label="Voice: include same video" inline>
+            <Switch
+              bind:checked={voiceSearch.includeSameDoc}
+              aria-label="Voice results: include the anchor's own video"
+            />
+          </Field>
+          <span class="text-[11px] text-muted-foreground">
+            "Find this voice" normally hides matches from the anchor's own video. Applies
+            immediately to an active voice search.
+          </span>
+        </div>
       {/if}
     </Popover.Content>
   </Popover.Portal>

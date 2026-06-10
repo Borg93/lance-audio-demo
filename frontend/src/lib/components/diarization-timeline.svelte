@@ -1,6 +1,12 @@
 <script lang="ts">
   import type { DiarTurn } from '$lib/api';
   import { fmtTime } from '$lib/utils';
+  import { AudioLines } from 'lucide-svelte';
+
+  /** "Find this voice" pick: a whole lane (per-video speaker centroid) or one
+   *  diarized turn (right-click on a segment). The host owns doc_id and turns
+   *  this into a `VoiceAnchor` — the timeline never navigates itself. */
+  type VoicePick = { speaker: string } | { turnId: number };
 
   type Props = {
     turns: DiarTurn[];
@@ -10,8 +16,22 @@
     chunkStart?: number;
     chunkEnd?: number;
     onSeek: (t: number) => void;
+    /** Gates the voice affordances on GET /api/voice/status `built`. */
+    voiceEnabled?: boolean;
+    onFindVoice?: (pick: VoicePick) => void;
   };
-  let { turns, currentTime, duration, chunkStart, chunkEnd, onSeek }: Props = $props();
+  let {
+    turns,
+    currentTime,
+    duration,
+    chunkStart,
+    chunkEnd,
+    onSeek,
+    voiceEnabled = false,
+    onFindVoice,
+  }: Props = $props();
+
+  const showVoice = $derived(voiceEnabled && onFindVoice !== undefined);
 
   // Zoom: 'chunk' = just the playing chunk (compact — a chunk has 1–3 speakers);
   // 'video' = the whole recording (every speaker).
@@ -107,11 +127,28 @@
       {@const c = colorOf(speaker)}
       {@const isActiveLane = speaker === activeSpeaker}
       <div class="flex items-center gap-2">
-        <div class="flex w-20 shrink-0 items-center gap-1 text-[10px] font-medium">
+        <!-- w-24 only when the voice button renders, so lanes keep their exact
+             old width (and bar alignment) until the voice tables are built. -->
+        <div
+          class="flex {showVoice
+            ? 'w-24'
+            : 'w-20'} shrink-0 items-center gap-1 text-[10px] font-medium"
+        >
           <span class="size-1.5 shrink-0 rounded-sm {c}"></span>
           <span class="truncate {isActiveLane ? 'text-foreground' : 'text-muted-foreground'}">
             {speaker}
           </span>
+          {#if showVoice}
+            <button
+              type="button"
+              title="Find this voice in other videos"
+              aria-label={`Find ${speaker}'s voice in other videos`}
+              onclick={() => onFindVoice?.({ speaker })}
+              class="ml-auto shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            >
+              <AudioLines class="size-3" />
+            </button>
+          {/if}
         </div>
         <div
           class="relative h-3 w-full overflow-x-hidden rounded-sm bg-secondary/40 {isActiveLane
@@ -126,11 +163,20 @@
               {@const isCurrent = currentTime >= t.start && currentTime < t.end}
               <button
                 type="button"
-                title={`${speaker} · ${fmtTime(t.start)} → ${fmtTime(t.end)}`}
+                title={`${speaker} · ${fmtTime(t.start)} → ${fmtTime(t.end)}` +
+                  (showVoice ? ' · right-click: find this voice' : '')}
                 aria-label={`${speaker} from ${fmtTime(t.start)} to ${fmtTime(t.end)}`}
                 onclick={(e) => {
                   e.stopPropagation();
                   onSeek(t.start);
+                }}
+                oncontextmenu={(e) => {
+                  // Secondary action: anchor on THIS turn's voiceprint instead
+                  // of the speaker centroid. No-op (native menu) until built.
+                  if (!showVoice) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onFindVoice?.({ turnId: t.turn_id });
                 }}
                 class="absolute top-0 h-full cursor-pointer rounded-sm transition-colors hover:brightness-110 {c} {isCurrent
                   ? 'ring-1 ring-primary'

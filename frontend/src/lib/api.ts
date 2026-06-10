@@ -907,3 +907,130 @@ export async function getGraphSubgraph(
   }
   return asJson(await fetcher(`/api/graph/subgraph?${params}`), GraphSubgraphResponseSchema);
 }
+
+// ── Voice search ("Find this voice") ──────────────────────────────────────
+// `raudio embed-speaker-turns` writes one WeSpeaker voiceprint per diarized
+// turn into `speaker_embeddings.lance`; `build-speakers` adds a duration-
+// weighted centroid per (doc_id, speaker). `/api/voice/similar` is query-by-
+// example navigation — "click a person, see everywhere they speak". It is NOT
+// a text search mode (you can't type a voice), so it lives beside `search`,
+// never inside the mode dropdown; its hits render as ordinary result cards.
+
+const VoiceStatusSchema = z.object({
+  built: z.boolean(),
+  turns: z.number().int(),
+  speakers: z.number().int(),
+});
+export type VoiceStatus = z.infer<typeof VoiceStatusSchema>;
+
+/** Whether the voice tables are built — gates the voice UI affordances
+ *  (`built: false` with zero counts until `embed-speaker-turns` has run). */
+export async function getVoiceStatus(fetcher: typeof fetch = fetch): Promise<VoiceStatus> {
+  return asJson(await fetcher('/api/voice/status'), VoiceStatusSchema);
+}
+
+/** A voice-ranked hit: the max-overlap `chunks` row for a matched speaker turn
+ *  (the uniform Hit shape — renders as a normal result card) plus the turn it
+ *  matched on. `_distance` is raw cosine distance; `turn_score = 1 − distance`
+ *  (higher = better). `speaker_label` is pyannote's per-video local label
+ *  (`SPEAKER_00` …) — stable only within `doc_id`, never a global identity. */
+export const VoiceHitSchema = HitSchema.extend({
+  speaker_label: z.string(),
+  turn_id: z.number().int(),
+  turn_start: z.number(),
+  turn_end: z.number(),
+  _distance: z.number(),
+  turn_score: z.number(),
+});
+export type VoiceHit = z.infer<typeof VoiceHitSchema>;
+
+// Mirrors backend VoiceAnchor (`backend/schemas/voice.py`): every field is
+// nullable because the upload-anchor form ranks against the uploaded snippet
+// itself, not a Lance row. The GET form always sets doc_id + speaker_label;
+// the turn fields stay null for the speaker-centroid anchor (no single turn).
+const VoiceQueryInfoSchema = z.object({
+  doc_id: z.string().nullable(),
+  speaker_label: z.string().nullable(),
+  turn_id: z.number().int().nullable(),
+  turn_start: z.number().nullable(),
+  turn_end: z.number().nullable(),
+});
+export type VoiceQueryInfo = z.infer<typeof VoiceQueryInfoSchema>;
+
+export const VoiceSimilarResponseSchema = z.object({
+  query: VoiceQueryInfoSchema,
+  hits: z.array(VoiceHitSchema),
+});
+export type VoiceSimilarResponse = z.infer<typeof VoiceSimilarResponseSchema>;
+
+/** Query-by-example anchor: a document plus exactly one locator —
+ *    `turnId`   one diarized turn's voiceprint (from `DiarTurn.turn_id`)
+ *    `speaker`  that video's per-speaker centroid (e.g. `"SPEAKER_00"`)
+ *    `t`        seconds on the video clock; the backend resolves whoever is
+ *               speaking at that instant ("find this voice" at the playhead). */
+export type VoiceAnchor = { docId: string } & (
+  | { turnId: number }
+  | { speaker: string }
+  | { t: number }
+);
+
+/** Speaker turns ranked by voice similarity to the anchor, cross-video by
+ *  default (`excludeSameDoc` defaults true server-side; pass `false` to also
+ *  surface the anchor's own video). Failures arrive as `ApiError`: 400
+ *  bad/missing anchor, 404 unknown anchor, 503 voice tables not built. */
+export async function voiceSimilar(
+  anchor: VoiceAnchor,
+  opts: { n?: number | undefined; excludeSameDoc?: boolean | undefined } = {},
+  fetcher: typeof fetch = fetch,
+): Promise<VoiceSimilarResponse> {
+  const params = new URLSearchParams({ doc_id: anchor.docId });
+  if ('turnId' in anchor) params.set('turn_id', String(anchor.turnId));
+  else if ('speaker' in anchor) params.set('speaker', anchor.speaker);
+  else params.set('t', String(anchor.t));
+  if (opts.n !== undefined) params.set('n', String(opts.n));
+  if (opts.excludeSameDoc !== undefined)
+    params.set('exclude_same_doc', String(opts.excludeSameDoc));
+  return asJson(await fetcher(`/api/voice/similar?${params}`), VoiceSimilarResponseSchema);
+}
+
+/** Query-by-uploaded-clip: rank every speaker turn against a short audio (or
+ *  video) snippet POSTed as multipart (mirrors the image-upload branch of
+ *  `search`). `n` MUST ride the query string — the backend reads it as a query
+ *  param and ignores a form field. The response's `query` object is all-null
+ *  by design (the anchor is the clip itself, not a Lance row), and
+ *  `exclude_same_doc` does not apply (an upload belongs to no doc). Failures
+ *  arrive as `ApiError`: 400 oversize/undecodable/too-short clip, 503 voice
+ *  tables not built. */
+export async function voiceSimilarUpload(
+  file: File,
+  opts: { n?: number | undefined } = {},
+  fetcher: typeof fetch = fetch,
+): Promise<VoiceSimilarResponse> {
+  const params = new URLSearchParams();
+  if (opts.n !== undefined) params.set('n', String(opts.n));
+  const fd = new FormData();
+  fd.append('file', file);
+  const url = params.size > 0 ? `/api/voice/similar?${params}` : '/api/voice/similar';
+  const r = await fetcher(url, { method: 'POST', body: fd });
+  return asJson(r, VoiceSimilarResponseSchema);
+}
+
+/** Confidence band for a hit's `turn_score`. Thresholds calibrated on the
+ *  human-labeled eval (n=1 query — UI copy should say "calibrating"):
+ *  ≥ 0.7 → 'strong' ("Strong match"), ≥ 0.6 → 'possible' ("Possible"),
+ *  below → `null` (show the raw score only, no band label). */
+export type VoiceBand = 'strong' | 'possible';
+
+export function voiceBandOf(turnScore: number): VoiceBand | null {
+  if (turnScore >= 0.7) return 'strong';
+  if (turnScore >= 0.6) return 'possible';
+  return null;
+}
+
+/** Narrow a `Hit` to a `VoiceHit` so the shared result components (hit-card,
+ *  the results table) render the speaker chip + confidence badge only for
+ *  voice-mode hits. Structural check only — voice hits were already validated
+ *  by `VoiceSimilarResponseSchema` at the fetch boundary. */
+export function isVoiceHit(hit: Hit): hit is VoiceHit {
+  return 'turn_score' in hit && 'speaker_label' in hit;
+}

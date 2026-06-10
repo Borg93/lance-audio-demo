@@ -10,6 +10,7 @@ FTS-only deployment never connects to a GPU server.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,12 @@ class AppState(BaseModel):
     settings: Settings = Field(default_factory=get_settings)
     embedder: Any | None = None  # raudio.vllm.embedding.VLLMEmbeddingClient
     reranker: Any | None = None  # raudio.vllm.reranker.VLLMReranker
+    # Lazy in-process voice encoder for the upload voice search (CPU by design;
+    # the GPUs belong to the vLLM servers). None until the first upload; the
+    # lock guards first-load — sync handlers run in a threadpool, so two
+    # concurrent first uploads would otherwise both construct the model.
+    voice_encoder: Any | None = None  # raudio.media.voiceprint.VoiceEncoder
+    voice_encoder_lock: Any = Field(default_factory=threading.Lock)
     # One HTTP connection pool per process (health pings) — never per-request.
     http: Any | None = None  # httpx.Client
     # Memoized /points payloads keyed on (space, dataset version) — per-app, not
