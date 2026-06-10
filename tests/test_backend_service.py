@@ -13,6 +13,7 @@ from typing import Never, cast
 
 import lancedb
 import pytest
+from backend.search.postprocess import _rrf_fuse
 from backend.search.service import (
     _frame_search,
     _postprocess_hits,
@@ -123,6 +124,23 @@ class TestSceneSearch:
         assert hits
         assert {"doc_id", "text", "caption"} <= hits[0].keys()
 
+    def test_scene_hit_carries_the_frame_distance(self, captioned) -> None:
+        # Regression: scene hits used to arrive scoreless — the frame→chunk join
+        # dropped the ranking signal, so the results table had nothing to sort on.
+        # The best frame's cosine `_distance` must ride onto the joined chunk row.
+        chunks, frames = captioned
+        spec = SearchSpec(q="anything", mode=SearchMode.SCENE)
+        hits = run_search(chunks, frames, _embedder, _no_reranker, spec, image_bytes=None)
+        assert hits and "_distance" in hits[0]
+
+    def test_scene_fts_hit_carries_the_bm25_score(self, captioned) -> None:
+        # Same regression on the keyword side: the caption BM25 `_score` must
+        # survive the join back to chunks.
+        chunks, frames = captioned
+        spec = SearchSpec(q="caption", mode=SearchMode.SCENE_FTS)
+        hits = run_search(chunks, frames, _no_embedder, _no_reranker, spec, image_bytes=None)
+        assert hits and "_score" in hits[0]
+
     def test_scene_without_frames_is_empty(self, chunks) -> None:
         # No chunk_frames table → scene degrades to [] like visual (not a 500).
         spec = SearchSpec(q="carbon", mode=SearchMode.SCENE)
@@ -170,3 +188,25 @@ class TestSearchHelpers:
     def test_postprocess_missing_json_becomes_empty_list(self) -> None:
         out = _postprocess_hits([{"text": "hi"}])
         assert out[0]["alignments"] == []
+
+
+class TestRrfFuse:
+    """Reciprocal-rank fusion for the multi-column (text+frame) hybrid path."""
+
+    def test_doc_in_both_rankings_outranks_doc_in_one(self) -> None:
+        a = {"doc_id": "A", "chunk_id": 0}
+        b = {"doc_id": "B", "chunk_id": 0}
+        c = {"doc_id": "C", "chunk_id": 0}
+        # A is top of both lists → its reciprocal ranks sum → it must win.
+        fused = _rrf_fuse([[a, b], [a, c]])
+        assert fused[0]["doc_id"] == "A"
+
+    def test_dedups_by_key_keeping_first_occurrence(self) -> None:
+        first = {"doc_id": "A", "chunk_id": 0, "tag": "first"}
+        second = {"doc_id": "A", "chunk_id": 0, "tag": "second"}
+        fused = _rrf_fuse([[first], [second]])
+        assert len(fused) == 1
+        assert fused[0]["tag"] == "first"  # the highest-ranked occurrence is canonical
+
+    def test_empty_rankings_is_empty(self) -> None:
+        assert _rrf_fuse([]) == []
