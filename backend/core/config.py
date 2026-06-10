@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535, alias="RAUDIO_PORT")
     db_path: Path = Field(default=Path("transcripts_v2.lance"), alias="RAUDIO_DB")
     cors_origins: list[str] = Field(default_factory=lambda: ["*"], alias="RAUDIO_CORS_ORIGINS")
+    # Externally-reachable origin for media URLs in MCP clip apps (LAN IP,
+    # tunnel, reverse proxy). Unset = derive http://{host}:{port} locally.
+    media_base_url: str | None = Field(default=None, alias="RAUDIO_MEDIA_BASE_URL")
 
     @field_validator("cors_origins", mode="before")
     @classmethod

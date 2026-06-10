@@ -84,7 +84,8 @@ async def test_transcript_window_expands_a_hit(mcp: Any) -> None:
     window = result.data
     assert window["doc_id"] == hits[0]["doc_id"]
     assert window["segments"], "window around a hit must contain at least the hit itself"
-    assert hits[0]["text"][:40] in window["text"]
+    joined = " ".join(s["text"] for s in window["segments"])
+    assert hits[0]["text"][:40] in joined
 
 
 async def test_transcript_window_unknown_doc_is_a_tool_error(mcp: Any) -> None:
@@ -131,7 +132,6 @@ async def test_show_search_results_renders_app_with_llm_summary(mcp: Any) -> Non
 
 
 async def test_show_clip_returns_player_payload(mcp: Any) -> None:
-    import json
 
     from fastmcp import Client
 
@@ -151,10 +151,23 @@ async def test_show_clip_returns_player_payload(mcp: Any) -> None:
         result = await client.call_tool(
             "show_clip", {"doc_id": hits[0]["doc_id"], "start_s": hits[0]["start_s"]}
         )
-    clip = json.loads(result.content[0].text)  # type: ignore[union-attr]
+    # The viewer's payload rides in structuredContent; the model gets one line.
+    clip = result.structured_content
     assert clip["doc_id"] == hits[0]["doc_id"]
     assert clip["media_url"].endswith(f"/api/media/{hits[0]['doc_id']}")
     assert clip["segments"], "clip payload must carry transcript segments"
+    assert "Showing" in result.content[0].text  # type: ignore[union-attr]
+
+
+async def test_unknown_topic_is_a_loud_tool_error(mcp: Any) -> None:
+    from fastmcp import Client
+    from fastmcp.exceptions import ToolError
+
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match=r"unknown topic|topics not built"):
+            await client.call_tool(
+                "search_chunks", {"query": "skatt", "mode": "fts", "topic": "Arbetsmarknad"}
+            )
 
 
 async def test_knowledge_graph_query_or_clean_error(mcp: Any) -> None:

@@ -19,7 +19,6 @@ Both reuse the same service helpers as the data tools (``compact_search`` /
 
 from __future__ import annotations
 
-import json
 from typing import Any, Literal
 
 from fastmcp import FastMCP
@@ -39,14 +38,19 @@ _TABLE_TEXT_CHARS = 220
 
 
 def _fmt_time(seconds: float) -> str:
+    # Always h:mm:ss: the table's Start column sorts alphanumerically, and
+    # variable-width strings mis-order hour-scale vs minute-scale stamps.
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+    return f"{h}:{m:02d}:{s:02d}"
 
 
 def _media_base() -> str:
-    """This backend's origin, as the host's browser sandbox must reach it."""
+    """The origin the host's browser sandbox must reach to stream media —
+    overridable via RAUDIO_MEDIA_BASE_URL for non-loopback deployments."""
     settings = get_settings()
+    if settings.media_base_url:
+        return settings.media_base_url.rstrip("/")
     host = "127.0.0.1" if settings.host == "0.0.0.0" else settings.host
     return f"http://{host}:{settings.port}"
 
@@ -121,15 +125,15 @@ _CLIP_HTML = """\
   <h2 id="title"></h2>
   <div id="segs"></div>
   <script type="module">
-    import { App } from "https://unpkg.com/@modelcontextprotocol/ext-apps@0.4.0/app-with-deps";
+    import { App } from "https://unpkg.com/@modelcontextprotocol/ext-apps@1.0.1/app-with-deps";
 
     const app = new App({ name: "raudio clip", version: "1.0.0" });
     const fmt = (s) => { const m = Math.floor(s / 60); return m + ":" + String(Math.floor(s % 60)).padStart(2, "0"); };
 
-    app.ontoolresult = ({ content }) => {
-      const block = content?.find((c) => c.type === "text");
-      if (!block) return;
-      const clip = JSON.parse(block.text);
+    app.ontoolresult = ({ content, structuredContent }) => {
+      const block = content?.find((c) => c.type === "text" && c.text.startsWith("{"));
+      const clip = structuredContent ?? (block ? JSON.parse(block.text) : null);
+      if (!clip) return;
       const player = document.getElementById("player");
       player.src = clip.media_url;
       player.currentTime = clip.start_s;
@@ -223,4 +227,12 @@ def register_app_tools(mcp: FastMCP, state: AppState) -> None:
             "start_s": start_s,
             "segments": window["segments"],
         }
-        return ToolResult(content=json.dumps(clip, ensure_ascii=False))
+        # The viewer reads structuredContent; the model gets one cheap line
+        # instead of the raw player payload.
+        return ToolResult(
+            content=(
+                f"Showing {window['video'] or doc_id} at {_fmt_time(start_s)} — "
+                f"{len(window['segments'])} transcript segments beside the player."
+            ),
+            structured_content=clip,
+        )

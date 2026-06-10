@@ -57,6 +57,26 @@ def _sql_quote(value: str) -> str:
     return value.replace("'", "''")
 
 
+def _walk_topic_names(node: dict[str, Any], names: set[str]) -> None:
+    names.add(node["name"])
+    for child in node.get("children") or []:
+        _walk_topic_names(child, names)
+
+
+def _validate_topic(state: AppState, topic: str) -> None:
+    """Reject unknown topic names LOUDLY: topic labels are long LLM-generated
+    Swedish sentences matched with exact ``=``, so a paraphrase silently
+    returns [] — which an agent misreads as "the corpus has nothing on this".
+    """
+    resp = get_topics(state)
+    if not resp.built or resp.hierarchy is None:
+        raise ToolError("topic filter unavailable — topics not built (run `raudio feature topics`)")
+    names: set[str] = set()
+    _walk_topic_names(resp.hierarchy, names)
+    if topic not in names:
+        raise ToolError(f"unknown topic {topic!r} — call list_topics and copy an exact name")
+
+
 def compact_search(
     state: AppState,
     *,
@@ -69,6 +89,8 @@ def compact_search(
 ) -> list[dict[str, Any]]:
     """Run a search and compact the hits — shared by the data tool AND the
     Prefab results app, so the two can't drift on filters or hit shape."""
+    if topic:
+        _validate_topic(state, topic)
     try:
         spec = SearchSpec(
             q=query,
@@ -108,12 +130,13 @@ def transcript_window(
     if not rows:
         raise ToolError(f"no transcript in that window — unknown doc_id {doc_id!r}?")
     rows.sort(key=lambda r: r["start"])
+    # Segments only — a joined prose copy would double the payload (up to
+    # ±300 s of transcript) and the timing is what downstream chaining needs.
     return {
         "doc_id": doc_id,
         "video": rows[0].get("namn"),
         "window_s": [lo, hi],
         "segments": [{"start_s": r["start"], "end_s": r["end"], "text": r["text"]} for r in rows],
-        "text": " ".join(r["text"] for r in rows),
     }
 
 
@@ -131,7 +154,9 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
     ) -> list[dict[str, Any]]:
         """Search the transcript corpus (Swedish parliamentary/archive videos).
 
-        Use this FIRST for any content question. ``mode``: "fts" = exact
+        Use this FIRST for any content question — unless the user wants to
+        browse the results themselves, then call ``show_search_results``
+        INSTEAD (never both for one query). ``mode``: "fts" = exact
         keyword (BM25, best for names and quoted phrases), "semantic" = meaning
         (best for paraphrased questions), "hybrid" = both fused (good default).
         Each hit is a transcript chunk with its video id and time span — follow
@@ -158,8 +183,9 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
         """The transcript around one moment of one video — context expansion.
 
         Use after ``search_chunks`` or ``find_similar_voices``: pass the hit's
-        ``doc_id`` and its ``start_s`` as ``center_s`` to read what was said
-        around the match (±``window_s`` seconds, capped at ±300).
+        ``doc_id`` and its ``start_s`` (``turn_start_s`` for voice hits) as
+        ``center_s`` to read what was said around the match (±``window_s``
+        seconds, capped at ±300). Returns timed ``segments``.
         """
         return transcript_window(state, doc_id=doc_id, center_s=center_s, window_s=window_s)
 
