@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Topic treemap (Tree page) with two views + a noise toggle.
+   * Topic treemap (Tree page) with three views + a noise toggle.
    *
    * The LayerChart <Treemap> computes the rectangular layout from the topic
    * hierarchy (`getTopics().hierarchy`); we draw the cells as SVG:
@@ -9,29 +9,41 @@
    *     breadcrumb to zoom out. The focused, low-clutter view.
    *   • "Nested" — every level at once, children nested inside their parent
    *     (parent label in the top strip). See sub-structure without drilling.
+   *   • "Flow" — a Sankey of the same hierarchy (<TopicSankey>): ribbon width
+   *     = chunk count, every level as a column.
    *
-   * Clicking a leaf (or "Show results") hands the topic to Search via
-   * `/?topic=<name>`. The `(övrigt)` noise bucket (unclustered chunks) is hidden
-   * by default — toggle "Show noise" to bring it back (shown muted). Topic names
-   * are Swedish (the data); the chrome is English.
+   * Clicking a leaf (or "Show results") opens the topic's results via
+   * `onShowResults` — the Tree page shows them in a side panel. The `(övrigt)`
+   * noise bucket (unclustered chunks) is hidden by default — toggle "Show
+   * noise" to bring it back (shown muted). Topic names are Swedish (the data);
+   * the chrome is English.
    */
   import { Chart, Svg } from 'layerchart';
   import { Treemap } from 'layerchart/hierarchy';
   import { hierarchy as d3hierarchy, type HierarchyRectangularNode } from 'd3-hierarchy';
   import { scaleOrdinal } from 'd3-scale';
   import { schemeTableau10 } from 'd3-scale-chromatic';
-  import { goto } from '$app/navigation';
   import { ChevronRight, ArrowRight, Eye, EyeOff } from 'lucide-svelte';
   import type { TopicNode } from '$lib/api';
+  import TopicSankey from './topic-sankey.svelte';
 
   // `noiseLabel` is the unclustered-bucket name, sourced from /api/topics
   // (topic_tree.py:NOISE_LABEL) — never hardcoded here, so the two can't drift.
-  let { hierarchy, noiseLabel }: { hierarchy: TopicNode; noiseLabel: string } = $props();
+  let {
+    hierarchy,
+    noiseLabel,
+    onShowResults,
+  }: {
+    hierarchy: TopicNode;
+    noiseLabel: string;
+    /** Open a topic's results (the page decides where — side panel). */
+    onShowResults: (name: string) => void;
+  } = $props();
 
   const fmt = (n: number) => n.toLocaleString('sv-SE');
   const sumLeaves = (d: TopicNode) => (d.children?.length ? 0 : (d.value ?? 0));
 
-  let view = $state<'drill' | 'nested'>('drill');
+  let view = $state<'drill' | 'nested' | 'flow'>('drill');
   let showNoise = $state(false);
   let hovered = $state<string | null>(null);
 
@@ -102,7 +114,7 @@
   }
 
   function showResults(name: string) {
-    goto(`/?topic=${encodeURIComponent(name)}`);
+    onShowResults(name);
   }
 
   /** Zoom out to breadcrumb position `index` (0 = root). */
@@ -176,6 +188,17 @@
         >
           Nested
         </button>
+        <button
+          type="button"
+          class="rounded px-1.5 py-0.5 font-medium transition-colors hover:bg-secondary/70"
+          class:bg-secondary={view === 'flow'}
+          class:text-foreground={view === 'flow'}
+          class:text-muted-foreground={view !== 'flow'}
+          onclick={() => (view = 'flow')}
+          title="Sankey flow — ribbon width = chunk count"
+        >
+          Flow
+        </button>
       </div>
 
       {#if path.length > 1 && isInteractive(current)}
@@ -190,102 +213,106 @@
     </div>
   </div>
 
-  <!-- Treemap canvas -->
-  <div class="min-h-0 flex-1 p-2">
-    <Chart data={root}>
-      <Svg>
-        <Treemap hierarchy={root} {...pad}>
-          {#snippet children({ nodes }: { nodes: HierarchyRectangularNode<TopicNode>[] })}
-            {@const visible =
-              view === 'nested'
-                ? nodes.filter((n) => n.depth >= 1)
-                : nodes.filter((n) => n.depth === 1)}
-            {#each visible as node (node
-              .ancestors()
-              .map((a) => a.data.name)
-              .join('›'))}
-              {@const w = node.x1 - node.x0}
-              {@const h = node.y1 - node.y0}
-              {@const isBranch = !!node.data.children?.length}
-              {@const isNoise = node.data.name === noiseLabel}
-              {@const interactive = !isNoise}
-              {@const header = view === 'nested' && isBranch}
-              {@const label = fit(node.data.name, w)}
-              {@const hot = hovered === node.data.name}
-              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-              <g
-                role={interactive ? 'button' : undefined}
-                tabindex={interactive ? 0 : undefined}
-                class={interactive ? 'cursor-pointer' : 'cursor-not-allowed'}
-                onclick={() => onCell(node.data)}
-                onkeydown={(e) => {
-                  if (interactive && (e.key === 'Enter' || e.key === ' ')) {
-                    e.preventDefault();
-                    onCell(node.data);
-                  }
-                }}
-                onmouseenter={() => (hovered = node.data.name)}
-                onmouseleave={() => (hovered = null)}
-              >
-                <title
-                  >{node.data.name} — {fmt(node.value ?? 0)} chunks{isBranch
-                    ? ' (click to zoom in)'
-                    : interactive
-                      ? ' (click to show results)'
-                      : ' (unclustered)'}</title
+  <!-- Treemap / Sankey canvas -->
+  <div class="min-h-0 flex-1 p-2 {view === 'flow' ? 'px-6' : ''}">
+    {#if view === 'flow'}
+      <TopicSankey data={displayData} {noiseLabel} onSelect={showResults} />
+    {:else}
+      <Chart data={root}>
+        <Svg>
+          <Treemap hierarchy={root} {...pad}>
+            {#snippet children({ nodes }: { nodes: HierarchyRectangularNode<TopicNode>[] })}
+              {@const visible =
+                view === 'nested'
+                  ? nodes.filter((n) => n.depth >= 1)
+                  : nodes.filter((n) => n.depth === 1)}
+              {#each visible as node (node
+                .ancestors()
+                .map((a) => a.data.name)
+                .join('›'))}
+                {@const w = node.x1 - node.x0}
+                {@const h = node.y1 - node.y0}
+                {@const isBranch = !!node.data.children?.length}
+                {@const isNoise = node.data.name === noiseLabel}
+                {@const interactive = !isNoise}
+                {@const header = view === 'nested' && isBranch}
+                {@const label = fit(node.data.name, w)}
+                {@const hot = hovered === node.data.name}
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <g
+                  role={interactive ? 'button' : undefined}
+                  tabindex={interactive ? 0 : undefined}
+                  class={interactive ? 'cursor-pointer' : 'cursor-not-allowed'}
+                  onclick={() => onCell(node.data)}
+                  onkeydown={(e) => {
+                    if (interactive && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault();
+                      onCell(node.data);
+                    }
+                  }}
+                  onmouseenter={() => (hovered = node.data.name)}
+                  onmouseleave={() => (hovered = null)}
                 >
-                <rect
-                  x={node.x0}
-                  y={node.y0}
-                  width={w}
-                  height={h}
-                  rx={view === 'nested' ? 4 : 3}
-                  fill={nodeFill(node)}
-                  fill-opacity={isNoise ? 0.3 : header ? 0.4 : 1}
-                  opacity={hot ? 1 : 0.92}
-                  stroke="var(--color-background)"
-                  stroke-width={hot ? 2 : 1}
-                />
-                {#if label && w > 44}
-                  {#if header}
-                    {#if h > 16}
+                  <title
+                    >{node.data.name} — {fmt(node.value ?? 0)} chunks{isBranch
+                      ? ' (click to zoom in)'
+                      : interactive
+                        ? ' (click to show results)'
+                        : ' (unclustered)'}</title
+                  >
+                  <rect
+                    x={node.x0}
+                    y={node.y0}
+                    width={w}
+                    height={h}
+                    rx={view === 'nested' ? 4 : 3}
+                    fill={nodeFill(node)}
+                    fill-opacity={isNoise ? 0.3 : header ? 0.4 : 1}
+                    opacity={hot ? 1 : 0.92}
+                    stroke="var(--color-background)"
+                    stroke-width={hot ? 2 : 1}
+                  />
+                  {#if label && w > 44}
+                    {#if header}
+                      {#if h > 16}
+                        <text
+                          x={node.x0 + 6}
+                          y={node.y0 + 12}
+                          class="pointer-events-none fill-white text-[11px] font-semibold"
+                          style="paint-order: stroke; stroke: rgba(0,0,0,0.4); stroke-width: 2.5px;"
+                        >
+                          {label}
+                        </text>
+                      {/if}
+                    {:else if h > 22}
                       <text
-                        x={node.x0 + 6}
-                        y={node.y0 + 12}
-                        class="pointer-events-none fill-white text-[11px] font-semibold"
-                        style="paint-order: stroke; stroke: rgba(0,0,0,0.4); stroke-width: 2.5px;"
+                        x={node.x0 + 7}
+                        y={node.y0 + (view === 'nested' ? 13 : 17)}
+                        class="pointer-events-none fill-white {view === 'nested'
+                          ? 'text-[11px]'
+                          : 'text-[12px]'} font-semibold"
+                        style="paint-order: stroke; stroke: rgba(0,0,0,0.35); stroke-width: 2.5px;"
                       >
                         {label}
                       </text>
-                    {/if}
-                  {:else if h > 22}
-                    <text
-                      x={node.x0 + 7}
-                      y={node.y0 + (view === 'nested' ? 13 : 17)}
-                      class="pointer-events-none fill-white {view === 'nested'
-                        ? 'text-[11px]'
-                        : 'text-[12px]'} font-semibold"
-                      style="paint-order: stroke; stroke: rgba(0,0,0,0.35); stroke-width: 2.5px;"
-                    >
-                      {label}
-                    </text>
-                    {#if h > (view === 'nested' ? 28 : 38)}
-                      <text
-                        x={node.x0 + 7}
-                        y={node.y0 + (view === 'nested' ? 26 : 33)}
-                        class="pointer-events-none fill-white/85 text-[10px] tabular-nums"
-                        style="paint-order: stroke; stroke: rgba(0,0,0,0.3); stroke-width: 2px;"
-                      >
-                        {fmt(node.value ?? 0)}
-                      </text>
+                      {#if h > (view === 'nested' ? 28 : 38)}
+                        <text
+                          x={node.x0 + 7}
+                          y={node.y0 + (view === 'nested' ? 26 : 33)}
+                          class="pointer-events-none fill-white/85 text-[10px] tabular-nums"
+                          style="paint-order: stroke; stroke: rgba(0,0,0,0.3); stroke-width: 2px;"
+                        >
+                          {fmt(node.value ?? 0)}
+                        </text>
+                      {/if}
                     {/if}
                   {/if}
-                {/if}
-              </g>
-            {/each}
-          {/snippet}
-        </Treemap>
-      </Svg>
-    </Chart>
+                </g>
+              {/each}
+            {/snippet}
+          </Treemap>
+        </Svg>
+      </Chart>
+    {/if}
   </div>
 </div>
