@@ -79,6 +79,22 @@ def parse_args() -> argparse.Namespace:
         "0 = LightRAG default (persist per doc).",
     )
     parser.add_argument(
+        "--num-shards",
+        type=int,
+        default=1,
+        help="run N independent builds on disjoint doc_id slices (separate --work "
+        "dirs); the adapter folds the per-shard graphs. Entity identity in kg_* "
+        "is name-based and mention counts are chunk-unions, so the folded output "
+        "is identical to a single run.",
+    )
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument(
+        "--extra-done",
+        default="",
+        help="JSON file with chunk keys already processed elsewhere (e.g. the "
+        "pre-shard run) — skipped on top of this work dir's own doc-status",
+    )
+    parser.add_argument(
         "--dummy-embeddings",
         action="store_true",
         help="replace the remote embedding model with instant 8-dim constants. "
@@ -245,9 +261,23 @@ async def main() -> None:
     # batches (rather than one 145k-doc call) keeps the enqueue/dedup pass small,
     # flushes progress regularly, and bounds the re-work after any interruption.
     done = already_done(work)
+    if ARGS.extra_done:
+        done |= set(json.loads(Path(ARGS.extra_done).read_text()))
     pending = [(f"{c['doc_id']}:{c['speech_id']}:{c['chunk_id']}", c["text"]) for c in chunks]
+    if ARGS.num_shards > 1:
+        import hashlib
+
+        def shard_of(key: str) -> int:
+            doc_id = key.split(":", 1)[0]
+            return int(hashlib.md5(doc_id.encode()).hexdigest(), 16) % ARGS.num_shards
+
+        pending = [(k, t) for k, t in pending if shard_of(k) == ARGS.shard_index]
     pending = [(k, t) for k, t in pending if k not in done]
-    print(f"resume: {len(done)} done/dup, {len(pending)} to process (batch={ARGS.batch})")
+    print(
+        f"resume: {len(done)} done/dup, {len(pending)} to process "
+        f"(shard {ARGS.shard_index}/{ARGS.num_shards}, batch={ARGS.batch})",
+        flush=True,
+    )
 
     for start in range(0, len(pending), ARGS.batch):
         batch = pending[start : start + ARGS.batch]

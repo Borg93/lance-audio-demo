@@ -48,20 +48,18 @@ def norm_type(t: str | None) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fold LightRAG output → kg_* Lance tables.")
-    parser.add_argument("--work", default="kg_work/rag")
+    parser.add_argument(
+        "--work",
+        nargs="+",
+        default=["kg_work/rag"],
+        help="one or more LightRAG work dirs — sharded builds fold into one graph "
+        "(entity identity is name-based, so the union equals a single-run graph)",
+    )
     parser.add_argument("--chunks", default="kg_work/chunks.jsonl")
     parser.add_argument("--db", default="transcripts_v2.lance")
     args = parser.parse_args()
 
-    work = Path(args.work)
     db = Path(args.db)
-
-    kv = json.loads((work / "kv_store_text_chunks.json").read_text())
-    md5_to_key: dict[str, str] = {}
-    for cid, rec in kv.items():
-        key = rec.get("file_path") or rec.get("full_doc_id") or ""
-        if key and key != "unknown_source":
-            md5_to_key[cid] = key.split(SEP)[0]
 
     chunk_meta = {
         f"{c['doc_id']}:{c['speech_id']}:{c['chunk_id']}": c
@@ -70,52 +68,73 @@ def main() -> None:
         )
     }
 
-    def keys_of(source_id: str | None) -> set[str]:
-        out: set[str] = set()
-        for tok in (source_id or "").split(SEP):
-            tok = tok.strip()
-            if not tok:
-                continue
-            out.add(md5_to_key.get(tok, tok if tok in chunk_meta else ""))
-        return {k for k in out if k in chunk_meta}
-
-    g = nx.read_graphml(work / "graph_chunk_entity_relation.graphml")
-
     ent_name: dict[str, str] = {}
     ent_type: dict[str, str] = {}
     ent_chunks: dict[str, set[str]] = defaultdict(set)
-    for node, data in g.nodes(data=True):
-        name = (data.get("entity_id") or node or "").strip()
-        if not name:
-            continue
-        eid = slug(name)
-        ent_name[eid] = name
-        ent_type[eid] = norm_type(data.get("entity_type"))
-        ent_chunks[eid] |= keys_of(data.get("source_id"))
-
     rels: list[dict] = []
-    for src, tgt, data in g.edges(data=True):
-        s, t = slug(str(src).strip()), slug(str(tgt).strip())
-        cks = keys_of(data.get("source_id")) or {next(iter(ent_chunks[s]), "")}
-        for ck in cks:
-            if not ck:
+    seen_rels: set[tuple[str, str, str]] = set()
+
+    for workdir in args.work:
+        work = Path(workdir)
+        if not (work / "graph_chunk_entity_relation.graphml").exists():
+            print(f"fold {work}: SKIPPED (no graphml)")
+            continue
+
+        kv = json.loads((work / "kv_store_text_chunks.json").read_text())
+        md5_to_key: dict[str, str] = {}
+        for cid, rec in kv.items():
+            key = rec.get("file_path") or rec.get("full_doc_id") or ""
+            if key and key != "unknown_source":
+                md5_to_key[cid] = key.split(SEP)[0]
+
+        def keys_of(source_id: str | None) -> set[str]:
+            out: set[str] = set()
+            for tok in (source_id or "").split(SEP):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                out.add(md5_to_key.get(tok, tok if tok in chunk_meta else ""))
+            return {k for k in out if k in chunk_meta}
+
+        g = nx.read_graphml(work / "graph_chunk_entity_relation.graphml")
+        print(f"fold {work}: {g.number_of_nodes()} nodes, {g.number_of_edges()} edges")
+
+        for node, data in g.nodes(data=True):
+            name = (data.get("entity_id") or node or "").strip()
+            if not name:
                 continue
-            ent_chunks[s].add(ck)
-            ent_chunks[t].add(ck)
-            rels.append(
-                {
-                    "source_entity_id": s,
-                    "target_entity_id": t,
-                    "relationship_type": "RELATIONSHIP",
-                    "description": (data.get("description") or data.get("keywords") or "")[:120],
-                    "chunk_id": ck,
-                    "doc_id": ck.split(":")[0],
-                }
-            )
-        ent_name.setdefault(s, str(src).strip())
-        ent_name.setdefault(t, str(tgt).strip())
-        ent_type.setdefault(s, "OTHER")
-        ent_type.setdefault(t, "OTHER")
+            eid = slug(name)
+            ent_name[eid] = name
+            new_type = norm_type(data.get("entity_type"))
+            if ent_type.get(eid) in (None, "OTHER"):  # prefer a concrete type across shards
+                ent_type[eid] = new_type
+            ent_chunks[eid] |= keys_of(data.get("source_id"))
+
+        for src, tgt, data in g.edges(data=True):
+            s, t = slug(str(src).strip()), slug(str(tgt).strip())
+            cks = keys_of(data.get("source_id")) or {next(iter(ent_chunks[s]), "")}
+            for ck in cks:
+                if not ck or (s, t, ck) in seen_rels:
+                    continue
+                seen_rels.add((s, t, ck))
+                ent_chunks[s].add(ck)
+                ent_chunks[t].add(ck)
+                rels.append(
+                    {
+                        "source_entity_id": s,
+                        "target_entity_id": t,
+                        "relationship_type": "RELATIONSHIP",
+                        "description": (data.get("description") or data.get("keywords") or "")[
+                            :120
+                        ],
+                        "chunk_id": ck,
+                        "doc_id": ck.split(":")[0],
+                    }
+                )
+            ent_name.setdefault(s, str(src).strip())
+            ent_name.setdefault(t, str(tgt).strip())
+            ent_type.setdefault(s, "OTHER")
+            ent_type.setdefault(t, "OTHER")
 
     eids = sorted(ent_name)
     print(f"graph: {len(eids)} entities, {len(rels)} relation-rows")
