@@ -1,9 +1,12 @@
 """Media + maintenance commands: ``thumbnail``, ``download``,
-``extract-chunk-frames``, and ``compact``."""
+``extract-chunk-frames``, the speaker pipeline (``extract-speaker-turns`` →
+``embed-speaker-turns`` → ``build-speakers`` plus their shard merges), and
+``compact``."""
 
 from __future__ import annotations
 
 import logging
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -11,9 +14,13 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 
 if TYPE_CHECKING:
-    from ..media.diarize import SpeakerTurn
+    import lancedb
+    import numpy as np
 
-from ._app import CliContext, _require_table, app
+    from ..media.diarize import SpeakerTurn
+    from ..media.voiceprint import TurnSpan
+
+from ._app import CliContext, _die, _require_table, app
 
 logger = logging.getLogger(__name__)
 
@@ -509,6 +516,431 @@ def cmd_merge_speaker_turns(
         for name in shard_names:
             db.drop_table(name)
         typer.echo(f"  dropped {len(shard_names)} staging table(s).", err=True)
+
+
+def _speaker_embeddings_indexes(emb_tbl: lancedb.table.Table) -> None:
+    """(Re)build the canonical ``speaker_embeddings`` indexes: BTREE doc_id + vector.
+
+    Shared by ``embed-speaker-turns`` (single-run) and ``merge-speaker-embeddings``.
+    """
+    from ..features.engine import ensure_vector_index
+
+    try:
+        emb_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)
+        logger.info("built BTREE scalar index on speaker_embeddings.doc_id")
+    except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
+        logger.debug("scalar index (speaker_embeddings.doc_id) skipped: %s", e)
+    # 256-d voice vectors → 16 sub-vectors (16 dims each); skips itself while
+    # the table is smaller than num_partitions (flat search is fine until then).
+    ensure_vector_index(emb_tbl, "embedding", num_partitions=256, num_sub_vectors=16)
+
+
+@app.command("embed-speaker-turns")
+def cmd_embed_speaker_turns(
+    ctx: typer.Context,
+    audio_root: Annotated[
+        Path,
+        typer.Option(
+            "--audio-root",
+            exists=True,
+            file_okay=False,
+            help="Root directory holding the source MP4s.",
+        ),
+    ] = Path("input/sv"),
+    model: Annotated[
+        str,
+        typer.Option("--model", help="HF model id whose 'embedding' subfolder is loaded."),
+    ] = "pyannote/speaker-diarization-community-1",
+    min_turn_duration: Annotated[
+        float,
+        typer.Option(
+            "--min-turn-duration",
+            help="Skip turns shorter than this (seconds); the encoder is unreliable below ~0.5 s.",
+        ),
+    ] = 0.5,
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", help="Turn waveforms per encoder forward pass."),
+    ] = 32,
+    device: Annotated[
+        str,
+        typer.Option("--device", help="torch device for the encoder: auto | cpu | cuda[:N]."),
+    ] = "auto",
+    ffmpeg_timeout: Annotated[
+        float,
+        typer.Option("--ffmpeg-timeout", help="Per-video wav-extraction timeout (s)."),
+    ] = 1800.0,
+    only_null: Annotated[
+        bool,
+        typer.Option(
+            "--only-null/--all",
+            help="Resumable: skip videos that already have embeddings (--all rebuilds clean).",
+        ),
+    ] = True,
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            help="Debug: embed only the first N videos (0 = no limit). DO use this.",
+        ),
+    ] = 0,
+    num_shards: Annotated[
+        int,
+        typer.Option(
+            "--num-shards",
+            help=(
+                "Split the corpus across N parallel workers (1 = no sharding). "
+                "Launch N processes, one per --shard-index, each writing a disjoint "
+                "slice to speaker_embeddings_shard{i}.lance; fold them back with "
+                "`raudio merge-speaker-embeddings`."
+            ),
+        ),
+    ] = 1,
+    shard_index: Annotated[
+        int,
+        typer.Option(
+            "--shard-index",
+            help="This worker's shard in [0, num-shards). Only used when --num-shards > 1.",
+        ),
+    ] = 0,
+) -> None:
+    """Embed each diarized turn's voice → ``speaker_embeddings.lance`` (NEW append-only table).
+
+    Reads the canonical ``speaker_turns`` table, resolves each video's source MP4
+    under ``--audio-root`` (via the ``chunks`` doc_id → audio_path mapping), decodes
+    it once to 16 kHz mono WAV, slices the turn spans, and batch-embeds them with
+    pyannote community-1's internal WeSpeaker-ResNet34 encoder (256-d, L2-normalized
+    before storing). One table append per video; resumable at video granularity via
+    ``--only-null``. Turns shorter than ``--min-turn-duration`` are skipped.
+    """
+    import lancedb
+    from tqdm import tqdm
+
+    from ..ingest.audio import resolve_source
+    from ..media.diarize import _extract_wav_16k_mono, existing_doc_ids, shard_of
+    from ..media.voiceprint import TurnSpan, VoiceEncoder, write_speaker_embeddings
+
+    cfg: CliContext = ctx.obj
+    db = lancedb.connect(str(cfg.db))
+    _require_table(db, cfg.table, cfg.db)
+    chunks_tbl = db.open_table(cfg.table)
+
+    if num_shards < 1:
+        raise typer.BadParameter("--num-shards must be >= 1")
+    sharded = num_shards > 1
+    if sharded and not 0 <= shard_index < num_shards:
+        raise typer.BadParameter(f"--shard-index must be in [0, {num_shards})")
+    if batch_size < 1:
+        raise typer.BadParameter("--batch-size must be >= 1")
+
+    existing_tables = db.list_tables().tables
+    if "speaker_turns" not in existing_tables:
+        _die(
+            f"Table 'speaker_turns' not found in {cfg.db} — run `raudio extract-speaker-turns` "
+            "first (and `raudio merge-speaker-turns` to fold its shards into the canonical "
+            "table; this command only reads the canonical speaker_turns)."
+        )
+
+    # Shards stage to their own table; `merge-speaker-embeddings` folds them into
+    # the canonical `speaker_embeddings` afterwards (separate tables avoid
+    # concurrent-write commit conflicts that N appenders to one table would hit).
+    table_name = f"speaker_embeddings_shard{shard_index}" if sharded else "speaker_embeddings"
+    emb_path = cfg.db / f"{table_name}.lance"
+    main_path = cfg.db / "speaker_embeddings.lance"
+    emb_exists = table_name in existing_tables
+
+    if emb_exists and not only_null:
+        typer.echo(f"  --all: dropping existing {table_name} for a clean rebuild.", err=True)
+        db.drop_table(table_name)
+        emb_exists = False
+
+    # Resume: skip videos this table already has and — in shard mode — anything
+    # already merged into the canonical table.
+    already: set[str] = set()
+    if only_null and emb_exists:
+        already |= existing_doc_ids(emb_path)
+    if sharded and "speaker_embeddings" in existing_tables:
+        already |= existing_doc_ids(main_path)
+    if already:
+        typer.echo(f"  {len(already):,} video(s) already embedded — skipping.", err=True)
+
+    # All turns, grouped per video (the whole table is ~10^5 tiny rows).
+    turns_tbl = db.open_table("speaker_turns")
+    turn_rows = (
+        turns_tbl.search()
+        .select(["doc_id", "turn_id", "speaker_label", "start", "end"])
+        .limit(turns_tbl.count_rows())
+        .to_list()
+    )
+    turns_by_doc: dict[str, list[TurnSpan]] = {}
+    for r in turn_rows:
+        turns_by_doc.setdefault(r["doc_id"], []).append(
+            TurnSpan(
+                turn_id=int(r["turn_id"]),
+                speaker_label=r["speaker_label"],
+                start=float(r["start"]),
+                end=float(r["end"]),
+            )
+        )
+
+    # doc_id → audio_path from chunks (same mapping extract-speaker-turns used).
+    chunk_rows = (
+        chunks_tbl.search()
+        .select(["doc_id", "audio_path"])
+        .limit(chunks_tbl.count_rows())
+        .to_list()
+    )
+    audio_path_of: dict[str, str] = {}
+    for r in chunk_rows:
+        audio_path_of.setdefault(r["doc_id"], r["audio_path"])
+
+    docs = [d for d in turns_by_doc if d not in already and d in audio_path_of]
+    if sharded:
+        docs = [d for d in docs if shard_of(d, num_shards) == shard_index]
+    docs.sort()
+    if limit > 0:
+        docs = docs[:limit]
+        typer.echo(f"  --limit {limit} → restricting to first {len(docs)} video(s).", err=True)
+    if not docs:
+        typer.echo("Nothing to embed.", err=True)
+        return
+
+    # Resolve sources up front so a missing MP4 doesn't waste a model load.
+    resolved: list[tuple[str, Path]] = []
+    missing = 0
+    for doc_id in docs:
+        src = resolve_source(audio_path_of[doc_id], audio_root)
+        if src is None:
+            missing += 1
+            continue
+        resolved.append((doc_id, src))
+    if missing:
+        typer.echo(
+            f"  warning: {missing} video(s) had no resolvable source MP4 — skipped.", err=True
+        )
+    if not resolved:
+        typer.echo("Nothing embeddable.", err=True)
+        return
+
+    shard_tag = f" [shard {shard_index}/{num_shards}]" if sharded else ""
+    typer.echo(
+        f"Embedding turns for {len(resolved)} video(s) from {audio_root}{shard_tag} "
+        f"(model={model}, min_turn_duration={min_turn_duration}s).",
+        err=True,
+    )
+    encoder = VoiceEncoder(model=model, device=device)
+
+    def _per_video() -> Iterator[tuple[str, list[TurnSpan], np.ndarray]]:
+        for doc_id, src in tqdm(resolved, unit="video", smoothing=0.05):
+            try:
+                with tempfile.TemporaryDirectory(prefix="raudio-voice-") as tmp:
+                    wav = Path(tmp) / "audio_16k_mono.wav"
+                    _extract_wav_16k_mono(src, wav, timeout=ffmpeg_timeout)
+                    kept, embeddings = encoder.embed_turns(
+                        wav,
+                        turns_by_doc[doc_id],
+                        batch_size=batch_size,
+                        min_duration=min_turn_duration,
+                    )
+            except Exception as e:  # noqa: BLE001 — one bad video must not kill the batch
+                logger.warning("voice embedding failed: %s (%s) — %s", doc_id, src, e)
+                continue
+            yield doc_id, kept, embeddings
+
+    n_embeddings = write_speaker_embeddings(emb_path, _per_video(), create=not emb_exists)
+    typer.echo(
+        f"  wrote {n_embeddings} embedding(s) across {len(resolved)} video(s).", err=True
+    )
+
+    # Indexes on the canonical table only — shards defer to
+    # `merge-speaker-embeddings`, which rebuilds them after the fold.
+    if not sharded and emb_path.exists():
+        emb_tbl = db.open_table(table_name)
+        if emb_tbl.count_rows() > 0:
+            _speaker_embeddings_indexes(emb_tbl)
+
+
+@app.command("merge-speaker-embeddings")
+def cmd_merge_speaker_embeddings(
+    ctx: typer.Context,
+    drop_shards: Annotated[
+        bool,
+        typer.Option(
+            "--drop-shards/--keep-shards",
+            help="Delete the speaker_embeddings_shard* staging tables after a successful merge.",
+        ),
+    ] = True,
+) -> None:
+    """Fold ``speaker_embeddings_shard*.lance`` staging tables into ``speaker_embeddings.lance``.
+
+    The sharded ``embed-speaker-turns`` workers each write a disjoint slice to
+    their own staging table; this concatenates them (plus any existing canonical
+    rows, which win on a ``doc_id`` collision so re-running is safe), overwrites
+    ``speaker_embeddings``, rebuilds the ``doc_id`` BTREE + vector indexes, and
+    drops the staging tables. Mirrors ``merge-speaker-turns`` (see its NOTE on
+    the fragment-commit alternative if this table ever gets large).
+    """
+    import lance
+    import lancedb
+    import pyarrow as pa
+
+    from ..model.schema import SPEAKER_EMBEDDINGS_SCHEMA, SPEAKER_EMBEDDINGS_STORAGE_VERSION
+
+    cfg: CliContext = ctx.obj
+    db = lancedb.connect(str(cfg.db))
+    existing_tables = db.list_tables().tables
+    shard_names = sorted(t for t in existing_tables if t.startswith("speaker_embeddings_shard"))
+    if not shard_names:
+        typer.echo(
+            "No speaker_embeddings_shard* staging tables found — nothing to merge.", err=True
+        )
+        return
+
+    main_path = cfg.db / "speaker_embeddings.lance"
+    # Canonical rows first so an already-merged doc_id wins over a shard's copy.
+    sources = (
+        ["speaker_embeddings"] if "speaker_embeddings" in existing_tables else []
+    ) + shard_names
+
+    seen: set[str] = set()
+    parts: list[pa.Table] = []
+    for name in sources:
+        ds = lance.dataset(str(cfg.db / f"{name}.lance"))
+        if ds.count_rows() == 0:
+            continue
+        tbl = ds.to_table().cast(SPEAKER_EMBEDDINGS_SCHEMA)
+        doc_col = tbl["doc_id"].to_pylist()
+        keep = pa.array([d not in seen for d in doc_col], pa.bool_())
+        parts.append(tbl.filter(keep))
+        seen.update(doc_col)
+
+    if not parts:
+        typer.echo("All source tables were empty — nothing to merge.", err=True)
+        return
+
+    merged = pa.concat_tables(parts)
+    lance.write_dataset(
+        merged,
+        str(main_path),
+        mode="overwrite",
+        data_storage_version=SPEAKER_EMBEDDINGS_STORAGE_VERSION,
+    )
+    typer.echo(
+        f"  merged → speaker_embeddings.lance: {len(seen):,} video(s), "
+        f"{merged.num_rows:,} embedding(s).",
+        err=True,
+    )
+
+    emb_tbl = db.open_table("speaker_embeddings")
+    if emb_tbl.count_rows() > 0:
+        _speaker_embeddings_indexes(emb_tbl)
+
+    if drop_shards:
+        for name in shard_names:
+            db.drop_table(name)
+        typer.echo(f"  dropped {len(shard_names)} staging table(s).", err=True)
+
+
+@app.command("build-speakers")
+def cmd_build_speakers(ctx: typer.Context) -> None:
+    """Aggregate per-turn voice embeddings → ``speakers.lance`` (overwrite).
+
+    Groups the canonical ``speaker_embeddings`` by ``(doc_id, speaker_label)`` and
+    writes one row per local speaker: turn count, total speech duration, and the
+    duration-weighted mean of the turn embeddings re-L2-normalized (the per-speaker
+    voiceprint the backend's ``speaker`` anchor reads). ``speaker_cluster`` starts
+    at -1 for the later global-clustering pass; ``speaker_name`` starts NULL. The
+    table is tiny, so each run rebuilds it wholesale.
+    """
+    import lance
+    import lancedb
+    import numpy as np
+    import pyarrow as pa
+
+    from ..media.voiceprint import duration_weighted_centroid
+    from ..model.schema import SPEAKERS_SCHEMA, SPEAKERS_STORAGE_VERSION, VOICE_EMBED_DIM
+
+    cfg: CliContext = ctx.obj
+    db = lancedb.connect(str(cfg.db))
+    if "speaker_embeddings" not in db.list_tables().tables:
+        _die(
+            f"Table 'speaker_embeddings' not found in {cfg.db} — run "
+            "`raudio embed-speaker-turns` first (and `raudio merge-speaker-embeddings` "
+            "if it ran sharded)."
+        )
+
+    ds = lance.dataset(str(cfg.db / "speaker_embeddings.lance"))
+    tbl = ds.to_table(columns=["doc_id", "speaker_label", "duration", "embedding"])
+    if tbl.num_rows == 0:
+        _die("speaker_embeddings is empty — run `raudio embed-speaker-turns` first.")
+
+    doc_ids = tbl["doc_id"].to_pylist()
+    labels = tbl["speaker_label"].to_pylist()
+    durations = tbl["duration"].to_pylist()
+    vectors = (
+        tbl["embedding"]
+        .combine_chunks()
+        .flatten()
+        .to_numpy(zero_copy_only=False)
+        .reshape(-1, VOICE_EMBED_DIM)
+        .astype(np.float32)
+    )
+
+    groups: dict[tuple[str, str], list[int]] = {}
+    for i, key in enumerate(zip(doc_ids, labels, strict=True)):
+        groups.setdefault(key, []).append(i)
+
+    out_keys: list[tuple[str, str]] = []
+    out_n_turns: list[int] = []
+    out_totals: list[float] = []
+    centroids: list[np.ndarray] = []
+    for (doc_id, label), idxs in sorted(groups.items()):
+        turn_durations = [durations[i] for i in idxs]
+        try:
+            centroid = duration_weighted_centroid(vectors[idxs], turn_durations)
+        except ValueError as e:
+            logger.warning("skipping speaker %s/%s: %s", doc_id, label, e)
+            continue
+        out_keys.append((doc_id, label))
+        out_n_turns.append(len(idxs))
+        out_totals.append(float(sum(turn_durations)))
+        centroids.append(centroid)
+
+    if not centroids:
+        _die("No speaker centroid could be computed — speaker_embeddings looks corrupt.")
+
+    n = len(centroids)
+    flat = pa.array(np.concatenate(centroids), pa.float32())
+    speakers = pa.table(
+        {
+            "doc_id": pa.array([d for d, _ in out_keys], pa.string()),
+            "speaker_label": pa.array([s for _, s in out_keys], pa.string()),
+            "n_turns": pa.array(out_n_turns, pa.int32()),
+            "total_duration": pa.array(out_totals, pa.float32()),
+            "embedding": pa.FixedSizeListArray.from_arrays(flat, VOICE_EMBED_DIM),
+            "speaker_cluster": pa.array([-1] * n, pa.int32()),
+            "speaker_name": pa.array([None] * n, pa.string()),
+        },
+        schema=SPEAKERS_SCHEMA,
+    )
+    lance.write_dataset(
+        speakers,
+        str(cfg.db / "speakers.lance"),
+        mode="overwrite",
+        data_storage_version=SPEAKERS_STORAGE_VERSION,
+    )
+    typer.echo(
+        f"  built speakers.lance: {n:,} speaker(s) across "
+        f"{len({d for d, _ in groups}):,} video(s).",
+        err=True,
+    )
+
+    speakers_tbl = db.open_table("speakers")
+    try:
+        speakers_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)
+        logger.info("built BTREE scalar index on speakers.doc_id")
+    except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
+        logger.debug("scalar index (speakers.doc_id) skipped: %s", e)
 
 
 @app.command("compact")

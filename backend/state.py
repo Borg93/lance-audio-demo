@@ -46,6 +46,10 @@ class AppState(BaseModel):
     docs_ds: lance.LanceDataset | None = None
     chunk_frames_tbl: Any | None = None  # lancedb.table.Table
     chunk_frames_ds: lance.LanceDataset | None = None
+    # Voice-search tables (built by embed-speaker-turns / build-speakers).
+    # Optional like chunk_frames: absent until the voice pipeline has run.
+    speaker_embeddings_tbl: Any | None = None  # lancedb.table.Table
+    speakers_tbl: Any | None = None  # lancedb.table.Table
     settings: Settings = Field(default_factory=get_settings)
     embedder: Any | None = None  # raudio.vllm.embedding.VLLMEmbeddingClient
     reranker: Any | None = None  # raudio.vllm.reranker.VLLMReranker
@@ -89,6 +93,19 @@ def open_resources(db_path: str | Path) -> AppState:
             has_embeddings,
         )
 
+    # Voice-search tables — optional, only present after `embed-speaker-turns`
+    # (+ `merge-speaker-embeddings`) and `build-speakers`. `speaker_embeddings`
+    # holds one 256-d voiceprint per diarized turn; `speakers` one
+    # duration-weighted centroid per (doc_id, speaker_label).
+    speaker_embeddings_tbl = None
+    if (db_path / "speaker_embeddings.lance").exists():
+        speaker_embeddings_tbl = db.open_table("speaker_embeddings")
+        logger.info("opened speaker_embeddings (%d row(s))", speaker_embeddings_tbl.count_rows())
+    speakers_tbl = None
+    if (db_path / "speakers.lance").exists():
+        speakers_tbl = db.open_table("speakers")
+        logger.info("opened speakers (%d row(s))", speakers_tbl.count_rows())
+
     return AppState(
         db_path=db_path,
         names=names,
@@ -97,6 +114,8 @@ def open_resources(db_path: str | Path) -> AppState:
         docs_ds=docs_ds,
         chunk_frames_tbl=chunk_frames_tbl,
         chunk_frames_ds=chunk_frames_ds,
+        speaker_embeddings_tbl=speaker_embeddings_tbl,
+        speakers_tbl=speakers_tbl,
         settings=get_settings(),
         http=httpx.Client(),
     )

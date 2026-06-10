@@ -33,6 +33,7 @@ from backend.search.router import router as search_router
 from backend.state import open_resources
 from backend.system.router import router as system_router
 from backend.topics.router import router as topics_router
+from backend.voice.router import router as voice_router
 
 
 def create_app(db_path: str | Path) -> FastAPI:
@@ -63,6 +64,7 @@ def create_app(db_path: str | Path) -> FastAPI:
     app.include_router(atlas_router)
     app.include_router(topics_router)
     app.include_router(diarization_router)
+    app.include_router(voice_router)
     app.include_router(graph_router)
 
     return app
