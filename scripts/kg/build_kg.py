@@ -62,6 +62,14 @@ def parse_args() -> argparse.Namespace:
         "yield extra entities on the second pass)",
     )
     parser.add_argument(
+        "--entity-guidance",
+        action="store_true",
+        help="inject Swedish-tuned entity-type guidance into the extraction "
+        "prompt (Person = ONLY named individuals; no pronouns/groups/roles). "
+        "Fixes junk entities at the source — but changes the prompt, which "
+        "invalidates the LLM cache: use only for a fresh full rebuild.",
+    )
+    parser.add_argument(
         "--summary-merge-threshold",
         type=int,
         default=16,
@@ -215,6 +223,32 @@ def debounce_persists(rag: LightRAG, interval_s: float) -> list[Callable[[], Awa
     return originals
 
 
+def _entity_guidance() -> dict[str, str]:
+    """Optional Swedish-tuned type guidance for LightRAG's extraction prompt.
+
+    The built-in guidance lets the model tag person-categories (Barn,
+    Forskare) and pronouns (Jag) as Person; this override forbids that at the
+    source. Only injected with --entity-guidance because a changed prompt
+    misses the entire LLM cache.
+    """
+    if not ARGS.entity_guidance:
+        return {}
+    return {
+        "entity_types_guidance": (
+            "Klassificera varje entitet med en av följande typer. "
+            "Om ingen passar, använd `Other`.\n\n"
+            "- Person: ENDAST namngivna individer (t.ex. 'Anna Lindberg', 'Ingegerd'). "
+            "ALDRIG yrken/roller (Forskare, Politiker), grupper (Barn, Kvinnor, "
+            "Svenskar) eller pronomen (Jag, Vi, Man) — dessa är `Other` eller ska "
+            "inte extraheras alls.\n"
+            "- Organization: företag, myndigheter, partier, institutioner.\n"
+            "- Location: geografiska platser (länder, städer, regioner).\n"
+            "- Event: händelser, utredningar, konferenser, reformer.\n"
+            "- Concept: abstrakta begrepp, politikområden, teorier."
+        )
+    }
+
+
 def already_done(work: Path) -> set[str]:
     """Chunk keys LightRAG has finished (or deduped) — skipped on resume.
 
@@ -248,7 +282,7 @@ async def main() -> None:
         max_parallel_insert=ARGS.max_parallel_insert,
         entity_extract_max_gleaning=ARGS.gleaning,
         force_llm_summary_on_merge=ARGS.summary_merge_threshold,
-        addon_params={"language": ARGS.language},
+        addon_params={"language": ARGS.language, **_entity_guidance()},
     )
     await rag.initialize_storages()
 
