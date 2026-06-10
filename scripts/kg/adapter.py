@@ -57,6 +57,13 @@ def main() -> None:
     )
     parser.add_argument("--chunks", default="kg_work/chunks.jsonl")
     parser.add_argument("--db", default="transcripts_v2.lance")
+    parser.add_argument(
+        "--type-overrides",
+        default="",
+        help="JSON {entity_id: TYPE} corrections applied after norm_type — "
+        "produced by refine_person_types.py to demote generic 'persons' "
+        "(Barn, Forskare, Jag...) to OTHER",
+    )
     args = parser.parse_args()
 
     db = Path(args.db)
@@ -135,6 +142,15 @@ def main() -> None:
             ent_name.setdefault(t, str(tgt).strip())
             ent_type.setdefault(s, "OTHER")
             ent_type.setdefault(t, "OTHER")
+
+    if args.type_overrides:
+        corrections = json.loads(Path(args.type_overrides).read_text())
+        applied = 0
+        for eid, etype in corrections.items():
+            if eid in ent_name:
+                ent_type[eid] = etype
+                applied += 1
+        print(f"type overrides: {applied} applied from {args.type_overrides}")
 
     eids = sorted(ent_name)
     print(f"graph: {len(eids)} entities, {len(rels)} relation-rows")
