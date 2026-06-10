@@ -1,22 +1,29 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { page } from '$app/state';
   import {
     search,
     listDocuments,
+    voiceSimilar,
+    voiceSimilarUpload,
     ApiError,
     thumbnailUrl,
     type Hit,
     type SearchSpec,
     type Document,
+    type VoiceAnchor,
+    type VoiceHit,
+    type VoiceQueryInfo,
+    type VoiceSimilarResponse,
   } from '$lib/api';
-  import { z } from 'zod';
+  import { voiceSearch } from '$lib/voice-search.svelte';
   import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
   import SearchBar from '$lib/components/search-bar.svelte';
   import ActiveFilters from '$lib/components/active-filters.svelte';
   import HitList from '$lib/components/hit-list.svelte';
   import HitCard from '$lib/components/hit-card.svelte';
   import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
+  import { loadCols, loadMergedCols, persistCols, persistMergedCols } from '$lib/table-columns';
   import DocTile from '$lib/components/doc-tile.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import ResizableSplit from '$lib/components/resizable-split.svelte';
@@ -35,6 +42,8 @@
     SearchX,
     Minus,
     Plus,
+    AudioLines,
+    X,
   } from 'lucide-svelte';
 
   const PAGE_STEP = 30;
@@ -45,15 +54,52 @@
   let hits = $state<Hit[]>([]);
   let active = $state<Hit | null>(null);
   const activeKey = $derived(active ? hitKey(active) : null);
-  // Compile the query → highlighter ONCE for the grid view, then pass the
-  // prebuilt fn to every tile (the grid renders HitCard directly, bypassing
-  // hit-list). This avoids one RegExp compilation per card across large pages.
-  const gridHighlight = $derived(makeHighlighter(queryTerms(spec.q)));
   let loadingHits = $state(false);
   let loadingMore = $state(false);
   let error = $state<string | null>(null);
   /** True once a page returns fewer hits than requested → backend exhausted. */
   let allLoaded = $state(false);
+
+  // ── Voice search ("Find this voice" — query-by-example) ──
+  // Voice mode reuses `hits` for rendering (VoiceHit extends Hit, so the
+  // cards/table/map all just work); these track the anchor + restore state.
+  let voiceActive = $state(false);
+  /** Resolved anchor info from the response (speaker label for the chip). */
+  let voiceQuery = $state<VoiceQueryInfo | null>(null);
+  /** Chip label for the anchor video (filename stem from the source hit). */
+  let voiceLabel = $state<string | null>(null);
+  /** Voice paging mirror of `spec.n` (voice ignores the text-search spec). */
+  let voiceN = $state(PAGE_STEP);
+  // Mirrors the backend's hard cap on `n` (backend/voice/service.py _MAX_N):
+  // requests are clamped server-side, so paging past it can never grow the set.
+  const VOICE_MAX_N = 100;
+  // Raw (pre-dedupe) hit count of the last voice response. Voice exhaustion is
+  // inferred from growth between pages — NOT from `length < requested`: the
+  // backend drops turns whose span overlaps no chunk (see similar_voices),
+  // so short pages are routine even when more matches exist. Plain let —
+  // only read inside handlers, never rendered.
+  let voiceRawCount = 0;
+  // Re-run target for the Settings toggle + load-more. Plain let — only read
+  // inside handlers/effects, never rendered.
+  let voiceAnchor: VoiceAnchor | null = null;
+  // Uploaded-clip counterpart of `voiceAnchor` (load-more re-POSTs the same
+  // File). Exactly one of the two is non-null while voice mode is active; the
+  // Settings "include same video" toggle ignores uploads (a clip belongs to
+  // no doc, so `exclude_same_doc` is meaningless). Plain let — never rendered.
+  let voiceUpload: File | null = null;
+  // Snapshot of the text-search results taken when voice mode starts; the
+  // chip's ✕ restores it (mirrors the image-chip lifecycle: leave voice mode
+  // → you're back exactly where you were). Plain let — never rendered.
+  let prevResults: { hits: Hit[]; active: Hit | null; allLoaded: boolean } | null = null;
+
+  // Query used for term-highlighting the rendered results: voice hits were
+  // not matched on text, so highlighting the *previous* text query in them
+  // would mislead — blank it while voice mode is active.
+  const resultsQuery = $derived(voiceActive ? '' : spec.q);
+  // Compile the query → highlighter ONCE for the grid view, then pass the
+  // prebuilt fn to every tile (the grid renders HitCard directly, bypassing
+  // hit-list). This avoids one RegExp compilation per card across large pages.
+  const gridHighlight = $derived(makeHighlighter(queryTerms(resultsQuery)));
 
   /** Distinct document count for the current results. */
   const docCount = $derived(new Set(hits.map((h) => h.doc_id)).size);
@@ -115,20 +161,34 @@
       loadingHits = false;
     }
   }
-  // Which result columns the table view shows (persisted). Defaults to a
-  // readable subset; the chooser bar toggles any of TABLE_COLUMNS. Direct init
-  // (not a one-shot $effect): this page is client-rendered, so localStorage is
-  // available at init time and the restore can't clobber later user toggles.
-  function loadTableCols(): string[] {
-    try {
-      const v = localStorage.getItem('raudio-table-cols-v4');
-      if (v) return z.array(z.string()).parse(JSON.parse(v));
-    } catch {
-      /* ignore */
-    }
-    return ['thumbnail', 'score', 'namn', 'start', 'end', 'duration', 'text', 'caption'];
-  }
-  let tableCols = $state<string[]>(loadTableCols());
+  // Which result columns the table view shows (persisted, with new default
+  // columns merged in across app versions — see $lib/table-columns). Direct
+  // init (not a one-shot $effect): this page is client-rendered, so
+  // localStorage is available at init time and the restore can't clobber
+  // later user toggles. The v4 legacy key predates the merge format;
+  // `speaker` is the only default column newer than the v4 era.
+  const TABLE_COL_KEYS = TABLE_COLUMNS.map((c) => c.key);
+  const DEFAULT_TABLE_COLS = [
+    'thumbnail',
+    'score',
+    'namn',
+    'speaker',
+    'start',
+    'end',
+    'duration',
+    'text',
+    'caption',
+  ];
+  const TABLE_COLS_KEY = 'raudio-table-cols-v5';
+  let tableCols = $state<string[]>(
+    loadMergedCols({
+      storageKey: TABLE_COLS_KEY,
+      allKeys: TABLE_COL_KEYS,
+      defaults: DEFAULT_TABLE_COLS,
+      legacyKey: 'raudio-table-cols-v4',
+      legacyAppend: ['speaker'],
+    }),
+  );
 
   // Columns shown in the browse-mode (pre-search) documents table. Documents
   // carry fewer fields than search hits, so this is its own small set.
@@ -143,11 +203,25 @@
   ];
   function toggleCol(key: string) {
     tableCols = tableCols.includes(key) ? tableCols.filter((k) => k !== key) : [...tableCols, key];
-    try {
-      localStorage.setItem('raudio-table-cols-v4', JSON.stringify(tableCols));
-    } catch {
-      /* ignore */
-    }
+    persistMergedCols(TABLE_COLS_KEY, tableCols, TABLE_COL_KEYS);
+  }
+
+  // The browse-mode documents table keeps its OWN visible set (all doc columns
+  // by default): it used to filter through `tableCols`, whose hit-table
+  // defaults intersect DOC_COLUMNS on just 3 keys — so the first table a user
+  // ever saw showed only Thumb/Name/Dur.
+  const DOC_COLS_KEY = 'raudio-doc-cols-v1';
+  let docTableCols = $state<string[]>(
+    loadCols(
+      DOC_COLS_KEY,
+      DOC_COLUMNS.map((c) => c.key),
+    ),
+  );
+  function toggleDocCol(key: string) {
+    docTableCols = docTableCols.includes(key)
+      ? docTableCols.filter((k) => k !== key)
+      : [...docTableCols, key];
+    persistCols(DOC_COLS_KEY, docTableCols);
   }
   // Grid column count, persisted in localStorage so it sticks (direct init —
   // same reasoning as loadTableCols above).
@@ -166,15 +240,186 @@
   /** Selected document in browse mode (so the grid can highlight it). */
   const activeDocId = $derived(active?.doc_id ?? null);
 
-  const isBrowsing = $derived(!spec.q && !spec.image && !spec.topic);
+  const isBrowsing = $derived(!spec.q && !spec.image && !spec.topic && !voiceActive);
   const docsTotalPages = $derived(Math.max(1, Math.ceil(docsTotal / PER_PAGE)));
 
   // Supersession counter: FilterPopover auto-applies onchange, so searches can
   // overlap — only the LATEST call may write results. Plain let (never rendered).
   let searchSeq = 0;
 
+  /** Voice hits are one-per-turn; two turns can share their max-overlap chunk,
+   *  which would collide on the keyed `{#each}` lists. Keep the best-ranked
+   *  (first) hit per chunk key. */
+  function dedupeVoiceHits(vh: VoiceHit[]): VoiceHit[] {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- function-local scratch, never reactive state
+    const seen = new Set<string>();
+    return vh.filter((h) => {
+      const k = hitKey(h);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
+  /** Shared voice-mode entry (anchor + upload paths): snapshot the text
+   *  results once so the chip's ✕ can restore them, then reset the result
+   *  surfaces for the incoming hits. */
+  function enterVoice(label: string | undefined): void {
+    if (!voiceActive) prevResults = { hits, active, allLoaded };
+    voiceActive = true;
+    if (label !== undefined) voiceLabel = label;
+    // Same reasoning as runSearch: fresh results supersede a stale map lasso.
+    crossFilter.clearSelection();
+    mapHits = [];
+    mapSelectionTotal = 0;
+    loadingHits = true;
+    error = null;
+  }
+
+  /** Apply a (non-superseded) voice response: anchor info for the chip,
+   *  deduped hits, and the paging bookkeeping both voice paths share. */
+  function applyVoiceResponse(res: VoiceSimilarResponse, requested: number): void {
+    voiceQuery = res.query;
+    hits = dedupeVoiceHits(res.hits);
+    active = null;
+    voiceRawCount = res.hits.length;
+    // Only the server-side clamp guarantees exhaustion here; short pages are
+    // routine (turns without an overlapping chunk are dropped server-side).
+    allLoaded = requested >= VOICE_MAX_N;
+  }
+
+  /** Run (or re-run) a voice query. First entry into voice mode snapshots the
+   *  current text results so the chip's ✕ can restore them. Auto-applies.
+   *  `fallback` is a one-shot retry anchor for 404s on `t`-anchors (a text
+   *  hit's midpoint can fall in a mid-speech diarization gap). */
+  async function runVoice(anchor: VoiceAnchor, label?: string, fallback?: VoiceAnchor) {
+    const seq = ++searchSeq; // supersede any in-flight text/voice search
+    enterVoice(label);
+    voiceAnchor = anchor;
+    voiceUpload = null;
+    try {
+      const requested = voiceN;
+      const res = await voiceSimilar(anchor, {
+        n: requested,
+        excludeSameDoc: !voiceSearch.includeSameDoc,
+      });
+      if (seq !== searchSeq) return;
+      applyVoiceResponse(res, requested);
+    } catch (e) {
+      if (seq !== searchSeq) return;
+      if (e instanceof ApiError && e.status === 404 && 't' in anchor) {
+        // ASR chunk spans and diarization turns disagree at boundaries, so a
+        // `t`-anchor can land where no turn covers t exactly. Retry once at
+        // the caller's fallback (the chunk start); the retry supersedes this
+        // call's seq, so its own finally releases loadingHits.
+        if (fallback) {
+          void runVoice(fallback, label);
+          return;
+        }
+        error =
+          'No diarized speaker at that moment — try clicking a segment in the Speakers timeline.';
+      } else {
+        error =
+          e instanceof ApiError ? e.detail : e instanceof Error ? e.message : 'unknown error';
+      }
+      // First voice run failed → fall back to the results we were showing
+      // (the header surfaces the error; the list keeps the old hits).
+      if (!voiceQuery) leaveVoiceMode();
+    } finally {
+      if (seq === searchSeq) loadingHits = false;
+    }
+  }
+
+  /** Run (or re-run) a voice query for an uploaded clip — the upload twin of
+   *  `runVoice` (same enter/snapshot/supersession lifecycle). No
+   *  `exclude_same_doc` (the clip belongs to no doc) and no 404 retry (there
+   *  is no anchor to miss); the response's `query` is all-null by design, so
+   *  the chip shows only `label`. `begin/endUpload` drive the search-bar's
+   *  attach-button spinner — the first upload after a backend restart
+   *  lazy-loads the encoder (~5 s). */
+  async function runVoiceUpload(file: File, label: string) {
+    const seq = ++searchSeq; // supersede any in-flight text/voice search
+    enterVoice(label);
+    voiceAnchor = null;
+    voiceUpload = file;
+    voiceSearch.beginUpload();
+    try {
+      const requested = voiceN;
+      const res = await voiceSimilarUpload(file, { n: requested });
+      if (seq !== searchSeq) return;
+      applyVoiceResponse(res, requested);
+    } catch (e) {
+      if (seq !== searchSeq) return;
+      error = e instanceof ApiError ? e.detail : e instanceof Error ? e.message : 'unknown error';
+      // First voice run failed → fall back to the results we were showing
+      // (the header surfaces the error; the list keeps the old hits).
+      if (!voiceQuery) leaveVoiceMode();
+    } finally {
+      voiceSearch.endUpload();
+      if (seq === searchSeq) loadingHits = false;
+    }
+  }
+
+  /** Exit voice mode and restore the snapshotted text-search results. */
+  function leaveVoiceMode() {
+    voiceActive = false;
+    voiceQuery = null;
+    voiceLabel = null;
+    voiceAnchor = null;
+    voiceUpload = null;
+    voiceN = PAGE_STEP;
+    voiceRawCount = 0;
+    if (prevResults) {
+      hits = prevResults.hits;
+      active = prevResults.active;
+      allLoaded = prevResults.allLoaded;
+      prevResults = null;
+    }
+  }
+
+  /** The voice chip's ✕ — back to the previous text-search results. */
+  function dismissVoice() {
+    searchSeq++; // supersede any in-flight voice fetch
+    loadingHits = false;
+    error = null;
+    leaveVoiceMode();
+  }
+
+  // Consume voice-search requests from anywhere (hit-card buttons, the
+  // diarization timeline via voiceSearch.request(), URL deep-links). The
+  // store queues the request, so callers can fire before this page settles.
+  $effect(() => {
+    const req = voiceSearch.pending;
+    if (!req) return;
+    voiceSearch.pending = null;
+    voiceN = PAGE_STEP; // a new anchor/clip restarts paging
+    untrack(() => {
+      if ('upload' in req) void runVoiceUpload(req.upload, req.label);
+      else void runVoice(req.anchor, req.label, req.fallback);
+    });
+  });
+
+  // Auto-apply the Settings "include same video" toggle to an active voice
+  // query. `lastIncludeSame` keeps the effect from refiring on unrelated
+  // dependency changes; `untrack` keeps runVoice's reads out of the deps.
+  // Upload-anchored queries (voiceAnchor === null) are deliberately skipped —
+  // the toggle can't change their results (a clip belongs to no doc).
+  let lastIncludeSame = voiceSearch.includeSameDoc;
+  $effect(() => {
+    const inc = voiceSearch.includeSameDoc;
+    if (inc === lastIncludeSame) return;
+    lastIncludeSame = inc;
+    untrack(() => {
+      if (voiceActive && voiceAnchor) void runVoice(voiceAnchor);
+    });
+  });
+
   async function runSearch(next: SearchSpec) {
     const seq = ++searchSeq; // supersede any in-flight search/loadMore, incl. on clear
+    // A new text search supersedes an active voice query AND its snapshot —
+    // the user moved on, so there's nothing to "return" to anymore.
+    prevResults = null;
+    leaveVoiceMode();
     // Reset paging on a new search.
     spec = { ...next, n: next.n ?? PAGE_STEP };
     allLoaded = false;
@@ -213,6 +458,29 @@
     loadingMore = true;
     const seq = ++searchSeq;
     try {
+      if (voiceActive && (voiceAnchor || voiceUpload)) {
+        // Voice mode pages on voiceN, not the text spec. Both voice flavours
+        // page identically — only the fetch differs (anchor GET vs clip POST).
+        const nextN = voiceN + PAGE_STEP;
+        const res = voiceUpload
+          ? await voiceSimilarUpload(voiceUpload, { n: nextN })
+          : voiceAnchor
+            ? await voiceSimilar(voiceAnchor, {
+                n: nextN,
+                excludeSameDoc: !voiceSearch.includeSameDoc,
+              })
+            : null;
+        if (res && seq === searchSeq) {
+          hits = dedupeVoiceHits(res.hits);
+          voiceN = nextN;
+          // Exhausted only when paging stopped yielding new raw hits, or the
+          // request reached the backend clamp (no growth possible past it) —
+          // `length < nextN` proves nothing in voice mode (see voiceRawCount).
+          if (res.hits.length <= voiceRawCount || nextN >= VOICE_MAX_N) allLoaded = true;
+          voiceRawCount = res.hits.length;
+        }
+        return;
+      }
       const nextN = (spec.n ?? PAGE_STEP) + PAGE_STEP;
       const result = await search({ ...spec, n: nextN });
       if (seq === searchSeq) {
@@ -283,8 +551,28 @@
   // to that topic — a filter-only browse (no query text), backed by the
   // topic-only branch in `run_search`. Runs once on mount.
   onMount(() => {
+    // One status probe gates every voice affordance (hit-card buttons, the
+    // Settings toggle) — shared via the voiceSearch store.
+    voiceSearch.probe();
     const topic = page.url.searchParams.get('topic');
     if (topic) runSearch({ q: '', topic, n: spec.n ?? 100, mode: spec.mode });
+    // Voice deep-link (e.g. from the diarization timeline):
+    //   /?voice_doc=<id>&(voice_turn=<int> | voice_speaker=<label> | voice_t=<seconds>)
+    // Same one-shot URL-param pattern as `topic`/`doc` here. Runtime callers
+    // on this page should use voiceSearch.request(...) instead.
+    const voiceDoc = page.url.searchParams.get('voice_doc');
+    if (voiceDoc) {
+      const turnRaw = page.url.searchParams.get('voice_turn');
+      const speaker = page.url.searchParams.get('voice_speaker');
+      const tRaw = page.url.searchParams.get('voice_t');
+      if (turnRaw !== null && Number.isInteger(Number(turnRaw))) {
+        voiceSearch.request({ docId: voiceDoc, turnId: Number(turnRaw) });
+      } else if (speaker) {
+        voiceSearch.request({ docId: voiceDoc, speaker });
+      } else if (tRaw !== null && Number.isFinite(Number(tRaw))) {
+        voiceSearch.request({ docId: voiceDoc, t: Number(tRaw) });
+      }
+    }
     // Deep-link from the graph explorer: open a doc in the player at time `t`.
     // Player media is keyed on doc_id; a minimal synthetic hit seeks to start=t.
     const docId = page.url.searchParams.get('doc');
@@ -344,6 +632,35 @@
   <div class="border-b border-border bg-card/40">
     <SearchBar bind:spec onsubmit={runSearch} />
     <ActiveFilters bind:spec onchange={runSearch} />
+    {#if voiceActive}
+      <!-- Voice query chip — mirrors the attached-image chip's lifecycle:
+           dismissing returns to the previous text-search results. -->
+      <div class="flex flex-wrap items-center gap-2 px-6 pb-3 text-[11px]">
+        <span
+          class="flex items-center gap-1.5 rounded-md border border-primary bg-primary/10 py-1 pr-1 pl-2 font-medium text-foreground"
+        >
+          <AudioLines class="size-3.5 text-primary" />
+          <span class="max-w-[24rem] truncate">
+            Voice: {voiceLabel ?? voiceQuery?.doc_id ?? '…'}
+            {#if voiceQuery?.speaker_label}· {voiceQuery.speaker_label}{/if}
+          </span>
+          <button
+            type="button"
+            title="Clear voice search — back to the previous results"
+            aria-label="Clear voice search"
+            onclick={dismissVoice}
+            class="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X class="size-3.5" />
+          </button>
+        </span>
+        {#if voiceQuery && voiceQuery.turn_start != null && voiceQuery.turn_end != null}
+          <span class="text-muted-foreground">
+            anchor turn {fmtTime(voiceQuery.turn_start)}–{fmtTime(voiceQuery.turn_end)}
+          </span>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <ResizableSplit minLeft={420} minRight={360} initial={0.6}>
@@ -477,7 +794,7 @@
                         hits={mapTableHits}
                         {active}
                         visible={MAP_TABLE_COLS}
-                        query={mapSelectionTotal > 0 ? '' : spec.q}
+                        query={mapSelectionTotal > 0 ? '' : resultsQuery}
                         onselect={(h) => (active = h)}
                       />
                     {/if}
@@ -512,7 +829,7 @@
                   {/each}
                 </div>
               {:else if view === 'table'}
-                {@const docCols = DOC_COLUMNS.filter((c) => tableCols.includes(c.key))}
+                {@const docCols = DOC_COLUMNS.filter((c) => docTableCols.includes(c.key))}
                 <div
                   class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-3 py-2 text-[11px]"
                 >
@@ -520,9 +837,9 @@
                   {#each DOC_COLUMNS as c (c.key)}
                     <button
                       type="button"
-                      onclick={() => toggleCol(c.key)}
+                      onclick={() => toggleDocCol(c.key)}
                       class={'rounded border px-1.5 py-0.5 transition-colors ' +
-                        (tableCols.includes(c.key)
+                        (docTableCols.includes(c.key)
                           ? 'border-primary bg-primary/10 text-foreground'
                           : 'border-border text-muted-foreground hover:text-foreground')}
                     >
@@ -630,9 +947,13 @@
                 <SearchX class="size-6 text-muted-foreground/60" />
                 <div>No hits.</div>
                 <div class="text-xs">
-                  Try toggling <strong>Match by</strong> to <em>Semantic</em> or switching
-                  <strong>Style</strong>
-                  to <em>Fuzzy</em>.
+                  {#if voiceActive}
+                    No similar voices found — try <strong>include same video</strong> in Settings.
+                  {:else}
+                    Try toggling <strong>Match by</strong> to <em>Semantic</em> or switching
+                    <strong>Style</strong>
+                    to <em>Fuzzy</em>.
+                  {/if}
                 </div>
               </div>
             {:else if view === 'grid'}
@@ -643,7 +964,7 @@
                 {#each hits as hit (hitKey(hit))}
                   <HitCard
                     {hit}
-                    query={spec.q}
+                    query={resultsQuery}
                     highlight={gridHighlight}
                     active={activeKey === hitKey(hit)}
                     layout="tile"
@@ -674,11 +995,11 @@
                 {hits}
                 {active}
                 visible={tableCols}
-                query={spec.q}
+                query={resultsQuery}
                 onselect={(h) => (active = h)}
               />
             {:else}
-              <HitList {hits} query={spec.q} {active} onselect={(h) => (active = h)} />
+              <HitList {hits} query={resultsQuery} {active} onselect={(h) => (active = h)} />
             {/if}
 
             <!-- Pagination: only when we have hits and aren't already exhausted. -->
@@ -697,7 +1018,7 @@
     {#snippet right()}
       <!-- ── Right: player pane ── -->
       <div class="h-full min-h-0 bg-muted/30">
-        <PlayerPane hit={active} query={spec.q} />
+        <PlayerPane hit={active} query={resultsQuery} />
       </div>
     {/snippet}
   </ResizableSplit>
