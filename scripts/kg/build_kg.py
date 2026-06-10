@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
+import time
 from functools import partial
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from lightrag import LightRAG
 from lightrag.llm.openai import openai_complete_if_cache, openai_embed
@@ -34,6 +37,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunks", default="kg_work/chunks.jsonl")
     parser.add_argument("--work", default="kg_work/rag")
     parser.add_argument("--gemma-url", default="https://dev-kuberay.ra.se/gemma-31b/v1")
+    parser.add_argument(
+        "--gemma-url-2",
+        default="",
+        help="optional second endpoint serving the SAME model: calls round-robin "
+        "across both and fail over to the other on error (the LLM cache keys on "
+        "model name, so responses stay interchangeable)",
+    )
     parser.add_argument("--gemma-model", default="google/gemma-4-31B-it")
     parser.add_argument("--embed-url", default="http://localhost:8001/v1")
     parser.add_argument("--embed-model", default="Qwen/Qwen3-VL-Embedding-2B")
@@ -43,10 +53,46 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-parallel-insert", type=int, default=8)
     parser.add_argument("--language", default="Swedish")
     parser.add_argument("--batch", type=int, default=1000, help="chunks per ainsert call")
+    parser.add_argument(
+        "--gleaning",
+        type=int,
+        default=0,
+        help="re-extraction passes per chunk (LightRAG default 1 DOUBLES the LLM "
+        "calls; 0 = single pass, ~2x faster — short transcript chunks rarely "
+        "yield extra entities on the second pass)",
+    )
+    parser.add_argument(
+        "--summary-merge-threshold",
+        type=int,
+        default=16,
+        help="description fragments before an LLM merge-summary fires (LightRAG "
+        "default 8; higher = fewer summary calls for hot entities)",
+    )
+    parser.add_argument(
+        "--persist-interval",
+        type=float,
+        default=300.0,
+        help="seconds between disk persists. LightRAG's JSON storages rewrite "
+        "their ENTIRE file on every per-doc persist (~450MB+/sweep at corpus "
+        "scale) — that disk tax, not the LLM, gates throughput. A crash loses "
+        "at most this window; resume + the LLM cache redo it cheaply. "
+        "0 = LightRAG default (persist per doc).",
+    )
+    parser.add_argument(
+        "--dummy-embeddings",
+        action="store_true",
+        help="replace the remote embedding model with instant 8-dim constants. "
+        "The kg_* adapter only reads the graphml + text-chunk KV — the vector "
+        "stores are never queried — so real embeddings only inflate the "
+        "vdb_*.json files (2048-dim float JSON) and burn GPU. DELETE existing "
+        "vdb_*.json once when first enabling (dimension mismatch otherwise).",
+    )
     return parser.parse_args()
 
 
 ARGS = parse_args()
+
+_round_robin = itertools.count()
 
 
 async def llm_func(
@@ -56,24 +102,101 @@ async def llm_func(
     keyword_extraction: bool = False,  # LightRAG-internal flag — absorb, don't forward
     **kwargs: object,
 ) -> str:
-    return await openai_complete_if_cache(
-        ARGS.gemma_model,
-        prompt,
-        system_prompt=system_prompt,
-        history_messages=history_messages or [],
-        base_url=ARGS.gemma_url,
-        api_key=ARGS.api_key,
-        **kwargs,
+    urls = [u for u in (ARGS.gemma_url, ARGS.gemma_url_2) if u]
+    primary = urls[next(_round_robin) % len(urls)]
+    try:
+        return await openai_complete_if_cache(
+            ARGS.gemma_model,
+            prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages or [],
+            base_url=primary,
+            api_key=ARGS.api_key,
+            **kwargs,
+        )
+    except Exception:
+        # Fail over to the other endpoint so one capped/down server cannot mark
+        # docs FAILED (resume treats "failed" as done — a hard failure here
+        # would silently skip the chunk forever).
+        if len(urls) == 1:
+            raise
+        fallback = urls[1] if primary == urls[0] else urls[0]
+        return await openai_complete_if_cache(
+            ARGS.gemma_model,
+            prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages or [],
+            base_url=fallback,
+            api_key=ARGS.api_key,
+            **kwargs,
+        )
+
+
+if ARGS.dummy_embeddings:
+
+    async def _const_embed(texts: list[str]) -> "object":
+        import numpy as np
+
+        return np.ones((len(texts), 8), dtype=np.float32)
+
+    embedding_func = EmbeddingFunc(embedding_dim=8, max_token_size=8192, func=_const_embed)
+else:
+    embedding_func = EmbeddingFunc(
+        embedding_dim=ARGS.embed_dim,
+        max_token_size=8192,
+        func=partial(
+            openai_embed.func,
+            model=ARGS.embed_model,
+            base_url=ARGS.embed_url,
+            api_key=ARGS.api_key,
+        ),
     )
 
 
-embedding_func = EmbeddingFunc(
-    embedding_dim=ARGS.embed_dim,
-    max_token_size=8192,
-    func=partial(
-        openai_embed.func, model=ARGS.embed_model, base_url=ARGS.embed_url, api_key=ARGS.api_key
-    ),
-)
+def debounce_persists(rag: LightRAG, interval_s: float) -> list[Callable[[], Awaitable[None]]]:
+    """Gate every storage's ``index_done_callback`` to at most once per interval.
+
+    LightRAG fires a persist sweep after EVERY completed document, and each
+    JSON/graphml backend rewrites its whole file — measured ~36s per sweep at
+    ~150MB-class stores, which caps the pipeline at <2 docs/min regardless of
+    LLM speed. Data stays consistent in memory between sweeps; only crash
+    durability is traded (bounded by the interval). Returns the original
+    callbacks so the caller can force a full flush at the end of the run.
+    """
+    storages = [
+        s
+        for s in (
+            rag.full_docs,
+            rag.text_chunks,
+            rag.llm_response_cache,
+            rag.doc_status,
+            rag.entities_vdb,
+            rag.relationships_vdb,
+            rag.chunks_vdb,
+            rag.chunk_entity_relation_graph,
+            getattr(rag, "full_entities", None),
+            getattr(rag, "full_relations", None),
+            getattr(rag, "entity_chunks", None),
+            getattr(rag, "relation_chunks", None),
+        )
+        if s is not None
+    ]
+    originals: list[Callable[[], Awaitable[None]]] = []
+    for storage in storages:
+        original = storage.index_done_callback
+        state = {"last": time.monotonic()}
+
+        async def gated(
+            _original: Callable[[], Awaitable[None]] = original,
+            _state: dict = state,
+        ) -> None:
+            if time.monotonic() - _state["last"] >= interval_s:
+                _state["last"] = time.monotonic()
+                await _original()
+
+        storage.index_done_callback = gated
+        originals.append(original)
+    return originals
 
 
 def already_done(work: Path) -> set[str]:
@@ -107,9 +230,16 @@ async def main() -> None:
         embedding_func_max_async=4,
         embedding_batch_num=16,
         max_parallel_insert=ARGS.max_parallel_insert,
+        entity_extract_max_gleaning=ARGS.gleaning,
+        force_llm_summary_on_merge=ARGS.summary_merge_threshold,
         addon_params={"language": ARGS.language},
     )
     await rag.initialize_storages()
+
+    flush_callbacks: list[Callable[[], Awaitable[None]]] = []
+    if ARGS.persist_interval > 0:
+        flush_callbacks = debounce_persists(rag, ARGS.persist_interval)
+        print(f"persist debounce: sweeps gated to every {ARGS.persist_interval:.0f}s")
 
     # Resume cheaply: only insert chunks not already finished. Inserting in
     # batches (rather than one 145k-doc call) keeps the enqueue/dedup pass small,
@@ -128,6 +258,8 @@ async def main() -> None:
             f"batch done: {start + len(batch)}/{len(pending)} pending chunks inserted", flush=True
         )
 
+    for flush in flush_callbacks:
+        await flush()
     await rag.finalize_storages()
     print(f"KG build complete -> {work}  ({len(chunks)} chunks, {len(pending)} newly processed)")
 
