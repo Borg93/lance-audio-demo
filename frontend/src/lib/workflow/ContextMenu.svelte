@@ -2,7 +2,7 @@
   /** Right-click menu for a node (duplicate / disable / delete) or the pane
    *  (add a node at the cursor). Self-contained: reads/acts on the graph; the
    *  FlowPane owns the open/position state and the dismiss handlers. */
-  import { Copy, Eye, EyeOff, Plus, Trash2 } from 'lucide-svelte';
+  import { Copy, Eye, EyeOff, Play, Plus, RefreshCw, Trash2 } from 'lucide-svelte';
   import { graph, NODE_KINDS, nodeLabel } from '$lib/workflow/graph.svelte';
 
   interface Menu {
@@ -56,6 +56,23 @@
     <button
       class={ITEM}
       role="menuitem"
+      disabled={graph.running}
+      onclick={() => act(() => void graph.runNode(menu.nodeId!))}
+    >
+      <Play class="size-3.5" /> Run node
+    </button>
+    <button
+      class={ITEM}
+      role="menuitem"
+      disabled={graph.running}
+      title="Re-execute this node AND everything upstream of it"
+      onclick={() => act(() => void graph.runNode(menu.nodeId!, { fresh: true }))}
+    >
+      <RefreshCw class="size-3.5" /> Run branch fresh
+    </button>
+    <button
+      class={ITEM}
+      role="menuitem"
       onclick={() => act(() => graph.duplicateNode(menu.nodeId!))}
     >
       <Copy class="size-3.5" /> Duplicate
@@ -63,6 +80,7 @@
     <button
       class={ITEM}
       role="menuitem"
+      disabled={graph.running}
       onclick={() => act(() => graph.setConfig(menu.nodeId!, { enabled: !cfg.enabled }))}
     >
       {#if cfg.enabled}<EyeOff class="size-3.5" /> Disable{:else}<Eye class="size-3.5" /> Enable{/if}

@@ -1,9 +1,10 @@
 <script lang="ts">
   /** Canvas run controls (Run / Clear / Reset / Delete / Undo / Redo / Tidy).
    *  Adding nodes lives in the drag-to-add palette, not here. */
-  import { Play, RotateCcw, LoaderCircle, Trash2, Undo2, Redo2, Wand2 } from 'lucide-svelte';
+  import { Play, RotateCcw, LoaderCircle, Trash2, Undo2, Redo2, Wand2, Command } from 'lucide-svelte';
   import { Button } from '$lib/components/ui';
   import { graph } from '$lib/workflow/graph.svelte';
+  import { commandMenu } from '$lib/workflow/command-menu.svelte';
 </script>
 
 <div
@@ -67,6 +68,15 @@
       <Wand2 class="size-3.5" />
       Tidy
     </Button>
+    <Button
+      size="sm"
+      variant="ghost"
+      onclick={() => commandMenu.toggle()}
+      title="All commands & shortcuts (Ctrl/⌘ K)"
+    >
+      <Command class="size-3.5" />
+      ⌘K
+    </Button>
   </div>
   {#if graph.lastError}
     <div class="max-w-[18rem] text-[10px] text-destructive">{graph.lastError}</div>
@@ -78,6 +88,11 @@
     <div>
       <span class="text-foreground">Connect</span> — drag a node's right ● onto another's left ●. A Search
       accepts several inputs at once (a query/image + a refine).
+    </div>
+    <div>
+      <span class="text-foreground">Run one node</span> — hover a node and press ▶: upstream results are
+      reused, missing upstream runs once. Shift+▶ reruns the whole branch; an amber “stale” chip means
+      upstream changed since that node last ran.
     </div>
     <div>
       <span class="text-foreground">Delete</span> — hover a node and click ✕, or select a node/edge and

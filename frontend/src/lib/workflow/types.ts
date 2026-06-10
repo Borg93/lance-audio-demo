@@ -111,6 +111,17 @@ export interface NodeRuntime {
   scopeCapped: boolean;
   /** Count of upstream inputs ignored because only one query/image is used. */
   droppedInputs: number;
+  /** Last output this node produced (spec + hits) — reused as the upstream
+   *  input when a downstream node is run individually, so "play" on one node
+   *  doesn't force the whole branch to re-execute. */
+  output: NodeOutput | null;
+  /** Fingerprint of the config + incoming edges the output was computed from
+   *  (see WorkflowGraph.nodeFingerprint). A mismatch at reuse time means the
+   *  node was edited or rewired since — the cache must not be served. */
+  outputKey: string | null;
+  /** True when an upstream node re-ran after this node's last run — its shown
+   *  results no longer reflect the graph. Cleared when the node runs again. */
+  stale: boolean;
 }
 
 /** What travels along an edge from a node to its successors. */

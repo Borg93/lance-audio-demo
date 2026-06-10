@@ -27,6 +27,13 @@ export interface RunDeps {
   patchRuntime(id: string, patch: Partial<NodeRuntime>): void;
   /** Stamp a Tagger node's tags onto the passing hits (shared tag store). */
   tagHits(hits: Hit[], tags: string[]): void;
+  /** A node's reusable last output for a partial run, or null when it must be
+   *  recomputed (never ran, failed, stale, or its config/wiring changed since
+   *  the output was recorded — compared via `fingerprint`). */
+  cachedOutput(id: string): NodeOutput | null;
+  /** Current fingerprint of a node's output-affecting config + incoming
+   *  edges; stored next to the cached output so reuse can detect edits. */
+  fingerprint(id: string): string;
 }
 
 /**
@@ -41,43 +48,133 @@ export interface RunDeps {
  */
 export async function runGraph(deps: RunDeps): Promise<string | null> {
   const ids = deps.nodes.map((n) => n.id);
-  const incoming = new Map<string, string[]>(ids.map((id) => [id, []]));
-  for (const e of deps.edges) {
-    if (incoming.has(e.target) && incoming.has(e.source)) incoming.get(e.target)!.push(e.source);
-  }
+  const incoming = incomingMap(deps.edges, new Set(ids));
 
-  const order = topoOrder(deps, incoming);
-  if (!order) return 'The graph has a cycle — remove a connection and run again.';
+  const order = topoOrder(ids, incoming);
+  if (!order) return CYCLE_ERROR;
 
   const outputs = new Map<string, Promise<NodeOutput>>();
   for (const id of order) {
-    const preds = incoming.get(id) ?? [];
     // `order` is topological, so every predecessor's promise is already set.
-    outputs.set(
-      id,
-      Promise.all(preds.map((p) => outputs.get(p)!)).then((predOutputs) =>
-        runNode(deps, id, predOutputs),
-      ),
-    );
+    outputs.set(id, computeNode(deps, id, incoming.get(id) ?? [], outputs));
   }
   await Promise.all(outputs.values());
   return null;
 }
 
-/** Topologically order the node ids; returns null if the graph has a cycle. */
-function topoOrder(deps: RunDeps, incoming: Map<string, string[]>): string[] | null {
-  const ids = deps.nodes.map((n) => n.id);
-  const deg = new Map<string, number>(ids.map((id) => [id, incoming.get(id)?.length ?? 0]));
+/**
+ * Run ONE node (the per-node ▶ button): its upstream closure executes too, but
+ * a predecessor with a reusable cached output (see `RunDeps.cachedOutput`) is
+ * read instead of re-run — so rerunning B in A→B→C re-executes only B against
+ * A's existing results, and the first run of B computes A once. The target
+ * itself ALWAYS recomputes; `fresh` forces the whole upstream branch to as
+ * well. Nodes outside the closure are untouched (C keeps its results — the
+ * caller flags them stale). Returns the ids actually executed.
+ */
+export async function runSubgraph(
+  deps: RunDeps,
+  targetId: string,
+  opts: { fresh?: boolean } = {},
+): Promise<{ error: string | null; ran: string[] }> {
+  const ids = new Set(deps.nodes.map((n) => n.id));
+  if (!ids.has(targetId)) return { error: null, ran: [] };
+  const incoming = incomingMap(deps.edges, ids);
+
+  // Upstream closure: the target plus everything it (transitively) reads.
+  const closure = new Set<string>([targetId]);
+  const stack = [targetId];
+  while (stack.length) {
+    const id = stack.pop()!;
+    for (const p of incoming.get(id) ?? []) {
+      if (!closure.has(p)) {
+        closure.add(p);
+        stack.push(p);
+      }
+    }
+  }
+
+  const order = topoOrder([...closure], incoming);
+  if (!order) return { error: CYCLE_ERROR, ran: [] };
+
+  const outputs = new Map<string, Promise<NodeOutput>>();
+  const ran: string[] = [];
+  const ranSet = new Set<string>();
+  for (const id of order) {
+    const preds = incoming.get(id) ?? [];
+    // A node whose input is being recomputed THIS run can't serve its cache —
+    // it was computed from the predecessor's previous output. `order` is
+    // topological, so every pred's run/reuse decision is already made.
+    const predRecomputed = preds.some((p) => ranSet.has(p));
+    const cached =
+      id === targetId || opts.fresh || predRecomputed ? null : deps.cachedOutput(id);
+    if (cached) {
+      outputs.set(id, Promise.resolve(cached));
+      continue;
+    }
+    ran.push(id);
+    ranSet.add(id);
+    outputs.set(id, computeNode(deps, id, preds, outputs));
+  }
+  await Promise.all(outputs.values());
+  return { error: null, ran };
+}
+
+const CYCLE_ERROR = 'The graph has a cycle — remove a connection and run again.';
+
+/** target → [sources], restricted to `ids` (drops edges touching unknown nodes). */
+function incomingMap(edges: Edge[], ids: Set<string>): Map<string, string[]> {
+  const incoming = new Map<string, string[]>([...ids].map((id) => [id, []]));
+  for (const e of edges) {
+    if (incoming.has(e.target) && ids.has(e.source)) incoming.get(e.target)!.push(e.source);
+  }
+  return incoming;
+}
+
+/** Execute a node once its predecessors' promises resolve, caching its output
+ *  on the runtime (and clearing any stale flag) for later partial runs. */
+function computeNode(
+  deps: RunDeps,
+  id: string,
+  preds: string[],
+  outputs: Map<string, Promise<NodeOutput>>,
+): Promise<NodeOutput> {
+  return Promise.all(preds.map((p) => outputs.get(p)!)).then(async (predOutputs) => {
+    // Fingerprint BEFORE executing: an edit landing mid-run must not stamp an
+    // output computed from the old config as fresh under the new key. (An
+    // edit after this line records under the OLD key → mismatch → the cache
+    // is simply not reused — the safe direction.)
+    const key = deps.fingerprint(id);
+    const out = await runNode(deps, id, predOutputs);
+    deps.patchRuntime(id, { output: out, outputKey: key, stale: false });
+    return out;
+  });
+}
+
+/** Topologically order `ids` by the `incoming` edges among them; returns null
+ *  if they contain a cycle. */
+function topoOrder(ids: string[], incoming: Map<string, string[]>): string[] | null {
+  const members = new Set(ids);
+  const deg = new Map<string, number>(
+    ids.map((id) => [id, (incoming.get(id) ?? []).filter((p) => members.has(p)).length]),
+  );
+  const outgoing = new Map<string, string[]>();
+  for (const id of ids) {
+    for (const p of incoming.get(id) ?? []) {
+      if (!members.has(p)) continue;
+      const list = outgoing.get(p);
+      if (list) list.push(id);
+      else outgoing.set(p, [id]);
+    }
+  }
   const queue = ids.filter((id) => (deg.get(id) ?? 0) === 0);
   const order: string[] = [];
   while (queue.length) {
     const id = queue.shift()!;
     order.push(id);
-    for (const e of deps.edges) {
-      if (e.source !== id) continue;
-      const d = (deg.get(e.target) ?? 0) - 1;
-      deg.set(e.target, d);
-      if (d === 0) queue.push(e.target);
+    for (const t of outgoing.get(id) ?? []) {
+      const d = (deg.get(t) ?? 0) - 1;
+      deg.set(t, d);
+      if (d === 0) queue.push(t);
     }
   }
   return order.length === ids.length ? order : null;

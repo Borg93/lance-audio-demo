@@ -5,6 +5,7 @@
   import ResizableSplit from '$lib/components/resizable-split.svelte';
   import WorkflowCanvas from '$lib/workflow/WorkflowCanvas.svelte';
   import WorkflowInspector from '$lib/workflow/WorkflowInspector.svelte';
+  import CommandMenu from '$lib/workflow/CommandMenu.svelte';
   import { graph } from '$lib/workflow/graph.svelte';
 </script>
 
@@ -13,6 +14,8 @@
     if (e.key === 'Escape' && graph.selectedHit) graph.closeDetail();
   }}
 />
+
+<CommandMenu />
 
 <div class="h-full min-h-0 w-full">
   <ResizableSplit storageKey="raudio-workflow-split" initial={0.7} minLeft={460} minRight={300}>

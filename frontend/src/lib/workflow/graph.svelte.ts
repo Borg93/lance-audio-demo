@@ -26,11 +26,12 @@
 import type { Edge, Node } from '@xyflow/svelte';
 import { browser } from '$app/environment';
 import { type Hit, type SearchMode } from '$lib/api';
+import { nodeFingerprint } from './fingerprint';
 import { EXPORT_COLUMNS } from './export';
 import { WorkflowTags } from './tags.svelte';
 import { UndoHistory } from './history.svelte';
 import { autoLayout } from './layout';
-import { runGraph } from './executor';
+import { runGraph, runSubgraph, type RunDeps } from './executor';
 import { dedupeHits } from './scope';
 import {
   DEFAULT_N,
@@ -133,6 +134,9 @@ function blankRuntime(): NodeRuntime {
     scopedChunks: null,
     scopeCapped: false,
     droppedInputs: 0,
+    output: null,
+    outputKey: null,
+    stale: false,
   };
 }
 
@@ -305,6 +309,22 @@ class WorkflowGraph {
   setConfig(id: string, patch: Partial<NodeConfig>): void {
     const prev = this.config[id] ?? defaultConfig();
     this.config = { ...this.config, [id]: { ...prev, ...patch } };
+  }
+
+  /** Current fingerprint of a node's output-affecting config + incoming
+   *  edges (see fingerprint.ts) — a mismatch with the stored `outputKey`
+   *  means the node was edited or rewired since its output was recorded. */
+  nodeFingerprint(id: string): string {
+    return nodeFingerprint(id, this.config[id] ?? defaultConfig(), this.edges);
+  }
+
+  /** True when a node's last results were computed from a different config or
+   *  wiring than the current one — drives the "stale" badge live (config is
+   *  deep $state and edges are $state, so reads here re-derive on edit). */
+  isOutdated(id: string): boolean {
+    const rt = this.runtime[id];
+    if (!rt?.output || rt.outputKey === null) return false;
+    return rt.outputKey !== this.nodeFingerprint(id);
   }
 
   // ── Connection validation (keeps the graph a DAG) ───────────────────────────
@@ -754,23 +774,69 @@ class WorkflowGraph {
 
   // ── Execution (delegated to executor.ts) ────────────────────────────────
 
-  /** Run the graph: hand the executor a narrow view of our state + the runtime
-   *  writers it needs, and flip `running` around it. The executor owns the
-   *  parallel-dataflow algorithm; the store owns the state. */
+  /** The executor's narrow view of our state + the runtime writers it needs.
+   *  The executor owns the dataflow algorithm; the store owns the state. */
+  private runDeps(): RunDeps {
+    return {
+      nodes: this.nodes,
+      edges: this.edges,
+      config: (id) => this.config[id] ?? defaultConfig(),
+      kindOf: (id) => this.kindOf(id),
+      patchRuntime: (id, patch) => this.patchRuntime(id, patch),
+      tagHits: (hits, tags) => this.tags.addTo(hits, tags),
+      cachedOutput: (id) => {
+        const rt = this.runtime[id];
+        const out = rt?.output;
+        if (!out || out.failed || rt.stale) return null;
+        // Edited or rewired since this output was recorded (covers the
+        // enabled toggle too — it's part of the fingerprint).
+        if (rt.outputKey !== this.nodeFingerprint(id)) return null;
+        return out;
+      },
+      fingerprint: (id) => this.nodeFingerprint(id),
+    };
+  }
+
+  /** Run the whole graph from scratch (the toolbar Run button). */
   async run(): Promise<void> {
     if (this.running) return;
     this.running = true;
     this.resetRun();
     try {
-      const error = await runGraph({
-        nodes: this.nodes,
-        edges: this.edges,
-        config: (id) => this.config[id] ?? defaultConfig(),
-        kindOf: (id) => this.kindOf(id),
-        patchRuntime: (id, patch) => this.patchRuntime(id, patch),
-        tagHits: (hits, tags) => this.tags.addTo(hits, tags),
-      });
+      const error = await runGraph(this.runDeps());
       if (error) this.lastError = error;
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /** Run ONE node (the node ▶ button): recomputes the node itself, reuses
+   *  upstream results where they exist, and computes missing/stale/failed
+   *  upstream once. `fresh` re-executes the whole upstream branch. Everything
+   *  else keeps its results but is flagged stale when it now sits downstream
+   *  of fresher data. */
+  async runNode(id: string, opts: { fresh?: boolean } = {}): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    this.lastError = null;
+    try {
+      const { error, ran } = await runSubgraph(this.runDeps(), id, opts);
+      if (error) {
+        this.lastError = error;
+        return;
+      }
+      // Flag dependents that did NOT run: their shown results were computed
+      // from outputs that just changed. (Stale spreads later runs too — a
+      // stale cache is never reused, see cachedOutput.)
+      const ranSet = new Set(ran);
+      const staleIds = new Set<string>();
+      for (const r of ran) {
+        for (const d of this.dependentsOf(r)) if (!ranSet.has(d)) staleIds.add(d);
+      }
+      for (const d of staleIds) {
+        const rt = this.runtime[d];
+        if (rt && (rt.status !== 'idle' || rt.output)) this.patchRuntime(d, { stale: true });
+      }
     } finally {
       this.running = false;
     }
