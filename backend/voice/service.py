@@ -32,7 +32,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from backend.core.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
-from backend.schemas.voice import VoiceAnchor, VoiceSimilarResponse
+from backend.schemas.voice import (
+    VoiceAnchor,
+    VoiceIdentityAppearance,
+    VoiceIdentityResponse,
+    VoiceSimilarResponse,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,6 +61,10 @@ _MAX_N = 100
 
 #: speaker_embeddings columns a kNN hit needs (the join + voice fields).
 _TURN_HIT_COLUMNS = ["doc_id", "turn_id", "speaker_label", "start", "end"]
+
+#: speakers columns an identity appearance carries (the cluster id is read
+#: separately — it may be absent on a pre-clustering table).
+_IDENTITY_COLUMNS = ["doc_id", "speaker_label", "n_turns", "total_duration"]
 
 #: Hard cap on an uploaded snippet's size — decode + embed run in-process.
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -162,6 +171,40 @@ def _chunk_for_turn(
     )
 
 
+def _attach_speaker_clusters(speakers: Any, hits: list[dict[str, Any]]) -> None:
+    """Set ``hit['speaker_cluster']`` from the speakers table (``None`` = unclustered).
+
+    One batched ``doc_id IN (...)`` read per request (mirrors
+    :func:`~backend.search.postprocess.attach_captions` — never a per-hit scan),
+    then a Python-side ``(doc_id, speaker_label)`` pick. The field is uniformly
+    present on every hit: ``None`` when the speakers table / cluster column is
+    absent or the speaker is EVoC noise (-1), so the frontend never branches on
+    key existence.
+    """
+    for h in hits:
+        h["speaker_cluster"] = None
+    if not hits or speakers is None or "speaker_cluster" not in speakers.schema.names:
+        return
+    doc_list = ",".join(f"'{_sql_quote(str(d))}'" for d in sorted({h["doc_id"] for h in hits}))
+    try:
+        rows = (
+            speakers.to_lance()
+            .to_table(
+                columns=["doc_id", "speaker_label", "speaker_cluster"],
+                filter=f"doc_id IN ({doc_list})",
+            )
+            .to_pylist()
+        )
+    except Exception:  # noqa: BLE001 — the cluster id is decorative on a hit; never fail a search
+        logger.warning("speaker_cluster attach failed", exc_info=True)
+        return
+    by_key = {(r["doc_id"], r["speaker_label"]): r["speaker_cluster"] for r in rows}
+    for h in hits:
+        cluster = by_key.get((str(h["doc_id"]), h["speaker_label"]))
+        if cluster is not None and int(cluster) >= 0:
+            h["speaker_cluster"] = int(cluster)
+
+
 def similar_voices(
     speaker_embeddings,  # lancedb Table for the per-turn voiceprints, or None if unbuilt
     speakers,  # lancedb Table for the per-speaker centroids, or None if unbuilt
@@ -210,6 +253,7 @@ def similar_voices(
         vec,
         n=n,
         exclude_doc_id=doc_id if exclude_same_doc else None,
+        speakers=speakers,
     )
     return VoiceSimilarResponse(query=anchor, hits=hits)
 
@@ -222,11 +266,14 @@ def rank_similar_turns(
     *,
     n: int,
     exclude_doc_id: str | None,
+    speakers: Any = None,
 ) -> list[dict[str, Any]]:
     """The shared post-anchor path: clamp ``n`` → kNN → turn→chunk join → postprocess.
 
     Every anchor form (the GET's Lance-resolved voiceprints and the POST's
-    uploaded-snippet embedding) funnels through here, so hits keep one shape.
+    uploaded-snippet embedding) funnels through here, so hits keep one shape —
+    including ``speaker_cluster``, joined from ``speakers`` when given (``None``
+    per hit otherwise).
     """
     n = max(1, min(n, _MAX_N))
     turn_hits = _search_turns(speaker_embeddings, vec, n=n, exclude_doc_id=exclude_doc_id)
@@ -246,7 +293,55 @@ def rank_similar_turns(
         chunk["turn_score"] = 1.0 - distance
         hits.append(chunk)
 
-    return _postprocess_hits(hits, chunk_frames)
+    hits = _postprocess_hits(hits, chunk_frames)
+    _attach_speaker_clusters(speakers, hits)
+    return hits
+
+
+def speaker_identity(speakers: Any, *, doc_id: str, speaker: str) -> VoiceIdentityResponse:
+    """Resolve one (``doc_id``, ``speaker``) to its global identity cluster.
+
+    ``speaker_cluster`` is ``None`` — with the anchor speaker as its only
+    appearance — when the cluster column is absent or the assignment is EVoC
+    noise (-1), i.e. before/outside a ``raudio cluster-speakers`` run.
+    Otherwise the response lists every cluster member, most speech first.
+    ``doc_id`` is whitelisted by the router; ``speaker`` is quoted here.
+    """
+    if speakers is None:
+        raise ServiceUnavailableError("speakers table not built yet — run `raudio build-speakers`")
+    ds = speakers.to_lance()
+    has_cluster = "speaker_cluster" in speakers.schema.names
+    columns = _IDENTITY_COLUMNS + (["speaker_cluster"] if has_cluster else [])
+    rows = ds.to_table(
+        columns=columns,
+        filter=f"doc_id = '{doc_id}' AND speaker_label = '{_sql_quote(speaker)}'",
+    ).to_pylist()
+    if not rows:
+        raise NotFoundError("speaker not found")
+    row = rows[0]
+    cluster = row.get("speaker_cluster")
+    if cluster is None or int(cluster) < 0:
+        return VoiceIdentityResponse(
+            speaker_cluster=None, appearances=[_appearance(row)], n_videos=1
+        )
+    members = ds.to_table(
+        columns=_IDENTITY_COLUMNS, filter=f"speaker_cluster = {int(cluster)}"
+    ).to_pylist()
+    members.sort(key=lambda r: -float(r["total_duration"]))
+    return VoiceIdentityResponse(
+        speaker_cluster=int(cluster),
+        appearances=[_appearance(r) for r in members],
+        n_videos=len({r["doc_id"] for r in members}),
+    )
+
+
+def _appearance(row: dict[str, Any]) -> VoiceIdentityAppearance:
+    return VoiceIdentityAppearance(
+        doc_id=row["doc_id"],
+        speaker_label=row["speaker_label"],
+        n_turns=row["n_turns"],
+        total_duration=row["total_duration"],
+    )
 
 
 def _decode_upload_wav(file_bytes: bytes) -> np.ndarray:
@@ -275,6 +370,7 @@ def _decode_upload_wav(file_bytes: bytes) -> np.ndarray:
 
 def similar_voices_for_upload(
     speaker_embeddings,  # lancedb Table for the per-turn voiceprints, or None if unbuilt
+    speakers,  # lancedb Table for the per-speaker centroids, or None (hit cluster ids)
     chunks_ds,  # lance.LanceDataset over chunks (the shared startup handle)
     chunk_frames,  # lancedb Table for the caption attach, or None
     get_encoder: Callable[[], TurnBatchEncoder],
@@ -319,6 +415,12 @@ def similar_voices_for_upload(
     vec: list[float] = unit.tolist()
 
     hits = rank_similar_turns(
-        speaker_embeddings, chunks_ds, chunk_frames, vec, n=n, exclude_doc_id=None
+        speaker_embeddings,
+        chunks_ds,
+        chunk_frames,
+        vec,
+        n=n,
+        exclude_doc_id=None,
+        speakers=speakers,
     )
     return VoiceSimilarResponse(query=VoiceAnchor(), hits=hits)

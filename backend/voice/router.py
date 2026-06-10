@@ -19,9 +19,14 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.deps import StateDep
 from backend.media.blobs import valid_doc_id
-from backend.schemas.voice import VoiceSimilarResponse, VoiceStatusResponse
+from backend.schemas.voice import VoiceIdentityResponse, VoiceSimilarResponse, VoiceStatusResponse
 from backend.voice.encoder import ensure_voice_encoder
-from backend.voice.service import _MAX_UPLOAD_BYTES, similar_voices, similar_voices_for_upload
+from backend.voice.service import (
+    _MAX_UPLOAD_BYTES,
+    similar_voices,
+    similar_voices_for_upload,
+    speaker_identity,
+)
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 
@@ -69,6 +74,18 @@ def voice_similar(
     )
 
 
+@router.get("/identity")
+def voice_identity(state: StateDep, doc_id: str, speaker: str) -> VoiceIdentityResponse:
+    """The global identity cluster for one (``doc_id``, ``speaker``).
+
+    503 until ``build-speakers`` has produced the speakers table; 404 for an
+    unknown speaker; ``speaker_cluster`` is ``None`` (with the anchor as its
+    only appearance) until ``cluster-speakers`` has assigned it a cluster.
+    """
+    valid_doc_id(doc_id)
+    return speaker_identity(state.speakers_tbl, doc_id=doc_id, speaker=speaker)
+
+
 @router.post("/similar")
 async def voice_similar_upload(
     state: StateDep,
@@ -88,6 +105,7 @@ async def voice_similar_upload(
     return await run_in_threadpool(
         similar_voices_for_upload,
         state.speaker_embeddings_tbl,
+        state.speakers_tbl,
         state.chunks_ds,
         state.chunk_frames_tbl,
         lambda: ensure_voice_encoder(state),

@@ -50,10 +50,20 @@ floods the page" redundancy (adjacent 30 s clips are near-identical).
 
 ## Bigger bets
 
-- 🟡 **Voice / speaker SEARCH (ECAPA `speaker_embedding`)** — *distinct from diarization,
-  which shipped.* De-risk verdict: cross-video AUC **~0.74 (AMBER)**, channel-inflated +
-  label-noisy. To revisit: diarization-clean labels + **AS-norm/PLDA**, and try the **1.7B**
-  encoder (2048-d). Then a `voice` search mode + atlas `--space voice`.
+- 📋 **Voice / speaker search — remaining surface.** The search itself **shipped**
+  (2026-06-10, see [VOICE.md](VOICE.md)): pyannote WeSpeaker 256-d turn voiceprints
+  (590k turns / 9,941 speakers), `/api/voice/{similar,status,identity}`, hit-card /
+  timeline / upload UX, and seeded-EVoC identity clusters. The old plan on this line
+  (ECAPA / AMBER verdict / AS-norm / 2048-d encoder) is obsolete — diarization-clean
+  turn labels + the WeSpeaker encoder resolved it (AUC 1.000 on the human labels).
+  What genuinely remains:
+  - 📋 **Speaker naming** — `speakers.speaker_name` is still all-NULL; a write route +
+    UI to name an identity cluster, then show names on hits/timeline.
+  - 📋 **Speakers browse page** — list/browse the identity clusters
+    (`GET /api/voice/identity` exists; the frontend doesn't consume
+    `speaker_cluster` beyond the hit field yet).
+  - 🟡 **Atlas `--space voice`** — EVōC projection over `speakers.embedding`.
+  - (The frame/caption embedding-space redo is a *separate* track — unrelated to voice.)
 - 📋 **Video-level text + summary** — `documents.full_text` (concat chunk text per `doc_id`)
   + `documents.doc_summary` (map-reduce LLM). Enables full-video FTS + summaries.
 - 📋 **Studio desktop merge** — fold ranymizer + raudio + multimodal-webgpu-demo into a

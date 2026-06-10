@@ -68,8 +68,16 @@ def _write_speaker_embeddings(
     lance.write_dataset(table, str(db / "speaker_embeddings.lance"), data_storage_version="2.2")
 
 
-def _write_speakers(db: Path, rows: list[tuple[str, str, int, float, np.ndarray]]) -> None:
-    """rows: (doc_id, speaker_label, n_turns, total_duration, centroid)."""
+def _write_speakers(
+    db: Path,
+    rows: list[tuple[str, str, int, float, np.ndarray]],
+    clusters: list[int] | None = None,
+) -> None:
+    """rows: (doc_id, speaker_label, n_turns, total_duration, centroid).
+
+    ``clusters`` plants per-row ``speaker_cluster`` ids (what a
+    ``raudio cluster-speakers`` run would write); default = all -1 (unclustered).
+    """
     table = pa.table(
         {
             "doc_id": pa.array([r[0] for r in rows], pa.string()),
@@ -77,7 +85,7 @@ def _write_speakers(db: Path, rows: list[tuple[str, str, int, float, np.ndarray]
             "n_turns": pa.array([r[2] for r in rows], pa.int32()),
             "total_duration": pa.array([r[3] for r in rows], pa.float32()),
             "embedding": _embedding_array([r[4] for r in rows]),
-            "speaker_cluster": pa.array([-1] * len(rows), pa.int32()),
+            "speaker_cluster": pa.array(clusters or [-1] * len(rows), pa.int32()),
             "speaker_name": pa.array([None] * len(rows), pa.string()),
         },
         schema=SPEAKERS_SCHEMA,
@@ -146,6 +154,25 @@ def client_built(tmp_path):
 def client_embeddings_only(tmp_path):
     db, a, b, c = _voice_db(tmp_path)
     _write_speaker_embeddings(db, _voice_rows(a, b, c))
+    return TestClient(create_app(db)), (a, b, c)
+
+
+@pytest.fixture
+def client_clustered(tmp_path):
+    """client_built + planted global identities: voice X = cluster 7 across A
+    and B, C's voice Y = a singleton cluster 3, A's voice Y = noise (-1)."""
+    db, a, b, c = _voice_db(tmp_path)
+    _write_speaker_embeddings(db, _voice_rows(a, b, c))
+    _write_speakers(
+        db,
+        [
+            (a, "SPEAKER_00", 1, 6.0, VX_A),
+            (a, "SPEAKER_01", 1, 2.0, VY_A),
+            (b, "SPEAKER_00", 1, 3.0, VX),
+            (c, "SPEAKER_00", 1, 3.0, VY_C),
+        ],
+        clusters=[7, -1, 7, 3],
+    )
     return TestClient(create_app(db)), (a, b, c)
 
 
@@ -474,3 +501,104 @@ class TestUploadSimilar:
     def test_unbuilt_tables_is_503(self, client_unbuilt) -> None:
         self._inject(client_unbuilt, VX)
         assert _upload(client_unbuilt, _wav_bytes(1.0)).status_code == 503
+
+
+def _identity(client: TestClient, **params) -> httpx.Response:
+    return client.get("/api/voice/identity", params=params)
+
+
+class TestIdentity:
+    """GET /api/voice/identity — global cluster membership for one speaker."""
+
+    def test_clustered_speaker_lists_all_appearances(self, client_clustered) -> None:
+        client, (a, b, _) = client_clustered
+        r = _identity(client, doc_id=b, speaker="SPEAKER_00")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["speaker_cluster"] == 7
+        assert body["n_videos"] == 2
+        # Sorted by total_duration desc: A's SPEAKER_00 (6.0s) before B's (3.0s).
+        assert [(ap["doc_id"], ap["speaker_label"]) for ap in body["appearances"]] == [
+            (a, "SPEAKER_00"),
+            (b, "SPEAKER_00"),
+        ]
+        assert body["appearances"][0] == {
+            "doc_id": a,
+            "speaker_label": "SPEAKER_00",
+            "n_turns": 1,
+            "total_duration": 6.0,
+        }
+
+    def test_singleton_cluster_counts_one_video(self, client_clustered) -> None:
+        client, (_, _, c) = client_clustered
+        body = _identity(client, doc_id=c, speaker="SPEAKER_00").json()
+        assert body["speaker_cluster"] == 3
+        assert body["n_videos"] == 1
+        assert [ap["doc_id"] for ap in body["appearances"]] == [c]
+
+    def test_noise_speaker_is_null_cluster_with_self_only(self, client_clustered) -> None:
+        client, (a, _, _) = client_clustered
+        body = _identity(client, doc_id=a, speaker="SPEAKER_01").json()
+        assert body["speaker_cluster"] is None
+        assert body["n_videos"] == 1
+        assert [(ap["doc_id"], ap["speaker_label"]) for ap in body["appearances"]] == [
+            (a, "SPEAKER_01")
+        ]
+
+    def test_uncluster_run_is_null_cluster(self, client_built) -> None:
+        # The default speakers table (cluster-speakers never ran): every row -1.
+        client, (_, b, _) = client_built
+        body = _identity(client, doc_id=b, speaker="SPEAKER_00").json()
+        assert body["speaker_cluster"] is None
+        assert body["n_videos"] == 1
+
+    def test_unknown_speaker_is_404(self, client_clustered) -> None:
+        client, (_, b, _) = client_clustered
+        assert _identity(client, doc_id=b, speaker="SPEAKER_42").status_code == 404
+
+    def test_unknown_doc_is_404(self, client_clustered) -> None:
+        client, _ = client_clustered
+        r = _identity(client, doc_id="ffffffffffffffff", speaker="SPEAKER_00")
+        assert r.status_code == 404
+
+    def test_non_whitelisted_doc_id_is_400(self, client_clustered) -> None:
+        client, _ = client_clustered
+        assert _identity(client, doc_id="x';DROP--", speaker="SPEAKER_00").status_code == 400
+
+    def test_no_speakers_table_is_503(self, client_embeddings_only) -> None:
+        client, (_, b, _) = client_embeddings_only
+        assert _identity(client, doc_id=b, speaker="SPEAKER_00").status_code == 503
+
+    def test_unbuilt_is_503(self, client_unbuilt) -> None:
+        r = _identity(client_unbuilt, doc_id="0123456789abcdef", speaker="SPEAKER_00")
+        assert r.status_code == 503
+
+
+class TestHitSpeakerCluster:
+    """The per-hit ``speaker_cluster`` joined from the speakers table."""
+
+    def test_get_hits_carry_cluster_id(self, client_clustered) -> None:
+        client, (a, b, _) = client_clustered
+        hits = _similar(client, doc_id=b, turn_id=0)["hits"]
+        by_speaker = {(h["doc_id"], h["speaker_label"]): h["speaker_cluster"] for h in hits}
+        assert by_speaker[(a, "SPEAKER_00")] == 7  # voice X's identity
+        assert by_speaker[(a, "SPEAKER_01")] is None  # noise (-1) → null, key present
+
+    def test_unclustered_table_yields_null(self, client_built) -> None:
+        client, (_, b, _) = client_built
+        hits = _similar(client, doc_id=b, turn_id=0)["hits"]
+        assert hits and all(h["speaker_cluster"] is None for h in hits)
+
+    def test_without_speakers_table_yields_null(self, client_embeddings_only) -> None:
+        client, (_, b, _) = client_embeddings_only
+        hits = _similar(client, doc_id=b, turn_id=0)["hits"]
+        assert hits and all(h["speaker_cluster"] is None for h in hits)
+
+    def test_upload_hits_carry_cluster_id(self, client_clustered) -> None:
+        client, (_, b, _) = client_clustered
+        client.app.state.resources.voice_encoder = _FakeVoiceEncoder(VX)
+        r = _upload(client, _wav_bytes(1.0))
+        assert r.status_code == 200, r.text
+        top = r.json()["hits"][0]
+        assert (top["doc_id"], top["speaker_label"]) == (b, "SPEAKER_00")
+        assert top["speaker_cluster"] == 7

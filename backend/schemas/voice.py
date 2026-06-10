@@ -47,10 +47,37 @@ class VoiceSimilarResponse(BaseModel):
 
     Each hit is the max-overlap ``chunks`` row for a matched speaker turn,
     augmented with ``speaker_label`` / ``turn_id`` / ``turn_start`` /
-    ``turn_end`` / ``_distance`` (cosine) / ``turn_score`` (1 − distance).
+    ``turn_end`` / ``_distance`` (cosine) / ``turn_score`` (1 − distance) /
+    ``speaker_cluster`` (the matched speaker's global identity id; ``None``
+    when unclustered or before ``raudio cluster-speakers`` has run).
     Deliberately ``dict`` hits, mirroring ``/api/search`` — the frontend
     renders one card type for everything.
     """
 
     query: VoiceAnchor
     hits: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class VoiceIdentityAppearance(BaseModel):
+    """One (``doc_id``, ``speaker_label``) member of a global identity cluster."""
+
+    doc_id: str
+    speaker_label: str
+    n_turns: int
+    total_duration: float
+
+
+class VoiceIdentityResponse(BaseModel):
+    """Every appearance of one global speaker identity (``GET /api/voice/identity``).
+
+    ``speaker_cluster`` is ``None`` when the anchor speaker is unclustered —
+    EVoC noise (-1), or ``raudio cluster-speakers`` hasn't run / the column is
+    absent — in which case ``appearances`` holds just the anchor itself.
+    Otherwise ``appearances`` lists every speaker sharing the cluster, sorted
+    by ``total_duration`` desc (most speech first), and ``n_videos`` counts
+    the distinct docs among them.
+    """
+
+    speaker_cluster: int | None
+    appearances: list[VoiceIdentityAppearance] = Field(default_factory=list)
+    n_videos: int

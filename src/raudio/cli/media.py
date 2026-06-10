@@ -1,7 +1,7 @@
 """Media + maintenance commands: ``thumbnail``, ``download``,
 ``extract-chunk-frames``, the speaker pipeline (``extract-speaker-turns`` →
-``embed-speaker-turns`` → ``build-speakers`` plus their shard merges), and
-``compact``."""
+``embed-speaker-turns`` → ``build-speakers`` → ``cluster-speakers`` plus their
+shard merges), and ``compact``."""
 
 from __future__ import annotations
 
@@ -9,13 +9,14 @@ import logging
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 import typer
 
 if TYPE_CHECKING:
     import lancedb
     import numpy as np
+    import pyarrow as pa
 
     from ..media.diarize import SpeakerTurn
     from ..media.voiceprint import TurnSpan
@@ -941,6 +942,281 @@ def cmd_build_speakers(ctx: typer.Context) -> None:
         logger.info("built BTREE scalar index on speakers.doc_id")
     except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
         logger.debug("scalar index (speakers.doc_id) skipped: %s", e)
+
+
+#: Human-verified same-person pair for ``cluster-speakers --validate``, pinned
+#: to explicit (doc_id, speaker_label, tag). Derived from
+#: evals/voice_labels_T0001889_c225.json: the query chunk 225 (6187-6216 s of
+#: T0001889) overlaps only SPEAKER_13's diarized turns, and every "same"-labeled
+#: hit (T0001814 chunks 8/11/47) overlaps only SPEAKER_00's. Deliberately NOT
+#: "the doc's largest-total_duration speaker": T0001889 is a 16-speaker panel
+#: whose duration-max speaker (SPEAKER_01) is a *different* person — centroid
+#: cosine 0.07 to the match, vs 0.79 for SPEAKER_13.
+_VALIDATION_CONFIRMED_PAIR: Final = (
+    ("3df1a0687de89603", "SPEAKER_13", "T0001889"),
+    ("6f159850b4e28320", "SPEAKER_00", "T0001814"),
+)
+
+#: T0001786's main speaker (largest total_duration — that doc has no chunk-level
+#: labels to pin an explicit speaker) is strongly *suspected* (not
+#: human-confirmed) to be the same person as the confirmed pair, so it is
+#: reported informationally — never as a hard FAIL. Its doc_id is resolved via
+#: the chunks table at runtime.
+_VALIDATION_SUSPECTED_AUDIO: Final = "T0001786_00001.mp4"
+
+
+def _doc_id_for_audio_path(cfg: CliContext, audio_path: str) -> str | None:
+    """First chunks ``doc_id`` whose ``audio_path`` ends with ``audio_path`` (or None)."""
+    import lance
+
+    chunks_path = cfg.db / f"{cfg.table}.lance"
+    if not chunks_path.exists():
+        return None
+    rows = (
+        lance.dataset(str(chunks_path))
+        .to_table(columns=["doc_id"], filter=f"audio_path LIKE '%{audio_path}'", limit=1)
+        .to_pylist()
+    )
+    return rows[0]["doc_id"] if rows else None
+
+
+def _validate_known_identities(cfg: CliContext, speakers: pa.Table, clusters: np.ndarray) -> None:
+    """Print PASS/FAIL for the confirmed same-person pair (+ the suspected one).
+
+    The confirmed pair is looked up by its explicit human-labeled
+    (doc_id, speaker_label); the suspected doc falls back to its
+    largest-total_duration speaker. Reports honestly against whatever
+    assignment EVoC produced — the gate that runs ``--validate`` decides
+    whether a FAIL means rejecting the clustering, loosening
+    ``--min-cluster-size``, or shipping the feature as experimental.
+    """
+    doc_ids = speakers["doc_id"].to_pylist()
+    labels = speakers["speaker_label"].to_pylist()
+    durations = speakers["total_duration"].to_pylist()
+
+    def cluster_of(doc_id: str, label: str) -> int | None:
+        for i, d in enumerate(doc_ids):
+            if d == doc_id and labels[i] == label:
+                return int(clusters[i])
+        return None
+
+    def main_speaker(doc_id: str) -> tuple[str, int] | None:
+        """(speaker_label, cluster) of the doc's longest-speaking speaker."""
+        best: tuple[float, str, int] | None = None
+        for i, d in enumerate(doc_ids):
+            if d == doc_id and (best is None or float(durations[i]) > best[0]):
+                best = (float(durations[i]), labels[i], int(clusters[i]))
+        return None if best is None else (best[1], best[2])
+
+    def show(cluster: int) -> str:
+        return "noise" if cluster < 0 else str(cluster)
+
+    typer.echo("Validation — known same-person pairs (human-labeled speakers):", err=True)
+    (doc_a, label_a, tag_a), (doc_b, label_b, tag_b) = _VALIDATION_CONFIRMED_PAIR
+    cl_a = cluster_of(doc_a, label_a)
+    cl_b = cluster_of(doc_b, label_b)
+    if cl_a is None or cl_b is None:
+        missing = ", ".join(tag for tag, found in ((tag_a, cl_a), (tag_b, cl_b)) if found is None)
+        typer.echo(f"  [FAIL] {tag_a} ↔ {tag_b}: no speakers row(s) for {missing}", err=True)
+        return
+    same = cl_a == cl_b and cl_a >= 0
+    typer.echo(
+        f"  [{'PASS' if same else 'FAIL'}] {tag_a} labeled speaker ({label_a}, "
+        f"cluster {show(cl_a)}) {'==' if same else '!='} {tag_b} labeled speaker "
+        f"({label_b}, cluster {show(cl_b)})",
+        err=True,
+    )
+
+    suspect_doc = _doc_id_for_audio_path(cfg, _VALIDATION_SUSPECTED_AUDIO)
+    suspect = main_speaker(suspect_doc) if suspect_doc is not None else None
+    if suspect is None:
+        typer.echo(
+            f"  [info] suspected T0001786: no chunks/speakers row for "
+            f"{_VALIDATION_SUSPECTED_AUDIO} — skipped",
+            err=True,
+        )
+        return
+    label_s, cl_s = suspect
+    typer.echo(
+        f"  [info] suspected T0001786 main speaker ({label_s}, cluster {show(cl_s)}) — "
+        f"matches {tag_a}: {'yes' if cl_s >= 0 and cl_s == cl_a else 'no'}, "
+        f"matches {tag_b}: {'yes' if cl_s >= 0 and cl_s == cl_b else 'no'} "
+        "(suspected, not a hard FAIL)",
+        err=True,
+    )
+
+
+#: A cluster layer is identity-usable only while its within-video false-merge
+#: rate stays small: two *different* diarized speaker labels in one video are
+#: almost surely different people (diarization separated them by voice), so
+#: same-doc co-membership inside a cluster measures false merges with no human
+#: labels. Diarization over-segmentation makes the metric overcount (reuniting
+#: a split speaker is correct but penalized), so it biases toward precision.
+_MAX_SAME_DOC_MERGE_RATE: Final = 0.05
+
+
+def _same_doc_merge_rate(labels: np.ndarray, doc_ids: list[str]) -> float:
+    """Fraction of clustered members that share a doc with a co-member (0 if none clustered)."""
+    members_by_cluster: dict[int, list[int]] = {}
+    for i, c in enumerate(labels):
+        if c >= 0:
+            members_by_cluster.setdefault(int(c), []).append(i)
+    clustered = sum(len(m) for m in members_by_cluster.values())
+    if clustered == 0:
+        return 0.0
+    dup = sum(len(m) - len({doc_ids[i] for i in m}) for m in members_by_cluster.values())
+    return dup / clustered
+
+
+def _select_identity_layer(
+    clusterer: Any, doc_ids: list[str]
+) -> tuple[np.ndarray, int, float] | None:
+    """(labels, layer index, false-merge rate) of the coarsest identity-usable layer.
+
+    EVoC's own ``labels_`` is the *persistence*-max layer — the dominant density
+    scale, which for these voiceprints is the recording channel (measured on the
+    real table: 6 clusters, largest 2,667, 45% within-video false merges), an
+    order of magnitude coarser than people. For identity we instead take the
+    coarsest ``cluster_layers_`` entry (layers run fine → coarse) whose
+    within-video false-merge rate stays ≤ :data:`_MAX_SAME_DOC_MERGE_RATE` —
+    coarser links more cross-video appearances of one person; the bound caps
+    demonstrable merges of different people. ``None`` when no layer qualifies.
+    """
+    import numpy as np
+
+    for li in range(len(clusterer.cluster_layers_) - 1, -1, -1):
+        labels = np.asarray(clusterer.cluster_layers_[li], dtype=np.int32)
+        rate = _same_doc_merge_rate(labels, doc_ids)
+        if rate <= _MAX_SAME_DOC_MERGE_RATE:
+            return labels, li, rate
+    return None
+
+
+@app.command("cluster-speakers")
+def cmd_cluster_speakers(
+    ctx: typer.Context,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="EVoC random_state — the assignment is reproducible."),
+    ] = 42,
+    min_cluster_size: Annotated[
+        int,
+        typer.Option(
+            "--min-cluster-size",
+            help=(
+                "EVoC base_min_cluster_size (EVoC's own default is 5); "
+                "lower it if known identities land in noise."
+            ),
+        ),
+    ] = 5,
+    validate: Annotated[
+        bool,
+        typer.Option("--validate", help="Check the known same-person pairs and print PASS/FAIL."),
+    ] = False,
+) -> None:
+    """Globally cluster speaker voiceprints → ``speakers.speaker_cluster`` (overwrite).
+
+    Fits :class:`evoc.EVoC` (default ``n_neighbors``; ``-1`` = noise — the same
+    estimator idiom as the Atlas projection, but seeded by default: identity
+    assignment must be reproducible) over the ``speakers`` embedding matrix and
+    rewrites the table wholesale with the new ``speaker_cluster`` column
+    (mirrors ``build-speakers`` — the table is tiny). The written assignment is
+    the layer :func:`_select_identity_layer` picks, NOT EVoC's persistence-max
+    ``labels_`` (channel-scale here — see the helper). Cluster ids are a
+    partition, not stable names: a re-run with other parameters renumbers them.
+    """
+    from ..features.projection import _ATLAS_INSTALL_HINT
+
+    try:
+        import evoc
+    except ImportError:
+        _die(_ATLAS_INSTALL_HINT)
+    import lance
+    import lancedb
+    import numpy as np
+    import pyarrow as pa
+
+    from ..model.schema import SPEAKERS_SCHEMA, SPEAKERS_STORAGE_VERSION, VOICE_EMBED_DIM
+
+    cfg: CliContext = ctx.obj
+    db = lancedb.connect(str(cfg.db))
+    if "speakers" not in db.list_tables().tables:
+        _die(f"Table 'speakers' not found in {cfg.db} — run `raudio build-speakers` first.")
+
+    speakers_path = cfg.db / "speakers.lance"
+    tbl = lance.dataset(str(speakers_path)).to_table()
+    if tbl.num_rows == 0:
+        _die("speakers is empty — run `raudio build-speakers` first.")
+    emb = tbl["embedding"].combine_chunks()
+    if emb.null_count > 0:
+        _die(
+            f"speakers.embedding has {emb.null_count} NULL row(s) — "
+            "rebuild with `raudio build-speakers` first."
+        )
+    matrix = (
+        emb.flatten().to_numpy(zero_copy_only=False).reshape(-1, VOICE_EMBED_DIM).astype(np.float32)
+    )
+
+    typer.echo(
+        f"EVoC clustering {tbl.num_rows:,} speaker voiceprint(s) "
+        f"(seed={seed}, min_cluster_size={min_cluster_size}) …",
+        err=True,
+    )
+    clusterer = evoc.EVoC(base_min_cluster_size=min_cluster_size, random_state=seed)
+    auto_labels = clusterer.fit_predict(matrix)
+    doc_id_list: list[str] = tbl["doc_id"].to_pylist()
+    selected = _select_identity_layer(clusterer, doc_id_list)
+    if selected is None:
+        clusters = np.asarray(auto_labels, dtype=np.int32)
+        typer.echo(
+            "  [warn] no EVoC layer met the ≤"
+            f"{_MAX_SAME_DOC_MERGE_RATE:.0%} within-video false-merge bound — "
+            f"falling back to EVoC's own layer choice "
+            f"(false-merge {_same_doc_merge_rate(clusters, doc_id_list):.1%}).",
+            err=True,
+        )
+    else:
+        clusters, layer_idx, merge_rate = selected
+        typer.echo(
+            f"  identity layer: {layer_idx + 1}/{len(clusterer.cluster_layers_)} "
+            f"(fine→coarse), within-video false-merge {merge_rate:.1%} "
+            f"(EVoC's own persistence-max layer: "
+            f"{_same_doc_merge_rate(np.asarray(auto_labels, dtype=np.int32), doc_id_list):.1%}).",
+            err=True,
+        )
+
+    out = tbl.set_column(
+        tbl.schema.get_field_index("speaker_cluster"),
+        SPEAKERS_SCHEMA.field("speaker_cluster"),
+        pa.array(clusters, pa.int32()),
+    ).cast(SPEAKERS_SCHEMA)
+    lance.write_dataset(
+        out,
+        str(speakers_path),
+        mode="overwrite",
+        data_storage_version=SPEAKERS_STORAGE_VERSION,
+    )
+
+    # The overwrite invalidates the BTREE index build-speakers made — rebuild it.
+    speakers_tbl = db.open_table("speakers")
+    try:
+        speakers_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)
+        logger.info("rebuilt BTREE scalar index on speakers.doc_id")
+    except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
+        logger.debug("scalar index (speakers.doc_id) skipped: %s", e)
+
+    n_noise = int((clusters < 0).sum())
+    ids, sizes = np.unique(clusters[clusters >= 0], return_counts=True)
+    typer.echo(f"  clusters found: {len(ids):,}", err=True)
+    typer.echo(f"  noise (unclustered): {n_noise:,} / {len(clusters):,}", err=True)
+    if len(ids):
+        order = np.argsort(sizes)[::-1]
+        typer.echo(f"  largest cluster: {int(sizes[order[0]]):,} speaker(s)", err=True)
+        top = ", ".join(f"{int(ids[i])}: {int(sizes[i])}" for i in order[:10])
+        typer.echo(f"  top 10 cluster sizes (id: size): {top}", err=True)
+
+    if validate:
+        _validate_known_identities(cfg, tbl, clusters)
 
 
 @app.command("compact")

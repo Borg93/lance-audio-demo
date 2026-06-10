@@ -22,6 +22,7 @@ sidecar JSON files or disk walks at query time.
 - [`docs/PIPELINE.md`](docs/PIPELINE.md) — the ASR pipeline & models (easytranscriber / easyaligner, KB-Whisper, wav2vec2, MMS-LID).
 - [`docs/STORAGE.md`](docs/STORAGE.md) — how raudio uses Lance (Blob V2 tiers, JSONB, IVF_PQ / FTS).
 - [`docs/EMBEDDINGS.md`](docs/EMBEDDINGS.md) — Qwen3-VL embeddings + reranking over vLLM.
+- [`docs/VOICE.md`](VOICE.md) — speaker voiceprints + cross-video voice search (pyannote WeSpeaker, `/api/voice`).
 - [`docs/INVESTIGATION.md`](docs/INVESTIGATION.md) — root-cause analysis of the Lance indexation + vLLM crash issues.
 
 ---
@@ -184,8 +185,9 @@ blob column — it is pure timeline metadata (anonymous label + absolute-second
 is an optional scalar BTREE on `doc_id` to speed the per-video lookup at
 full-corpus scale. The labels (`SPEAKER_00`, `SPEAKER_01`, …) are **anonymous and
 local to one video** — they identify distinct speakers *within* that recording but
-carry no identity across videos (that cross-video "voice search" axis is a
-separate, *unshipped* effort — see [TODO.md](TODO.md)).
+carry no identity across videos (the cross-video "voice search" axis is built
+*on top of* these turns — per-turn voiceprints + `/api/voice`, see
+[VOICE.md](VOICE.md)).
 
 **Blob V2 cheat-sheet** (load-bearing constraints):
 
