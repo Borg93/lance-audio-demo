@@ -71,6 +71,20 @@ _GROUP_ADJ = frozenset(
 )
 _DEMONSTRATIVES = frozenset({"de", "den", "det", "dom", "dessa", "vissa"})
 
+# Job-title acronyms / role words that read as a named person but are roles:
+# VD (CEO), ÖB (supreme commander), GD (director-general), "Särskilda Utredaren".
+# Matched as a whole single token or as the LAST token of a phrase
+# ("Försvarsmakten ÖB", "Kommunstyrelsens Ordförande").
+_TITLE_WORDS = frozenset(
+    {
+        "vd", "öb", "gd", "vvd", "vvd:n", "utredaren", "utredare", "talespersonen",
+        "talesperson", "talesman", "talesmannen", "företrädare", "företrädaren",
+        "samordnare", "samordnaren", "handläggare", "föredragande", "rapportören",
+        "rapportör", "generaldirektören", "generaldirektör", "landshövdingen",
+        "landshövding", "statssekreteraren", "statssekreterare",
+    }
+)
+
 # Named-law / treaty suffixes are definite-form but ARE real entities — never
 # flag these (Miljöbalken, Grundlagen, Kyotoprotokollet, Tjänstedirektivet).
 _LAW_SUFFIXES = ("balken", "lagen", "lagstiftningen", "protokollet", "förordningen", "direktivet", "fördraget")
@@ -130,7 +144,7 @@ def is_generic_person(name: str) -> bool:
     # generic head OR the phrase starts with a demonstrative ("De Anhöriga"),
     # it's a group descriptor.
     if len(tokens) > 1:
-        if tokens[0] in _DEMONSTRATIVES or _is_head(tokens[-1]):
+        if tokens[0] in _DEMONSTRATIVES or _is_head(tokens[-1]) or tokens[-1] in _TITLE_WORDS:
             return True
         if any(_is_head(t) for t in tokens):
             return True
@@ -143,7 +157,7 @@ def is_generic_person(name: str) -> bool:
     # Single token
     if low in _GIVEN_NAMES:
         return False
-    if low in _STOP_EXACT or low in _GROUP_ADJ:
+    if low in _STOP_EXACT or low in _GROUP_ADJ or low in _TITLE_WORDS:
         return True
     if _is_head(low):
         return True
