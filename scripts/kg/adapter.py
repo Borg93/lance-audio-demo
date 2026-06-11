@@ -353,18 +353,51 @@ def main() -> None:
             m_src.append(eid)
             m_dst.append(ck)
     mentions_tbl = pa.table({"source_entity_id": m_src, "target_chunk_id": m_dst})
+
+    # Collapse one-row-per-chunk into ONE weighted edge per (source,target):
+    # the model re-asserts the same relation in every co-occurring chunk
+    # (Sverige→EU appeared 307×), bloating the table and the hub degrees. Keep
+    # weight=distinct-chunk count and the longest (most informative) description.
+    pair_chunks: dict[tuple[str, str], set[str]] = defaultdict(set)
+    pair_best: dict[tuple[str, str], dict] = {}
+    for r in rels:
+        key = (r["source_entity_id"], r["target_entity_id"])
+        pair_chunks[key].add(r["chunk_id"])
+        prev = pair_best.get(key)
+        if prev is None or len(r["description"]) > len(prev["description"]):
+            pair_best[key] = r
+    collapsed = [
+        {
+            "source_entity_id": s,
+            "target_entity_id": t,
+            "relationship_type": "RELATIONSHIP",
+            "description": pair_best[(s, t)]["description"],
+            "weight": len(pair_chunks[(s, t)]),
+            "chunk_id": pair_best[(s, t)]["chunk_id"],
+            "doc_id": pair_best[(s, t)]["doc_id"],
+        }
+        for (s, t) in pair_chunks
+    ]
+    print(f"edges: {len(rels)} chunk-rows -> {len(collapsed)} weighted pairs")
+
     cols = (
         "source_entity_id",
         "target_entity_id",
         "relationship_type",
         "description",
+        "weight",
         "chunk_id",
         "doc_id",
     )
     rel_tbl = (
-        pa.table({k: [r[k] for r in rels] for k in cols})
-        if rels
-        else pa.table({k: [] for k in cols}, schema=pa.schema([(k, pa.string()) for k in cols]))
+        pa.table({k: [r[k] for r in collapsed] for k in cols})
+        if collapsed
+        else pa.table(
+            {k: [] for k in cols},
+            schema=pa.schema(
+                [(k, pa.int64() if k == "weight" else pa.string()) for k in cols]
+            ),
+        )
     )
 
     tables = {
