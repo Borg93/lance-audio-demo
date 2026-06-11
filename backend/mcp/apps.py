@@ -178,11 +178,13 @@ def register_app_tools(mcp: FastMCP, state: AppState) -> None:
         video_name: str | None = None,
         topic: str | None = None,
     ) -> ToolResult:
-        """Search AND show the hits as an interactive table the user can sort,
-        search, and read — use when the user wants to BROWSE results rather
-        than have you summarize them. Same arguments as ``search_chunks``.
-        You receive a text summary of the top hits (with doc_id and start_s)
-        so you can keep reasoning or open one with ``show_clip``.
+        """Search Riksarkivet's moving-image archive (rörlig bild: film/video/
+        audio recordings) AND show the hits as an interactive table the user
+        can sort, search, and read — use when the user wants to BROWSE results
+        rather than have you summarize them. Same arguments as
+        ``search_chunks``. You receive a text summary of the top hits (with
+        doc_id and start_s) so you can keep reasoning or open one with
+        ``show_clip``.
         """
         hits = compact_search(
             state,
@@ -213,11 +215,12 @@ def register_app_tools(mcp: FastMCP, state: AppState) -> None:
 
     @mcp.tool(app=AppConfig(resource_uri=_CLIP_URI))
     def show_clip(doc_id: str, start_s: float, window_s: float = 45.0) -> ToolResult:
-        """Show the actual VIDEO at one moment, with the surrounding transcript
-        beside it (clicking a transcript line seeks the player). Use after a
-        search when the user wants to watch/hear a hit: pass the hit's
-        ``doc_id`` and ``start_s``. Requires the raudio backend to be
-        reachable from the user's machine (it streams the media).
+        """Show the actual archive VIDEO at one moment, with the surrounding
+        transcript beside it (clicking a transcript line seeks the player).
+        Use after a search when the user wants to watch/hear a recording from
+        the rörlig bild archive: pass the hit's ``doc_id`` and ``start_s``.
+        Requires the raudio backend to be reachable from the user's machine
+        (it streams the media).
         """
         window = transcript_window(state, doc_id=doc_id, center_s=start_s, window_s=window_s)
         clip = {

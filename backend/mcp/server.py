@@ -21,8 +21,16 @@ from backend.mcp.tools import register_tools
 from backend.state import AppState
 
 _INSTRUCTIONS = """\
-Tools over a corpus of Swedish archive/parliamentary videos with ASR
+This server covers Riksarkivet's MOVING-IMAGE archive ("rörlig bild" — the
+Swedish National Archives' audiovisual collection): digitized film, video and
+audio recordings such as press conferences, press releases, seminars, and
+government/parliamentary recordings, made searchable through ASR speech
 transcripts, topic clusters, speaker voiceprints, and a knowledge graph.
+Use these tools whenever the question is about what was SAID, FILMED or
+RECORDED — spoken content, voices, video clips. For Riksarkivet's WRITTEN or
+scanned documents (church records, court records, registers, letters), use
+the riksarkivet/ra-mcp document server instead; this server holds only
+audiovisual material.
 Content questions: start with `search_chunks`, then expand promising hits with
 `get_transcript_window`. Person-by-voice questions: `find_similar_voices`.
 Entity/connection questions: `query_knowledge_graph`. Corpus overview / exact

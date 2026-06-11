@@ -152,7 +152,10 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
         video_name: str | None = None,
         topic: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Search the transcript corpus (Swedish parliamentary/archive videos).
+        """Search speech transcripts of Riksarkivet's moving-image archive
+        (rörlig bild): digitized film/video/audio recordings — press
+        conferences, press releases, seminars, government recordings. NOT for
+        written/scanned documents (use the riksarkivet document tools there).
 
         Use this FIRST for any content question — unless the user wants to
         browse the results themselves, then call ``show_search_results``
@@ -180,7 +183,8 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
         center_s: float,
         window_s: float = 60.0,
     ) -> dict[str, Any]:
-        """The transcript around one moment of one video — context expansion.
+        """The speech transcript around one moment of one archive recording
+        (film/video/audio) — context expansion.
 
         Use after ``search_chunks`` or ``find_similar_voices``: pass the hit's
         ``doc_id`` and its ``start_s`` (``turn_start_s`` for voice hits) as
@@ -191,9 +195,10 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
 
     @mcp.tool
     def find_similar_voices(doc_id: str, t: float, n: int = 8) -> dict[str, Any]:
-        """Find other moments where the SAME-SOUNDING voice speaks (other videos).
+        """Find other moments where the SAME-SOUNDING voice speaks, across the
+        archive's film/video/audio recordings.
 
-        Anchor = whoever is speaking in video ``doc_id`` at ``t`` seconds.
+        Anchor = whoever is speaking in recording ``doc_id`` at ``t`` seconds.
         Ranks diarized speaker turns across the corpus by voiceprint
         similarity. Use to follow a person across recordings; note it matches
         the VOICE, not the textual content.
@@ -236,7 +241,8 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
 
     @mcp.tool
     def query_knowledge_graph(cypher: str) -> list[dict[str, Any]]:
-        """Run a read-only Cypher query over the corpus knowledge graph.
+        """Run a read-only Cypher query over the knowledge graph extracted
+        from the archive recordings' speech transcripts.
 
         Schema — nodes: ``Entity(entity_id, name, entity_type, mention_count)``
         and ``Chunk(chunk_id, doc_id)``; relationships:
@@ -260,9 +266,10 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
 
     @mcp.tool
     def list_topics() -> dict[str, Any]:
-        """The corpus topic hierarchy (Swedish topic names, nested, with chunk
-        counts). Use to discover what the corpus covers and to get exact topic
-        names for ``search_chunks(topic=...)``.
+        """The topic hierarchy of Riksarkivet's moving-image corpus (Swedish
+        topic names, nested, with chunk counts). Use to discover what the
+        recordings cover and to get exact topic names for
+        ``search_chunks(topic=...)``.
         """
         resp = get_topics(state)
         if not resp.built:
