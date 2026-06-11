@@ -87,42 +87,62 @@
     },
   ];
 
-  // Plain-language questions with their Cypher — rendered in the help panel,
-  // one click fills the REPL and runs (all verified against the live engine).
+  // Plain-language question + what it shows + the Cypher. One click fills the
+  // REPL and runs (all verified against the live engine).
   const HELP_EXAMPLES = [
     {
-      label: 'Who are the named, identifiable people? (full names)',
+      label: 'Who are the people?',
+      desc: 'Named individuals only (full names), ranked by how many clips mention them.',
       query:
         "MATCH (a:Entity) WHERE a.entity_type = 'PERSON' AND a.name CONTAINS ' ' RETURN a.name, a.mention_count ORDER BY a.mention_count DESC LIMIT 20",
     },
     {
-      label: 'What was discussed most? (topics)',
+      label: 'What were the topics?',
+      desc: 'The most-discussed concepts and policy areas across every press conference.',
       query:
         "MATCH (a:Entity) WHERE a.entity_type = 'CONCEPT' RETURN a.name, a.mention_count ORDER BY a.mention_count DESC LIMIT 20",
     },
     {
-      label: 'Strongest relationships (by how often co-stated)',
+      label: 'Central players (hubs)',
+      desc: 'Entities with the most connections — the gravitational centres of the whole conversation.',
+      query:
+        'MATCH (a:Entity)-[:RELATIONSHIP]->(b:Entity) RETURN a.name, a.entity_type, count(b.entity_id) AS connections ORDER BY connections DESC LIMIT 15',
+    },
+    {
+      label: 'Strongest links',
+      desc: 'Relationships asserted most often (weight = shared clips), e.g. Sweden↔EU. Each row carries the relation text.',
       query:
         'MATCH (a:Entity)-[r:RELATIONSHIP]->(b:Entity) RETURN a.name, b.name, r.weight, r.description ORDER BY r.weight DESC LIMIT 15',
     },
     {
-      label: 'What is Göran Persson connected to?',
+      label: "One person's network",
+      desc: "Everything Göran Persson is linked to. Swap the name (lower-case) to explore anyone.",
       query:
         "MATCH (a:Entity)-[:RELATIONSHIP]-(b:Entity) WHERE a.name_lower = 'göran persson' RETURN b.name, b.entity_type LIMIT 25",
     },
     {
-      label: 'Which organisations come up alongside the EU?',
+      label: 'Who comes up with the EU?',
+      desc: 'Organisations most often mentioned in the same clips as the EU (co-occurrence).',
       query:
-        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk)<-[:MENTIONS]-(b:Entity) WHERE a.name_lower = 'eu' AND b.entity_type = 'ORG' RETURN b.name, count(c.chunk_id) AS shared ORDER BY shared DESC LIMIT 12",
+        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk)<-[:MENTIONS]-(b:Entity) WHERE a.name_lower = 'eu' AND b.entity_type = 'ORG' AND b.name_lower <> 'eu' RETURN b.name, count(c.chunk_id) AS shared ORDER BY shared DESC LIMIT 12",
     },
     {
-      label: 'A person across the timeline (their clips)',
+      label: 'A person on the timeline',
+      desc: 'Every clip mentioning Carl Bildt, in order — click a result row to jump to that moment in the video.',
       query:
         "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk) WHERE a.name_lower = 'carl bildt' RETURN c.namn, c.start_s, c.text ORDER BY c.start_s LIMIT 20",
     },
     {
-      label: 'Find entities matching a word (e.g. miljö)',
-      query: "MATCH (a:Entity) WHERE a.name_lower CONTAINS 'miljö' RETURN a.name, a.entity_type, a.mention_count LIMIT 20",
+      label: 'Topics tied to a place',
+      desc: 'Which concepts come up alongside Sweden — what the country is discussed in terms of.',
+      query:
+        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk)<-[:MENTIONS]-(b:Entity) WHERE a.name_lower = 'sverige' AND b.entity_type = 'CONCEPT' RETURN b.name, count(c.chunk_id) AS shared ORDER BY shared DESC LIMIT 15",
+    },
+    {
+      label: 'Search by word',
+      desc: 'Find any entity whose name contains a word (try miljö, skatt, vård…).',
+      query:
+        "MATCH (a:Entity) WHERE a.name_lower CONTAINS 'miljö' RETURN a.name, a.entity_type, a.mention_count LIMIT 20",
     },
   ];
 
@@ -582,21 +602,22 @@
 
       {#if cypherOpen || view !== 'graph'}
         <aside
-          class="border-border bg-card/20 w-60 shrink-0 space-y-1 overflow-auto border-l p-2"
+          class="border-border bg-card/20 w-80 shrink-0 space-y-2 overflow-auto border-l p-3"
         >
-          <p
-            class="text-muted-foreground mb-1 px-1 text-[10px] font-semibold tracking-wide uppercase"
-          >
-            Example queries
-          </p>
+          <div>
+            <p class="text-foreground text-sm font-semibold">Example questions</p>
+            <p class="text-muted-foreground text-xs">Click one to run it — results show on the left.</p>
+          </div>
           {#each HELP_EXAMPLES as ex (ex.label)}
             <button
-              class="border-border bg-background hover:bg-secondary/60 block w-full rounded border px-2 py-1 text-left"
+              class="border-border bg-background hover:border-primary/50 hover:bg-secondary/50 block w-full space-y-1 rounded-md border p-2.5 text-left transition-colors"
               onclick={() => runExample(ex.query)}
             >
-              <span class="text-foreground text-xs">{ex.label}</span>
+              <span class="text-foreground block text-sm font-medium">{ex.label}</span>
+              <span class="text-muted-foreground block text-xs leading-snug">{ex.desc}</span>
               <code
-                class="text-muted-foreground mt-0.5 block truncate font-mono text-[10px]">{ex.query}</code
+                class="text-muted-foreground/80 mt-1 block truncate rounded bg-muted/50 px-1.5 py-0.5 font-mono text-[10px]"
+                >{ex.query}</code
               >
             </button>
           {/each}
