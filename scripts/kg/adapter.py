@@ -31,7 +31,7 @@ import networkx as nx
 import pyarrow as pa
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from generic_sv import clean_desc, is_generic_person, is_url
+from generic_sv import clean_desc, is_generic_common, is_generic_person, is_url
 
 SEP = "<SEP>"  # GRAPH_FIELD_SEP in lightrag 1.5.x
 
@@ -199,10 +199,14 @@ def main() -> None:
             eid = slug(name)
             ent_name[eid] = name
             new_type = norm_type(data.get("entity_type"))
-            # gemma tags generic group/role nouns (Politiker, Konsumenter, Unga
-            # Människor) as PERSON — demote those to OTHER deterministically so
-            # "most-mentioned people" returns actual named individuals.
-            if new_type == "PERSON" and is_generic_person(name):
+            # gemma tags generic group/role/category nouns as named entities —
+            # demote them to OTHER deterministically so the type-ranked overview
+            # surfaces real individuals/places/works/events/orgs, not categories:
+            #   PERSON           Politiker, Konsumenter, Unga Människor, VD
+            #   GEO/WORK/EVENT/ORG  Arbetsplats, Rapporten, Möte, Företag
+            if (new_type == "PERSON" and is_generic_person(name)) or (
+                new_type in ("GEO", "WORK", "EVENT", "ORG") and is_generic_common(name)
+            ):
                 new_type = "OTHER"
             if ent_type.get(eid) in (None, "OTHER"):  # prefer a concrete type across shards
                 ent_type[eid] = new_type

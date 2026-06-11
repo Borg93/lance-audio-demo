@@ -112,3 +112,55 @@ def test_truncate_desc_word_boundary() -> None:
 
 def test_truncate_desc_passthrough_when_short() -> None:
     assert adapter.truncate_desc("Regeringen styr Sverige.") == "Regeringen styr Sverige."
+
+
+# --- generic-noun classifier (scripts/kg/generic_sv.py), reached via adapter ---
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # PERSON-typed group/role nouns
+        "Politiker", "Invandrare", "Konsumenter", "Unga Människor", "De Anhöriga",
+        "Justitieministern", "VD", "ÖB", "Försvarsmakten ÖB", "Utredaren",
+    ],
+)
+def test_generic_person_catches_groups_and_roles(name: str) -> None:
+    assert adapter.is_generic_person(name) is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Anders", "Lars Eriksson", "Göran Persson", "Eva", "Carl Bildt", "Ingvar Kamprad"],
+)
+def test_generic_person_keeps_real_names(name: str) -> None:
+    assert adapter.is_generic_person(name) is False
+
+
+@pytest.mark.parametrize(
+    "name",
+    [  # GEO / WORK / EVENT / ORG category nouns, not named entities
+        "Arbetsplats", "Skolan", "Bankkontor", "Rapporten", "Propositionen",
+        "Betänkandet", "Möte", "Debatten", "Presskonferens", "Företaget", "Nämnden",
+    ],
+)
+def test_generic_common_catches_categories(name: str) -> None:
+    assert adapter.is_generic_common(name) is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    [  # real named places/works/events/orgs — incl. definite-form laws/regions
+        "Sverige", "Stockholm", "Norrland", "Miljöbalken", "Kyotoprotokollet",
+        "Volvo", "Försvarsmakten", "Riksbanken", "Saltsjöbadsavtalet", "EU",
+    ],
+)
+def test_generic_common_keeps_named_entities(name: str) -> None:
+    assert adapter.is_generic_common(name) is False
+
+
+def test_generic_classifiers_are_deterministic() -> None:
+    # byte-stable: same input -> same verdict, no LLM, no randomness
+    for name in ("Politiker", "Arbetsplats", "Lars Eriksson", "Sverige"):
+        assert adapter.is_generic_person(name) == adapter.is_generic_person(name)
+        assert adapter.is_generic_common(name) == adapter.is_generic_common(name)

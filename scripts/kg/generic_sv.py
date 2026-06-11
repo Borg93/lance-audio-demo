@@ -161,7 +161,6 @@ def is_generic_person(name: str) -> bool:
         return True
     if _is_head(low):
         return True
-    base = _strip_suffix(low)
     if low.endswith(_AGENT_SUFFIXES):  # politiker, invandrare, jurist...
         return True
     if low.endswith(("minister", "ministern", "direktör", "direktören", "ordförande", "chefen")):
@@ -169,6 +168,51 @@ def is_generic_person(name: str) -> bool:
     # productive noun plurals (konsumenter, revisorer, flyktingar) — but not a
     # whitelisted given name and long enough to be a real common noun.
     return len(low) >= 6 and low.endswith(("er", "ar", "or")) and low not in _GIVEN_NAMES
+
+
+# Generic common nouns the model tags as GEO / WORK / EVENT / ORG but which are
+# categories, not named entities. Explicit blocklist (NOT morphology) because
+# Swedish named laws/regions are also definite-form (Miljöbalken, Norrland) and
+# must survive — only KNOWN generics are listed. Matched as a whole name after
+# suffix-stripping; the named-law guard in is_generic_person also applies.
+_GENERIC_COMMON = frozenset(
+    {
+        # GEO that aren't places
+        "arbetsplats", "arbetsplatsen", "skola", "skolan", "skolor", "bankkontor",
+        "periferi", "periferin", "centrum", "glesbygd", "glesbygden", "glesbygdsområden",
+        "län", "länet", "kommun", "region", "regionen", "landet", "orten", "platsen",
+        "miljön", "miljö", "hemmet", "hemma", "stad", "staden", "städer", "tätort",
+        # WORK that aren't specific works
+        "rapport", "rapporten", "rapporter", "proposition", "propositionen",
+        "förslag", "förslaget", "dokument", "dokumentet", "betänkande", "betänkandet",
+        "skrivelse", "skrivelsen", "promemoria", "utredningen", "utredning",
+        "utredningar", "lagförslag", "remiss", "remissen", "avtal", "avtalet",
+        "beslut", "beslutet", "brev", "brevet", "artikel", "artikeln", "boken", "bok",
+        # EVENT that aren't specific events
+        "möte", "mötet", "möten", "debatt", "debatten", "krig", "kriget",
+        "presskonferens", "presskonferensen", "lunch", "tvist", "tvister",
+        "konferens", "konferensen", "sammanträde", "sammanträdet", "seminarium",
+        "seminariet", "förhandling", "förhandlingar", "val", "valet", "kris", "krisen",
+        "process", "processen", "projekt", "projektet", "reform", "reformen",
+        # ORG that aren't specific orgs
+        "företag", "företaget", "myndighet", "myndigheten", "organisation",
+        "organisationen", "samhället", "marknaden", "staten", "regering",
+        "näringslivet", "kommittén", "kommitté", "nämnden", "nämnd", "styrelsen",
+        "styrelse", "förvaltningen", "förvaltning", "branschen", "bransch",
+    }
+)
+
+
+def is_generic_common(name: str) -> bool:
+    """True when a non-PERSON name is a generic category noun, not a named
+    entity (Arbetsplats, Rapporten, Möte, Företag). Named laws/regions are
+    protected by the law-suffix guard so e.g. Miljöbalken survives."""
+    low = name.strip().lower()
+    if low.endswith(_LAW_SUFFIXES):
+        return False
+    if low in _GENERIC_COMMON:
+        return True
+    return _strip_suffix(low) in _GENERIC_COMMON
 
 
 _URLISH = re.compile(r"(https?://|www\.|\.(se|com|nu|org|html|htm|net|gov)\b)", re.IGNORECASE)
