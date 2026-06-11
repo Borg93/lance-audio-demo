@@ -476,27 +476,17 @@
               <i>Full names</i> (“Göran Persson”) are unambiguous.
             </li>
           </ul>
-          <p class="text-foreground mt-2 mb-1 font-medium">Try a question (click to run)</p>
-          <div class="space-y-1">
-            {#each HELP_EXAMPLES as ex (ex.label)}
-              <button
-                class="border-border bg-background hover:bg-secondary/60 block w-full rounded border px-2 py-1 text-left"
-                onclick={() => runExample(ex.query)}
-              >
-                <span class="text-foreground">{ex.label}</span>
-                <code class="text-muted-foreground mt-0.5 block truncate font-mono text-[10px]">{ex.query}</code>
-              </button>
-            {/each}
-          </div>
           <p class="mt-1.5">
-            Full schema + more examples: <code>docs/GRAPH.md</code>.
+            Click an <b>example query</b> in the right-hand rail to run it. Full schema:
+            <code>docs/GRAPH.md</code>.
           </p>
         </div>
       {/if}
     </div>
 
-    <!-- result area -->
-    <div class="relative min-h-0 flex-1">
+    <!-- result area + example-query rail -->
+    <div class="flex min-h-0 flex-1">
+      <div class="relative min-h-0 flex-1">
       {#if status && !status.built}
         <div class="grid h-full place-items-center p-6 text-center">
           <div class="max-w-sm">
@@ -587,6 +577,30 @@
           class="h-full overflow-auto p-3 text-xs">{cypherResult
             ? JSON.stringify(cypherResult.rows, null, 2)
             : 'Run a Cypher query to see JSON here.'}</pre>
+      {/if}
+      </div>
+
+      {#if cypherOpen || view !== 'graph'}
+        <aside
+          class="border-border bg-card/20 w-60 shrink-0 space-y-1 overflow-auto border-l p-2"
+        >
+          <p
+            class="text-muted-foreground mb-1 px-1 text-[10px] font-semibold tracking-wide uppercase"
+          >
+            Example queries
+          </p>
+          {#each HELP_EXAMPLES as ex (ex.label)}
+            <button
+              class="border-border bg-background hover:bg-secondary/60 block w-full rounded border px-2 py-1 text-left"
+              onclick={() => runExample(ex.query)}
+            >
+              <span class="text-foreground text-xs">{ex.label}</span>
+              <code
+                class="text-muted-foreground mt-0.5 block truncate font-mono text-[10px]">{ex.query}</code
+              >
+            </button>
+          {/each}
+        </aside>
       {/if}
     </div>
   </div>
