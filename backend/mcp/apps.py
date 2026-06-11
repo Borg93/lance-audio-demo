@@ -188,13 +188,19 @@ _CLIP_HTML = """\
           "Open locally: " + clip.media_url;
       };
       document.getElementById("title").textContent = clip.video || clip.doc_id;
-      // Always offer the direct URL — sound/codec support inside host
-      // sandboxes varies; the real browser is one click (or copy) away.
+      // Segment times are document time; the media-clip excerpt starts at
+      // media_offset_s. Translate at the player boundary, nowhere else.
+      const off = clip.media_offset_s || 0;
+      const toMedia = (t) => t - off;
+      const docTime = () => player.currentTime + off;
+      // Always offer the full-recording URL — open in a real browser for the
+      // whole video (and as a fallback if this host can't play the clip).
+      const direct = clip.direct_url || clip.media_url;
       const a = document.createElement("a");
-      a.href = clip.media_url;
+      a.href = direct;
       a.target = "_blank";
-      a.textContent = clip.media_url;
-      document.getElementById("open").replaceChildren("No sound? Open directly: ", a);
+      a.textContent = direct;
+      document.getElementById("open").replaceChildren("Full recording: ", a);
 
       const words = [];
       const segEls = clip.segments.map((seg) => {
@@ -215,7 +221,7 @@ _CLIP_HTML = """\
           x.textContent = seg.text;
         }
         div.append(t, x);
-        div.onclick = () => { player.currentTime = seg.start_s; player.play().catch(() => {}); };
+        div.onclick = () => { player.currentTime = toMedia(seg.start_s); player.play().catch(() => {}); };
         return div;
       });
       document.getElementById("segs").replaceChildren(...segEls);
@@ -227,7 +233,7 @@ _CLIP_HTML = """\
       let active = -1;
       let prevWord = null;
       const follow = () => {
-        const time = player.currentTime;
+        const time = docTime();
         let lo = 0, hi = words.length - 1, hit = null;
         while (lo <= hi) {
           const mid = (lo + hi) >> 1, w = words[mid];
@@ -253,7 +259,7 @@ _CLIP_HTML = """\
       // Seeking before metadata is loaded silently no-ops in some browsers —
       // mirror player-pane: seek (and try to play) once the media is ready.
       const seek = () => {
-        player.currentTime = clip.start_s;
+        player.currentTime = toMedia(clip.start_s);
         follow();
         player.play().catch(() => {});
       };
@@ -335,10 +341,16 @@ def register_app_tools(mcp: FastMCP, state: AppState) -> None:
         window = transcript_window(
             state, doc_id=doc_id, center_s=start_s, window_s=window_s, include_words=True
         )
+        # The player gets a windowed MP3-audio excerpt (media-clip) because
+        # webview hosts like VS Code lack the AAC decoder the full files use;
+        # second 0 of that excerpt is document-time `lo` (media_offset_s).
+        lo, hi = (max(0.0, t) for t in window["window_s"])
         clip = {
             "doc_id": doc_id,
             "video": window["video"],
-            "media_url": f"{media_base}/api/media/{doc_id}",
+            "media_url": f"{media_base}/api/media-clip/{doc_id}?lo={lo:.3f}&hi={hi:.3f}",
+            "direct_url": f"{media_base}/api/media/{doc_id}",
+            "media_offset_s": lo,
             "start_s": start_s,
             "segments": window["segments"],
         }

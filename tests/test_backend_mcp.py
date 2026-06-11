@@ -173,7 +173,10 @@ async def test_show_clip_returns_player_payload(mcp: Any) -> None:
     # The viewer's payload rides in structuredContent; the model gets one line.
     clip = result.structured_content
     assert clip["doc_id"] == hits[0]["doc_id"]
-    assert clip["media_url"].endswith(f"/api/media/{hits[0]['doc_id']}")
+    # Player gets the MP3-audio excerpt; the full recording rides separately.
+    assert f"/api/media-clip/{hits[0]['doc_id']}?lo=" in clip["media_url"]
+    assert clip["direct_url"].endswith(f"/api/media/{hits[0]['doc_id']}")
+    assert clip["media_offset_s"] >= 0
     assert clip["segments"], "clip payload must carry transcript segments"
     assert "Showing" in result.content[0].text  # type: ignore[union-attr]
 

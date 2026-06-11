@@ -6,13 +6,14 @@ file; ``thumbnail`` / ``chunk_frame`` return small inline JPEGs.
 """
 
 import logging
+import math
 from typing import Annotated
 
 import lance
 from fastapi import APIRouter, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
-from backend.core.exceptions import NotFoundError
+from backend.core.exceptions import NotFoundError, ValidationError
 from backend.deps import StateDep
 from backend.media.blobs import (
     doc_blob_size,
@@ -21,6 +22,7 @@ from backend.media.blobs import (
     stream_blob_range,
     valid_doc_id,
 )
+from backend.media.clips import MAX_CLIP_S, build_clip
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,31 @@ def chunk_frame(
     return Response(
         content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"}
     )
+
+
+@router.get("/media-clip/{doc_id}")
+def media_clip(
+    doc_id: str,
+    state: StateDep,
+    lo: Annotated[float, Query(ge=0)],
+    hi: Annotated[float, Query(gt=0)],
+) -> FileResponse:
+    """A windowed excerpt of the media with MP3 audio — built for MCP-app
+    iframes in hosts whose webview lacks the AAC codec (VS Code). The clip is
+    transcoded on first request (ffmpeg over the Range-streaming ``/media``
+    endpoint) and disk-cached; FileResponse serves it with Range support so
+    in-clip seeking works. Timestamps are clip-local: second 0 == ``lo``.
+    """
+    valid_doc_id(doc_id)
+    if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+        raise ValidationError("need finite seconds with hi > lo")
+    if hi - lo > MAX_CLIP_S:
+        raise ValidationError(f"clip window capped at {MAX_CLIP_S:.0f}s")
+    if state.docs_ds is None or rowid_for_doc_id(state.docs_ds, doc_id) is None:
+        raise NotFoundError("doc_id not found")
+    source = f"http://127.0.0.1:{state.settings.port}/api/media/{doc_id}"
+    path = build_clip(source, doc_id, lo, hi)
+    return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/media/{doc_id}")
