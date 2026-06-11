@@ -27,7 +27,9 @@ How to (re)build the tables: [`scripts/kg/README.md`](../scripts/kg/README.md).
 | `start_s` / `end_s` | clip window in seconds |
 | `text` | transcript excerpt (first 280 chars) |
 
-`RELATIONSHIP` edges carry a `description` (LLM's phrasing, truncated 120 chars).
+`RELATIONSHIP` edges carry a `description` (LLM's phrasing, truncated 160 chars
+at a word boundary) and a `weight` = how many distinct clips support the relation
+(repeated source→target pairs are collapsed into one weighted edge).
 
 ## Using the `/graph` page
 
