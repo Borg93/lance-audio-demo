@@ -37,9 +37,11 @@ Entity/connection questions: `query_knowledge_graph`. Corpus overview / exact
 topic names: `list_topics`. Transcripts and topic names are Swedish — query in
 Swedish for keyword (fts) search; semantic mode tolerates other languages.
 Cite findings as (doc_id, start_s) so they can be deep-linked to the video.
-When the user wants to BROWSE or WATCH rather than read your summary, use the
-interactive tools: `show_search_results` (sortable results table) and
-`show_clip` (video player + transcript at a moment)."""
+Prefer the interactive tools when presenting results TO THE USER:
+`show_search_results` (sortable results table — the default for any search
+the user asked for) and `show_clip` (video player + synced transcript — when
+they want to watch/hear a hit). Use the plain data tools only for raw
+payloads you reason over yourself."""
 
 
 def build_mcp(state: AppState) -> FastMCP:

@@ -101,8 +101,10 @@ def _summary(hits: list[dict[str, Any]], query: str) -> str:
 
 
 # The clip viewer: plain HTML + the official ext-apps SDK from CDN (the
-# pattern from FastMCP's "Custom HTML Apps" docs). It reads one JSON text
-# block from the tool result and builds the player + transcript from it.
+# pattern from FastMCP's "Custom HTML Apps" docs). It reads the clip payload
+# from structuredContent and builds the player + transcript from it. The
+# transcript follows playback (timeupdate -> highlight + scroll), matching
+# the frontend's video panel.
 _CLIP_HTML = """\
 <!DOCTYPE html>
 <html>
@@ -112,6 +114,7 @@ _CLIP_HTML = """\
     body { margin: 0; padding: 16px; font-family: system-ui, sans-serif; }
     video { width: 100%; max-height: 360px; border-radius: 8px; background: #000; }
     h2 { font-size: 15px; margin: 12px 0 6px; }
+    #segs { max-height: 300px; overflow-y: auto; }
     .seg { padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex; gap: 10px; }
     .seg:hover { background: rgba(127,127,127,.15); }
     .seg.hot { background: rgba(59,130,246,.18); }
@@ -120,7 +123,7 @@ _CLIP_HTML = """\
   </style>
 </head>
 <body>
-  <video id="player" controls preload="metadata"></video>
+  <video id="player" controls preload="metadata" playsinline></video>
   <div id="err"></div>
   <h2 id="title"></h2>
   <div id="segs"></div>
@@ -135,27 +138,56 @@ _CLIP_HTML = """\
       const clip = structuredContent ?? (block ? JSON.parse(block.text) : null);
       if (!clip) return;
       const player = document.getElementById("player");
-      player.src = clip.media_url;
-      player.currentTime = clip.start_s;
       player.onerror = () => {
         document.getElementById("err").textContent =
           "Video could not load in this host's sandbox — transcript below still works. " +
           "Open locally: " + clip.media_url;
       };
       document.getElementById("title").textContent = clip.video || clip.doc_id;
-      const segs = document.getElementById("segs");
-      segs.replaceChildren(...clip.segments.map((seg) => {
+
+      const segEls = clip.segments.map((seg) => {
         const div = document.createElement("div");
-        div.className = "seg" + (seg.start_s <= clip.start_s && clip.start_s < seg.end_s ? " hot" : "");
+        div.className = "seg";
         const t = document.createElement("span");
         t.className = "t";
         t.textContent = fmt(seg.start_s);
         const x = document.createElement("span");
         x.textContent = seg.text;
         div.append(t, x);
-        div.onclick = () => { player.currentTime = seg.start_s; player.play(); };
+        div.onclick = () => { player.currentTime = seg.start_s; player.play().catch(() => {}); };
         return div;
-      }));
+      });
+      document.getElementById("segs").replaceChildren(...segEls);
+
+      // Playback cursor — mirrors the frontend's transcript-highlighter:
+      // timeupdate + seeked drive the highlight; during inter-segment gaps
+      // the last segment stays lit; scroll only when the active one changes.
+      let active = -1;
+      const follow = () => {
+        const time = player.currentTime;
+        const i = clip.segments.findIndex((s) => s.start_s <= time && time < s.end_s);
+        if (i < 0 || i === active) return;
+        if (active >= 0) segEls[active].classList.remove("hot");
+        segEls[i].classList.add("hot");
+        segEls[i].scrollIntoView({ block: "nearest", behavior: "smooth" });
+        active = i;
+      };
+      player.addEventListener("timeupdate", follow);
+      player.addEventListener("seeked", follow);
+
+      // Seeking before metadata is loaded silently no-ops in some browsers —
+      // mirror player-pane: seek (and try to play) once the media is ready.
+      const seek = () => {
+        player.currentTime = clip.start_s;
+        follow();
+        player.play().catch(() => {});
+      };
+      player.src = clip.media_url;
+      if (player.readyState >= 1) seek();
+      else {
+        player.addEventListener("loadedmetadata", seek, { once: true });
+        player.addEventListener("canplay", seek, { once: true });
+      }
     };
 
     await app.connect();
@@ -180,11 +212,12 @@ def register_app_tools(mcp: FastMCP, state: AppState) -> None:
     ) -> ToolResult:
         """Search Riksarkivet's moving-image archive (rörlig bild: film/video/
         audio recordings) AND show the hits as an interactive table the user
-        can sort, search, and read — use when the user wants to BROWSE results
-        rather than have you summarize them. Same arguments as
-        ``search_chunks``. You receive a text summary of the top hits (with
-        doc_id and start_s) so you can keep reasoning or open one with
-        ``show_clip``.
+        can sort, search, and read. This is the DEFAULT way to present search
+        results to the user — call it whenever they ask to search, find, or
+        look for something, not only when they say "browse". Same arguments
+        as ``search_chunks`` (which is only for raw hits you reason over
+        yourself). You receive a text summary of the top hits (with doc_id
+        and start_s) so you can keep reasoning or open one with ``show_clip``.
         """
         hits = compact_search(
             state,

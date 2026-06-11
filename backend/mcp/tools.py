@@ -157,9 +157,11 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
         conferences, press releases, seminars, government recordings. NOT for
         written/scanned documents (use the riksarkivet document tools there).
 
-        Use this FIRST for any content question — unless the user wants to
-        browse the results themselves, then call ``show_search_results``
-        INSTEAD (never both for one query). ``mode``: "fts" = exact
+        Use this when YOU need raw hits to reason over or chain into other
+        tools. When the user asked to search/find/look for something and will
+        read the results themselves, call ``show_search_results`` INSTEAD —
+        it renders an interactive results table (never call both for one
+        query). ``mode``: "fts" = exact
         keyword (BM25, best for names and quoted phrases), "semantic" = meaning
         (best for paraphrased questions), "hybrid" = both fused (good default).
         Each hit is a transcript chunk with its video id and time span — follow
