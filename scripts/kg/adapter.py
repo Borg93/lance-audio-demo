@@ -18,6 +18,9 @@ import argparse
 import hashlib
 import json
 import re
+
+# scripts/kg is not a package; import the sibling classifier by adding it to path
+import sys
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
@@ -26,6 +29,9 @@ import lance
 import lance_graph as lg
 import networkx as nx
 import pyarrow as pa
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from generic_sv import clean_desc, is_generic_person, is_url
 
 SEP = "<SEP>"  # GRAPH_FIELD_SEP in lightrag 1.5.x
 
@@ -75,6 +81,7 @@ def is_junk(name: str) -> bool:
         or bool(_NUMERIC.fullmatch(name))
         or bool(_AMOUNT.fullmatch(low))
         or _is_sentence(name)
+        or is_url(name)
     )
 
 
@@ -192,6 +199,11 @@ def main() -> None:
             eid = slug(name)
             ent_name[eid] = name
             new_type = norm_type(data.get("entity_type"))
+            # gemma tags generic group/role nouns (Politiker, Konsumenter, Unga
+            # Människor) as PERSON — demote those to OTHER deterministically so
+            # "most-mentioned people" returns actual named individuals.
+            if new_type == "PERSON" and is_generic_person(name):
+                new_type = "OTHER"
             if ent_type.get(eid) in (None, "OTHER"):  # prefer a concrete type across shards
                 ent_type[eid] = new_type
             ent_chunks[eid] |= keys_of(data.get("source_id"))
@@ -204,9 +216,11 @@ def main() -> None:
             # so the same relation never lands as BOTH a->b and b->a (which
             # happens across shards and renders as double edges)
             s, t = sorted((slug(src_name), slug(tgt_name)))
-            # merged descriptions are <SEP>-joined; keep the first fragment so
-            # the raw delimiter never leaks into the UI, then word-boundary cap
-            desc = truncate_desc((data.get("description") or data.get("keywords") or "").split(SEP)[0])
+            # merged descriptions are <SEP>-joined; keep the first fragment, strip
+            # leaked LLM markup (</relation>, stray >), then word-boundary cap
+            desc = truncate_desc(
+                clean_desc((data.get("description") or data.get("keywords") or "").split(SEP)[0])
+            )
             cks = keys_of(data.get("source_id")) or {next(iter(ent_chunks[s]), "")}
             for ck in cks:
                 if not ck or (s, t, ck) in seen_rels:
