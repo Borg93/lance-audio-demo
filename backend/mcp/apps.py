@@ -159,12 +159,16 @@ _CLIP_HTML = """\
     .seg:hover { background: rgba(127,127,127,.15); }
     .seg.hot { background: rgba(59,130,246,.18); }
     .t { color: #888; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+    .cw { background: rgba(59,130,246,.45); border-radius: 3px; }
     #err { color: #b91c1c; font-size: 13px; }
+    #open { font-size: 12px; color: #888; margin-top: 4px; word-break: break-all; }
+    #open a { color: inherit; }
   </style>
 </head>
 <body>
   <video id="player" controls preload="metadata" playsinline></video>
   <div id="err"></div>
+  <div id="open"></div>
   <h2 id="title"></h2>
   <div id="segs"></div>
   <script type="module">
@@ -184,7 +188,15 @@ _CLIP_HTML = """\
           "Open locally: " + clip.media_url;
       };
       document.getElementById("title").textContent = clip.video || clip.doc_id;
+      // Always offer the direct URL — sound/codec support inside host
+      // sandboxes varies; the real browser is one click (or copy) away.
+      const a = document.createElement("a");
+      a.href = clip.media_url;
+      a.target = "_blank";
+      a.textContent = clip.media_url;
+      document.getElementById("open").replaceChildren("No sound? Open directly: ", a);
 
+      const words = [];
       const segEls = clip.segments.map((seg) => {
         const div = document.createElement("div");
         div.className = "seg";
@@ -192,19 +204,42 @@ _CLIP_HTML = """\
         t.className = "t";
         t.textContent = fmt(seg.start_s);
         const x = document.createElement("span");
-        x.textContent = seg.text;
+        if (seg.words?.length) {
+          for (const [ws, we, wt] of seg.words) {
+            const w = document.createElement("span");
+            w.textContent = wt;
+            x.append(w);
+            words.push({ el: w, s: ws, e: we });
+          }
+        } else {
+          x.textContent = seg.text;
+        }
         div.append(t, x);
         div.onclick = () => { player.currentTime = seg.start_s; player.play().catch(() => {}); };
         return div;
       });
       document.getElementById("segs").replaceChildren(...segEls);
 
-      // Playback cursor — mirrors the frontend's transcript-highlighter:
-      // timeupdate + seeked drive the highlight; during inter-segment gaps
-      // the last segment stays lit; scroll only when the active one changes.
+      // Playback cursors — mirror the frontend's transcript-highlighter:
+      // timeupdate + seeked drive a word-level karaoke highlight (binary
+      // search over the time-sorted word spans) plus the segment highlight;
+      // during gaps the last hit stays lit; scroll only on segment change.
       let active = -1;
+      let prevWord = null;
       const follow = () => {
         const time = player.currentTime;
+        let lo = 0, hi = words.length - 1, hit = null;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1, w = words[mid];
+          if (time < w.s) hi = mid - 1;
+          else if (time >= w.e) lo = mid + 1;
+          else { hit = w; break; }
+        }
+        if (hit && hit.el !== prevWord) {
+          prevWord?.classList.remove("cw");
+          hit.el.classList.add("cw");
+          prevWord = hit.el;
+        }
         const i = clip.segments.findIndex((s) => s.start_s <= time && time < s.end_s);
         if (i < 0 || i === active) return;
         if (active >= 0) segEls[active].classList.remove("hot");
@@ -297,7 +332,9 @@ def register_app_tools(mcp: FastMCP, state: AppState) -> None:
         Requires the raudio backend to be reachable from the user's machine
         (it streams the media).
         """
-        window = transcript_window(state, doc_id=doc_id, center_s=start_s, window_s=window_s)
+        window = transcript_window(
+            state, doc_id=doc_id, center_s=start_s, window_s=window_s, include_words=True
+        )
         clip = {
             "doc_id": doc_id,
             "video": window["video"],

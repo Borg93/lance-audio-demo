@@ -28,6 +28,7 @@ from backend.search.service import run_search
 from backend.search.spec import SearchMode, SearchSpec
 from backend.state import AppState
 from backend.topics.router import get_topics
+from raudio.retrieval.search import parse_alignments_json
 
 _MAX_HITS = 25
 _MAX_TEXT_CHARS = 600
@@ -115,10 +116,20 @@ def compact_search(
 
 
 def transcript_window(
-    state: AppState, *, doc_id: str, center_s: float, window_s: float
+    state: AppState,
+    *,
+    doc_id: str,
+    center_s: float,
+    window_s: float,
+    include_words: bool = False,
 ) -> dict[str, Any]:
     """Transcript segments around one moment — shared by the data tool AND the
-    clip app (which renders the same segments next to the video)."""
+    clip app (which renders the same segments next to the video).
+
+    ``include_words`` adds per-word ``[start, end, text]`` timing triples to
+    each segment for the clip app's karaoke cursor. The LLM data tool keeps it
+    off: word timings multiply the payload and carry nothing prose-worthy.
+    """
     if not (math.isfinite(center_s) and math.isfinite(window_s)):
         raise ToolError(
             f"center_s and window_s must be finite seconds, got {center_s=} {window_s=}"
@@ -126,19 +137,31 @@ def transcript_window(
     half = min(max(window_s, 1.0), 300.0)
     lo, hi = center_s - half, center_s + half
     flt = f"doc_id = '{_sql_quote(doc_id)}' AND \"end\" >= {lo} AND start <= {hi}"
-    rows = state.chunks_ds.to_table(
-        columns=["namn", "start", "end", "text"], filter=flt
-    ).to_pylist()
+    columns = ["namn", "start", "end", "text"]
+    if include_words:
+        columns.append("alignments_json")
+    rows = state.chunks_ds.to_table(columns=columns, filter=flt).to_pylist()
     if not rows:
         raise ToolError(f"no transcript in that window — unknown doc_id {doc_id!r}?")
     rows.sort(key=lambda r: r["start"])
+
+    def _segment(r: dict[str, Any]) -> dict[str, Any]:
+        seg: dict[str, Any] = {"start_s": r["start"], "end_s": r["end"], "text": r["text"]}
+        if include_words:
+            seg["words"] = [
+                [w["start"], w["end"], w["text"]]
+                for sentence in parse_alignments_json(r.get("alignments_json"))
+                for w in sentence.get("words") or []
+            ]
+        return seg
+
     # Segments only — a joined prose copy would double the payload (up to
     # ±300 s of transcript) and the timing is what downstream chaining needs.
     return {
         "doc_id": doc_id,
         "video": rows[0].get("namn"),
         "window_s": [lo, hi],
-        "segments": [{"start_s": r["start"], "end_s": r["end"], "text": r["text"]} for r in rows],
+        "segments": [_segment(r) for r in rows],
     }
 
 
