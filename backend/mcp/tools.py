@@ -12,6 +12,7 @@ hosts get a structured tool failure instead of a stack trace.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from fastmcp import FastMCP
@@ -21,6 +22,8 @@ from pydantic import ValidationError as PydanticValidationError
 from backend.clients import ensure_embedder, ensure_reranker
 from backend.core.exceptions import DomainError
 from backend.graph import router as graph
+from backend.media.blobs import valid_doc_id
+from backend.search.filters import _sql_quote
 from backend.search.service import run_search
 from backend.search.spec import SearchMode, SearchSpec
 from backend.state import AppState
@@ -53,14 +56,11 @@ def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _sql_quote(value: str) -> str:
-    return value.replace("'", "''")
-
-
-def _walk_topic_names(node: dict[str, Any], names: set[str]) -> None:
-    names.add(node["name"])
+def _topic_names(node: dict[str, Any]) -> set[str]:
+    names = {node["name"]}
     for child in node.get("children") or []:
-        _walk_topic_names(child, names)
+        names |= _topic_names(child)
+    return names
 
 
 def _validate_topic(state: AppState, topic: str) -> None:
@@ -71,9 +71,7 @@ def _validate_topic(state: AppState, topic: str) -> None:
     resp = get_topics(state)
     if not resp.built or resp.hierarchy is None:
         raise ToolError("topic filter unavailable — topics not built (run `raudio feature topics`)")
-    names: set[str] = set()
-    _walk_topic_names(resp.hierarchy, names)
-    if topic not in names:
+    if topic not in _topic_names(resp.hierarchy):
         raise ToolError(f"unknown topic {topic!r} — call list_topics and copy an exact name")
 
 
@@ -121,6 +119,10 @@ def transcript_window(
 ) -> dict[str, Any]:
     """Transcript segments around one moment — shared by the data tool AND the
     clip app (which renders the same segments next to the video)."""
+    if not (math.isfinite(center_s) and math.isfinite(window_s)):
+        raise ToolError(
+            f"center_s and window_s must be finite seconds, got {center_s=} {window_s=}"
+        )
     half = min(max(window_s, 1.0), 300.0)
     lo, hi = center_s - half, center_s + half
     flt = f"doc_id = '{_sql_quote(doc_id)}' AND \"end\" >= {lo} AND start <= {hi}"
@@ -210,6 +212,7 @@ def register_tools(mcp: FastMCP, state: AppState) -> None:
         from backend.voice.service import similar_voices
 
         try:
+            valid_doc_id(doc_id)
             resp = similar_voices(
                 state.speaker_embeddings_tbl,
                 state.speakers_tbl,

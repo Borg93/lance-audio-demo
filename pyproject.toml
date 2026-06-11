@@ -90,6 +90,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -q"
+markers = [
+    "integration: hits the real local Lance dataset (skips when absent)",
+]
 
 # ── ruff: lint only ──────────────────────────────────────────────────────────
 # We intentionally do NOT enable `ruff format` in CI: the codebase uses

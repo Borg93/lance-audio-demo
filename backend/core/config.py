@@ -14,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["*"], alias="RAUDIO_CORS_ORIGINS")
     # Externally-reachable origin for media URLs in MCP clip apps (LAN IP,
     # tunnel, reverse proxy). Unset = derive http://{host}:{port} locally.
-    media_base_url: str | None = Field(default=None, alias="RAUDIO_MEDIA_BASE_URL")
+    # AnyHttpUrl: this value lands verbatim in the clip app's CSP allow-list
+    # and media src, so reject non-URL garbage at boot, not in the iframe.
+    media_base_url: AnyHttpUrl | None = Field(default=None, alias="RAUDIO_MEDIA_BASE_URL")
 
     @field_validator("cors_origins", mode="before")
     @classmethod

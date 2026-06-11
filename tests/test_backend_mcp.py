@@ -19,6 +19,7 @@ import pytest
 DB_PATH = Path(__file__).resolve().parent.parent / "transcripts_v2.lance"
 
 pytestmark = [
+    pytest.mark.integration,
     pytest.mark.skipif(
         not (DB_PATH / "chunks.lance").exists(),
         reason="local transcripts_v2.lance dataset not present",
@@ -64,8 +65,9 @@ async def test_search_chunks_fts_returns_compact_hits(mcp: Any) -> None:
     hits = result.data
     assert isinstance(hits, list)
     assert len(hits) <= 3
-    if hits:
-        assert {"doc_id", "video", "start_s", "end_s", "text", "score"} <= hits[0].keys()
+    if not hits:
+        pytest.skip("no fts hits in local dataset")
+    assert {"doc_id", "video", "start_s", "end_s", "text", "score"} <= hits[0].keys()
 
 
 async def test_transcript_window_expands_a_hit(mcp: Any) -> None:
@@ -99,7 +101,7 @@ async def test_transcript_window_unknown_doc_is_a_tool_error(mcp: Any) -> None:
             )
 
 
-async def test_list_topics_or_clean_error(mcp: Any) -> None:
+async def test_list_topics_payload(mcp: Any) -> None:
     from fastmcp import Client
     from fastmcp.exceptions import ToolError
 
@@ -108,41 +110,58 @@ async def test_list_topics_or_clean_error(mcp: Any) -> None:
             data = (await client.call_tool("list_topics", {})).data
         except ToolError as exc:
             assert "not built" in str(exc)
-            return
+            pytest.skip(f"topics not built locally: {exc}")
     assert data["n_chunks"] > 0
     assert data["hierarchy"]["children"]
 
 
-async def test_show_search_results_renders_app_with_llm_summary(mcp: Any) -> None:
+async def test_show_search_results_has_ui_meta(mcp: Any) -> None:
     from fastmcp import Client
 
     async with Client(mcp) as client:
         tools = {t.name: t for t in await client.list_tools()}
-        # App tools carry the MCP Apps linkage so hosts know to render a UI.
-        assert (tools["show_search_results"].meta or {}).get("ui"), "missing _meta.ui"
+    # App tools carry the MCP Apps linkage so hosts know to render a UI.
+    assert (tools["show_search_results"].meta or {}).get("ui"), "missing _meta.ui"
+
+
+async def test_show_search_results_returns_summary_and_prefab(mcp: Any) -> None:
+    from fastmcp import Client
+
+    async with Client(mcp) as client:
         result = await client.call_tool(
             "show_search_results", {"query": "jag", "mode": "fts", "n": 5}
         )
     summary = result.content[0].text  # type: ignore[union-attr]
     assert "interactive table" in summary or "No hits" in summary
-    if "doc_id=" in summary:
-        # The structured side is the serialized Prefab component tree.
-        assert result.structured_content, "missing Prefab structured content"
-        assert "DataTable" in str(result.structured_content)
+    if "doc_id=" not in summary:
+        pytest.skip("no fts hits in local dataset")
+    # The structured side is the serialized Prefab component tree.
+    assert result.structured_content, "missing Prefab structured content"
+    assert "DataTable" in str(result.structured_content)
 
 
-async def test_show_clip_returns_player_payload(mcp: Any) -> None:
-
+async def test_show_clip_meta_links_clip_resource(mcp: Any) -> None:
     from fastmcp import Client
 
     async with Client(mcp) as client:
         tools = {t.name: t for t in await client.list_tools()}
-        ui_meta = (tools["show_clip"].meta or {}).get("ui") or {}
-        assert ui_meta.get("resourceUri") == "ui://raudio/clip.html"
+    ui_meta = (tools["show_clip"].meta or {}).get("ui") or {}
+    assert ui_meta.get("resourceUri") == "ui://raudio/clip.html"
+
+
+async def test_clip_ui_resource_serves_video_html(mcp: Any) -> None:
+    from fastmcp import Client
+
+    async with Client(mcp) as client:
         # The linked ui:// resource must be fetchable (that's what hosts render).
         html = await client.read_resource("ui://raudio/clip.html")
-        assert "<video" in html[0].text  # type: ignore[union-attr]
+    assert "<video" in html[0].text  # type: ignore[union-attr]
 
+
+async def test_show_clip_returns_player_payload(mcp: Any) -> None:
+    from fastmcp import Client
+
+    async with Client(mcp) as client:
         hits = (
             await client.call_tool("search_chunks", {"query": "jag", "mode": "fts", "n": 1})
         ).data
@@ -170,7 +189,7 @@ async def test_unknown_topic_is_a_loud_tool_error(mcp: Any) -> None:
             )
 
 
-async def test_knowledge_graph_query_or_clean_error(mcp: Any) -> None:
+async def test_knowledge_graph_query_rows(mcp: Any) -> None:
     from fastmcp import Client
     from fastmcp.exceptions import ToolError
 
@@ -184,6 +203,6 @@ async def test_knowledge_graph_query_or_clean_error(mcp: Any) -> None:
             ).data
         except ToolError as exc:
             assert "not built" in str(exc) or "failed" in str(exc)
-            return
+            pytest.skip(f"knowledge graph not built locally: {exc}")
     assert isinstance(rows, list)
     assert len(rows) <= 3

@@ -24,10 +24,20 @@ from typing import Any, Literal
 from fastmcp import FastMCP
 from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.tools import ToolResult
+from prefab_ui.actions import SendMessage
 from prefab_ui.app import PrefabApp
-from prefab_ui.components import Column, DataTable, DataTableColumn, Metric, Row
+from prefab_ui.components import (
+    Button,
+    Column,
+    DataTable,
+    DataTableColumn,
+    ExpandableRow,
+    Metric,
+    Row,
+    Text,
+)
 
-from backend.core.config import get_settings
+from backend.core.config import Settings
 from backend.mcp.tools import compact_search, transcript_window
 from backend.state import AppState
 
@@ -45,28 +55,56 @@ def _fmt_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}"
 
 
-def _media_base() -> str:
+def _media_base(settings: Settings) -> str:
     """The origin the host's browser sandbox must reach to stream media —
     overridable via RAUDIO_MEDIA_BASE_URL for non-loopback deployments."""
-    settings = get_settings()
     if settings.media_base_url:
-        return settings.media_base_url.rstrip("/")
+        return str(settings.media_base_url).rstrip("/")
     host = "127.0.0.1" if settings.host == "0.0.0.0" else settings.host
     return f"http://{host}:{settings.port}"
 
 
+def _row_detail(hit: dict[str, Any]) -> Column:
+    """Expanded-row content: the full hit text plus buttons that hand the
+    next step back to the conversation — SendMessage pushes a request into
+    the chat as if the user typed it, and the model calls the matching tool.
+    Built BEFORE the PrefabApp context opens so it stays a detached subtree.
+    """
+    start = int(hit["start_s"])
+    with Column(gap=3, css_class="p-2") as detail:
+        Text(hit["text"])
+        with Row(gap=2):
+            Button(
+                "▶ Show this clip",
+                on_click=SendMessage(
+                    f"Show the clip for doc_id={hit['doc_id']} at {start} seconds"
+                    " (call show_clip)."
+                ),
+            )
+            Button(
+                "More transcript",
+                variant="outline",
+                on_click=SendMessage(
+                    f"Get the transcript around doc_id={hit['doc_id']} at {start}"
+                    " seconds and summarize what is said."
+                ),
+            )
+    return detail
+
+
 def _results_app(hits: list[dict[str, Any]], query: str, mode: str) -> PrefabApp:
-    # list[Any]: DataTable's rows accept dicts OR ExpandableRow; list is
-    # invariant, so a narrower element type fails assignability.
-    rows: list[Any] = [
-        {
-            "video": h["video"] or h["doc_id"],
-            "start": _fmt_time(h["start_s"]),
-            "text": (h["text"][:_TABLE_TEXT_CHARS] + "…")
-            if len(h["text"]) > _TABLE_TEXT_CHARS
-            else h["text"],
-            "score": round(h["score"], 3) if h["score"] is not None else "",
-        }
+    rows: list[dict[str, Any] | ExpandableRow] = [
+        ExpandableRow(
+            {
+                "video": h["video"] or h["doc_id"],
+                "start": _fmt_time(h["start_s"]),
+                "text": (h["text"][:_TABLE_TEXT_CHARS] + "…")
+                if len(h["text"]) > _TABLE_TEXT_CHARS
+                else h["text"],
+                "score": round(h["score"], 3) if h["score"] is not None else "",
+            },
+            detail=_row_detail(h),
+        )
         for h in hits
     ]
     with PrefabApp() as app, Column(gap=4, css_class="p-6"):
@@ -199,7 +237,7 @@ _CLIP_HTML = """\
 
 def register_app_tools(mcp: FastMCP, state: AppState) -> None:
     """Register the presentation tools, closing over the shared state."""
-    media_base = _media_base()
+    media_base = _media_base(state.settings)
 
     @mcp.tool(app=True)
     def show_search_results(
@@ -214,8 +252,10 @@ def register_app_tools(mcp: FastMCP, state: AppState) -> None:
         audio recordings) AND show the hits as an interactive table the user
         can sort, search, and read. This is the DEFAULT way to present search
         results to the user — call it whenever they ask to search, find, or
-        look for something, not only when they say "browse". Same arguments
-        as ``search_chunks`` (which is only for raw hits you reason over
+        look for something, not only when they say "browse". Each row expands
+        to the full text with buttons the user can click to request the clip
+        or more transcript right in the chat. Same arguments as
+        ``search_chunks`` (which is only for raw hits you reason over
         yourself). You receive a text summary of the top hits (with doc_id
         and start_s) so you can keep reasoning or open one with ``show_clip``.
         """
