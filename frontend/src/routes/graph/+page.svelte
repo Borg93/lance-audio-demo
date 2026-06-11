@@ -91,23 +91,38 @@
   // one click fills the REPL and runs (all verified against the live engine).
   const HELP_EXAMPLES = [
     {
-      label: 'Who are the most-mentioned people?',
+      label: 'Who are the named, identifiable people? (full names)',
       query:
-        "MATCH (a:Entity) WHERE a.entity_type = 'PERSON' RETURN a.name, a.mention_count ORDER BY a.mention_count DESC LIMIT 20",
+        "MATCH (a:Entity) WHERE a.entity_type = 'PERSON' AND a.name CONTAINS ' ' RETURN a.name, a.mention_count ORDER BY a.mention_count DESC LIMIT 20",
+    },
+    {
+      label: 'What was discussed most? (topics)',
+      query:
+        "MATCH (a:Entity) WHERE a.entity_type = 'CONCEPT' RETURN a.name, a.mention_count ORDER BY a.mention_count DESC LIMIT 20",
+    },
+    {
+      label: 'Strongest relationships (by how often co-stated)',
+      query:
+        'MATCH (a:Entity)-[r:RELATIONSHIP]->(b:Entity) RETURN a.name, b.name, r.weight, r.description ORDER BY r.weight DESC LIMIT 15',
+    },
+    {
+      label: 'What is Göran Persson connected to?',
+      query:
+        "MATCH (a:Entity)-[:RELATIONSHIP]-(b:Entity) WHERE a.name_lower = 'göran persson' RETURN b.name, b.entity_type LIMIT 25",
+    },
+    {
+      label: 'Which organisations come up alongside the EU?',
+      query:
+        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk)<-[:MENTIONS]-(b:Entity) WHERE a.name_lower = 'eu' AND b.entity_type = 'ORG' RETURN b.name, count(c.chunk_id) AS shared ORDER BY shared DESC LIMIT 12",
+    },
+    {
+      label: 'A person across the timeline (their clips)',
+      query:
+        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk) WHERE a.name_lower = 'carl bildt' RETURN c.namn, c.start_s, c.text ORDER BY c.start_s LIMIT 20",
     },
     {
       label: 'Find entities matching a word (e.g. miljö)',
       query: "MATCH (a:Entity) WHERE a.name_lower CONTAINS 'miljö' RETURN a.name, a.entity_type, a.mention_count LIMIT 20",
-    },
-    {
-      label: 'In which clips is Stockholm mentioned?',
-      query:
-        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk) WHERE a.name_lower = 'stockholm' RETURN c.namn, c.start_s, c.text LIMIT 25",
-    },
-    {
-      label: 'Which pairs appear together most often?',
-      query:
-        'MATCH (a:Entity)-[:MENTIONS]->(c:Chunk)<-[:MENTIONS]-(b:Entity) WHERE a.entity_id < b.entity_id RETURN a.name, b.name, count(c.chunk_id) AS shared ORDER BY shared DESC LIMIT 15',
     },
   ];
 
@@ -453,6 +468,12 @@
             <li>
               The picture is for <i>navigating</i> — the precise answers live in the clips list and
               the Cypher/Table view.
+            </li>
+            <li>
+              <b>One name can be several people.</b> A bare first name like <i>“Anders”</i> is one
+              node, but the transcripts may mean different individuals — the AI links them by name
+              only. <b>The clips disambiguate</b>: open the node and read each clip's context.
+              <i>Full names</i> (“Göran Persson”) are unambiguous.
             </li>
           </ul>
           <p class="text-foreground mt-2 mb-1 font-medium">Try a question (click to run)</p>
