@@ -59,6 +59,20 @@ _ENTITY_ID = re.compile(r"^[0-9a-f]{16}$")
 _DEFAULT_LIMIT = 200
 _MAX_LIMIT = 1000
 
+#: Overview ranking preference — specific named entities (people/places/events)
+#: rank above orgs/works, which rank above abstract CONCEPT and OTHER. Within a
+#: tier, mention_count breaks the tie. Keeps the default graph view legible
+#: instead of a wall of generic high-mention abstractions.
+_OVERVIEW_TYPE_RANK: dict[str, int] = {
+    "PERSON": 0,
+    "GEO": 0,
+    "EVENT": 0,
+    "ORG": 1,
+    "WORK": 2,
+    "CONCEPT": 3,
+    "OTHER": 4,
+}
+
 #: Trailing ``LIMIT <n>`` (the only place a LIMIT can legally sit in a single
 #: read statement). Matched case-insensitively at end-of-query.
 _TRAILING_LIMIT = re.compile(r"(?is)\blimit\s+(\d+)\s*$")
@@ -366,10 +380,16 @@ def get_subgraph(
             )
             node_ids = set(ranked[:limit])
     else:
+        # Default overview: surface NAMED entities first, not the generic
+        # abstractions that dominate by raw mention count. Rank by a coarse
+        # type preference, then mention_count within each tier — so the first
+        # thing a user sees is people/places/events/orgs, not CONCEPT/OTHER.
         ranked = sorted(
             res.ent_by_id,
-            key=lambda e: res.ent_by_id[e]["mention_count"],
-            reverse=True,
+            key=lambda e: (
+                _OVERVIEW_TYPE_RANK.get(res.ent_by_id[e].get("entity_type", "OTHER"), 9),
+                -res.ent_by_id[e]["mention_count"],
+            ),
         )
         node_ids = set(ranked[:limit])
 
