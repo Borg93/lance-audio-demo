@@ -3,8 +3,9 @@
   import { type Hit, thumbnailUrl, chunkFrameUrl, isVoiceHit, voiceBandOf } from '$lib/api';
   import { features } from '$lib/feature-flags.svelte';
   import { voiceSearch } from '$lib/voice-search.svelte';
-  import { fmtTime, queryTerms, makeHighlighter, cn } from '$lib/utils';
-  import { AudioLines } from 'lucide-svelte';
+  import { audioPreview } from '$lib/audio-preview.svelte';
+  import { fmtTime, queryTerms, makeHighlighter, cn, hitKey } from '$lib/utils';
+  import { AudioLines, Play, Pause } from 'lucide-svelte';
 
   type Props = {
     hit: Hit;
@@ -101,6 +102,45 @@
   {/if}
 {/snippet}
 
+{#snippet playButton(extra: string)}
+  <!-- Per-card audio preview — the same shared one-element audioPreview store
+       (and row key) as the table's play column, so state syncs across views.
+       Voice hits preview the matched diarized TURN (the audio that actually
+       matched), not the max-overlap ASR chunk span. -->
+  {@const rowKey = hitKey(hit)}
+  {@const playing = audioPreview.isPlaying(rowKey)}
+  {@const failed = audioPreview.isFailed(hit.doc_id)}
+  {@const clipStart = voice ? voice.turn_start : hit.start}
+  {@const clipEnd = voice ? voice.turn_end : hit.end}
+  <button
+    type="button"
+    disabled={failed}
+    title={failed
+      ? 'Audio unavailable — media failed to load'
+      : playing
+        ? 'Pause'
+        : `Play ${fmtTime(clipStart)}–${fmtTime(clipEnd)}`}
+    aria-label={playing ? 'Pause clip' : 'Play clip'}
+    aria-pressed={playing}
+    onclick={(e) => {
+      e.stopPropagation();
+      audioPreview.toggle({ key: rowKey, docId: hit.doc_id, start: clipStart, end: clipEnd });
+    }}
+    class={cn(
+      'inline-flex size-6 items-center justify-center rounded-md transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed',
+      extra,
+      playing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+      failed && 'group-hover:opacity-40',
+    )}
+  >
+    {#if playing}
+      <Pause class="size-3.5" />
+    {:else}
+      <Play class="size-3.5" />
+    {/if}
+  </button>
+{/snippet}
+
 {#if layout === 'tile'}
   <!-- Relative wrapper: the card root is a <button>, so the voice action must
        be a SIBLING overlay (nested buttons are invalid HTML). -->
@@ -161,17 +201,20 @@
         {/if}
       </div>
     </button>
-    {#if voiceSearch.built}
-      <button
-        type="button"
-        title="Find this voice — everywhere this speaker talks, across videos"
-        aria-label="Find this voice"
-        onclick={findVoice}
-        class="absolute top-1.5 right-1.5 z-[2] inline-flex size-6 items-center justify-center rounded-md bg-black/60 text-white opacity-0 transition-opacity hover:bg-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
-      >
-        <AudioLines class="size-3.5" />
-      </button>
-    {/if}
+    <div class="absolute top-1.5 right-1.5 z-[2] flex gap-1">
+      {@render playButton('bg-black/60 text-white enabled:hover:bg-primary')}
+      {#if voiceSearch.built}
+        <button
+          type="button"
+          title="Find this voice — everywhere this speaker talks, across videos"
+          aria-label="Find this voice"
+          onclick={findVoice}
+          class="inline-flex size-6 items-center justify-center rounded-md bg-black/60 text-white opacity-0 transition-opacity hover:bg-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+        >
+          <AudioLines class="size-3.5" />
+        </button>
+      {/if}
+    </div>
   </div>
 {:else}
   <div class="group relative">
@@ -232,16 +275,21 @@
         {/if}
       </div>
     </button>
-    {#if voiceSearch.built}
-      <button
-        type="button"
-        title="Find this voice — everywhere this speaker talks, across videos"
-        aria-label="Find this voice"
-        onclick={findVoice}
-        class="absolute top-2 right-2 z-[2] inline-flex size-6 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
-      >
-        <AudioLines class="size-3.5" />
-      </button>
-    {/if}
+    <div class="absolute top-2 right-2 z-[2] flex gap-1">
+      {@render playButton(
+        'border border-border bg-card text-muted-foreground shadow-sm enabled:hover:text-primary',
+      )}
+      {#if voiceSearch.built}
+        <button
+          type="button"
+          title="Find this voice — everywhere this speaker talks, across videos"
+          aria-label="Find this voice"
+          onclick={findVoice}
+          class="inline-flex size-6 items-center justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+        >
+          <AudioLines class="size-3.5" />
+        </button>
+      {/if}
+    </div>
   </div>
 {/if}

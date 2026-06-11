@@ -23,14 +23,14 @@
   import HitList from '$lib/components/hit-list.svelte';
   import HitCard from '$lib/components/hit-card.svelte';
   import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
-  import { loadCols, loadMergedCols, persistCols, persistMergedCols } from '$lib/table-columns';
+  import { loadCols, persistCols, loadTablePrefs, persistTablePrefs } from '$lib/table-columns';
   import DocTile from '$lib/components/doc-tile.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import ResizableSplit from '$lib/components/resizable-split.svelte';
   import AtlasMap from '$lib/atlas/AtlasMap.svelte';
   import { crossFilter } from '$lib/atlas/cross-filter.svelte';
   import { getAtlasChunks } from '$lib/api';
-  import { Button } from '$lib/components/ui';
+  import { Button, Switch } from '$lib/components/ui';
   import {
     LayoutGrid,
     List as ListIcon,
@@ -120,7 +120,7 @@
   // results table + player read this set while the Map view is active.
   let mapHits = $state<Hit[]>([]);
   let mapSelectionTotal = $state(0);
-  const MAP_TABLE_COLS = ['thumbnail', 'score', 'namn', 'language', 'start', 'text'];
+  const MAP_TABLE_COLS = ['play', 'thumbnail', 'score', 'namn', 'language', 'start', 'text'];
 
   // The Map-view table shows the lasso/legend selection when there is one,
   // otherwise the active search hits (text or image search) — which are also
@@ -161,14 +161,17 @@
       loadingHits = false;
     }
   }
-  // Which result columns the table view shows (persisted, with new default
-  // columns merged in across app versions — see $lib/table-columns). Direct
-  // init (not a one-shot $effect): this page is client-rendered, so
-  // localStorage is available at init time and the restore can't clobber
-  // later user toggles. The v4 legacy key predates the merge format;
-  // `speaker` is the only default column newer than the v4 era.
+  // Table-view preferences: which columns show, dragged column widths, and
+  // the wrap-text toggle — one persisted record, with new default columns
+  // merged in across app versions (see $lib/table-columns). Direct init (not
+  // a one-shot $effect): this page is client-rendered, so localStorage is
+  // available at init time and the restore can't clobber later user toggles.
+  // v6 bundles widths + wrap with visibility; v5 was visibility-only
+  // ({cols, known}); the v4 legacy key predates the merge format and
+  // `speaker` is the only default column newer than that era.
   const TABLE_COL_KEYS = TABLE_COLUMNS.map((c) => c.key);
   const DEFAULT_TABLE_COLS = [
+    'play',
     'thumbnail',
     'score',
     'namn',
@@ -179,16 +182,41 @@
     'text',
     'caption',
   ];
-  const TABLE_COLS_KEY = 'raudio-table-cols-v5';
-  let tableCols = $state<string[]>(
-    loadMergedCols({
-      storageKey: TABLE_COLS_KEY,
-      allKeys: TABLE_COL_KEYS,
-      defaults: DEFAULT_TABLE_COLS,
-      legacyKey: 'raudio-table-cols-v4',
-      legacyAppend: ['speaker'],
-    }),
-  );
+  const TABLE_PREFS_KEY = 'raudio-table-cols-v6';
+  const initialTablePrefs = loadTablePrefs({
+    storageKey: TABLE_PREFS_KEY,
+    allKeys: TABLE_COL_KEYS,
+    defaults: DEFAULT_TABLE_COLS,
+    legacyMergedKey: 'raudio-table-cols-v5',
+    legacyPlainKey: 'raudio-table-cols-v4',
+    legacyAppend: ['speaker'],
+  });
+  let tableCols = $state<string[]>(initialTablePrefs.cols);
+  /** Dragged column widths (px) by column key — absent key = auto-sized. */
+  let tableWidths = $state<Record<string, number>>(initialTablePrefs.widths);
+  /** Wrap text-like columns (text/caption/namn) instead of truncating. */
+  let tableWrap = $state<boolean>(initialTablePrefs.wrap);
+
+  function persistTable() {
+    persistTablePrefs(
+      TABLE_PREFS_KEY,
+      { cols: tableCols, widths: tableWidths, wrap: tableWrap },
+      TABLE_COL_KEYS,
+    );
+  }
+  /** A resize-handle drag ended (px) or was double-clicked (null = reset). */
+  function setColWidth(key: string, width: number | null) {
+    tableWidths =
+      width === null
+        ? Object.fromEntries(Object.entries(tableWidths).filter(([k]) => k !== key))
+        : { ...tableWidths, [key]: width };
+    persistTable();
+  }
+  /** The column-chooser "Wrap text" switch — applies (and persists) instantly. */
+  function setTableWrap(v: boolean) {
+    tableWrap = v;
+    persistTable();
+  }
 
   // Columns shown in the browse-mode (pre-search) documents table. Documents
   // carry fewer fields than search hits, so this is its own small set.
@@ -203,7 +231,7 @@
   ];
   function toggleCol(key: string) {
     tableCols = tableCols.includes(key) ? tableCols.filter((k) => k !== key) : [...tableCols, key];
-    persistMergedCols(TABLE_COLS_KEY, tableCols, TABLE_COL_KEYS);
+    persistTable();
   }
 
   // The browse-mode documents table keeps its OWN visible set (all doc columns
@@ -794,6 +822,9 @@
                         hits={mapTableHits}
                         {active}
                         visible={MAP_TABLE_COLS}
+                        widths={tableWidths}
+                        wrap={tableWrap}
+                        onwidthchange={setColWidth}
                         query={mapSelectionTotal > 0 ? '' : resultsQuery}
                         onselect={(h) => (active = h)}
                       />
@@ -990,11 +1021,25 @@
                     {c.label}
                   </button>
                 {/each}
+                <!-- Wrap toggle: truncate (off) vs wrap-and-grow (on) for the
+                     text-like columns. Applies + persists instantly. -->
+                <label
+                  class="ml-auto flex cursor-pointer items-center gap-1.5 text-muted-foreground select-none"
+                >
+                  <span>Wrap text</span>
+                  <Switch
+                    bind:checked={() => tableWrap, setTableWrap}
+                    aria-label="Wrap text in the text columns"
+                  />
+                </label>
               </div>
               <HitTable
                 {hits}
                 {active}
                 visible={tableCols}
+                widths={tableWidths}
+                wrap={tableWrap}
+                onwidthchange={setColWidth}
                 query={resultsQuery}
                 onselect={(h) => (active = h)}
               />
