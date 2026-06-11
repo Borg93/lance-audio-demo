@@ -74,19 +74,21 @@ def _row_detail(hit: dict[str, Any]) -> Column:
     with Column(gap=3, css_class="p-2") as detail:
         Text(hit["text"])
         with Row(gap=2):
+            # Spell out the exact call signature: hosts route this text to the
+            # model verbatim, and without it models guess argument names.
             Button(
                 "▶ Show this clip",
                 on_click=SendMessage(
-                    f"Show the clip for doc_id={hit['doc_id']} at {start} seconds"
-                    " (call show_clip)."
+                    f"Call show_clip(doc_id='{hit['doc_id']}', start_s={start})"
+                    " to show me this clip."
                 ),
             )
             Button(
                 "More transcript",
                 variant="outline",
                 on_click=SendMessage(
-                    f"Get the transcript around doc_id={hit['doc_id']} at {start}"
-                    " seconds and summarize what is said."
+                    f"Call get_transcript_window(doc_id='{hit['doc_id']}',"
+                    f" center_s={start}) and summarize what is said."
                 ),
             )
     return detail
