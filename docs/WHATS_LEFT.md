@@ -22,10 +22,13 @@ rest of the system.
 ## 0. Positioning & the architectural model
 
 **What we are building: an Arrow-native multimodal lakehouse for media archives**
-— **Lance on S3 stores, KubeRay/vLLM compute, Arrow straight to WebGPU**, with
-search · voice · KG built in. That architecture is the differentiator, not the
-app surface: the *experience* is "Rerun for media archives," but the *moat* is the
-data platform underneath. [Rerun](https://rerun.io) nailed the timeline experience
+— the **target** is **Lance on object storage, KubeRay/vLLM compute, Arrow straight
+to WebGPU**, with search · voice · KG built in. That architecture is the
+differentiator, not the app surface: the *experience* is "Rerun for media
+archives," but the *moat* is the data platform underneath. **Read the
+shipped-vs-planned split below before treating any of this as current** — the
+*seams* exist in today's code, but Ray, object storage, and the dynamic schema are
+still planned (§1, §5). [Rerun](https://rerun.io) nailed the timeline experience
 for robotics/CV (point clouds, 3D, `mcap`/`.rrd`); we aim the same
 synchronized-multimodal-exploration idea at **video · image · audio · text**,
 **modality-agnostic** — no modality (not even our original press-conference
@@ -39,20 +42,27 @@ viewer. We don't. The whole stack speaks **one columnar language — Arrow — w
 serialization boundary anywhere**:
 
 ```
-Lance on S3          KubeRay / vLLM        Arrow IPC            Arrow JS           WebGPU
-(Arrow columnar) ──▶ (Arrow batches) ──▶ (tableFromIPC) ──▶ (typed arrays) ──▶ (GPU buffers)
-   storage            compute               wire               browser            render
+Lance (object store) vLLM / Ray Serve     Arrow IPC            Arrow JS           WebGPU
+(Arrow columnar) ──▶ (Arrow batches) ──▶ (bulk: tableFromIPC)─▶ (typed arrays) ──▶ (GPU buffers)
+   storage            compute               wire                browser            render
 ```
 
-The same buffers flow from object storage → distributed compute → the wire
-(`frontend/src/lib/api.ts` decodes Arrow IPC via `tableFromIPC`, **not** JSON) →
-the browser → GPU memory near-zero-copy (the Atlas `gpu-scatter` and KG `gpu-graph`
-are hand-written WebGPU/WGSL renderers; `embedding-atlas` is WebGPU too). Storage
-scales on S3, compute scales on the Ray cluster, **independently** — the lakehouse
-decoupling, applied to multimodal/embedding data. This combination is a *category*
-none of FiftyOne/Lightly/Rerun occupy, and it's validated by where data-infra is
-heading (Lance + Ray, Daft), not a lone bet. The app surface (explorer UI,
-curation) is borrowable; **this pipeline is the part that's genuinely ours.**
+The aim is one columnar language — **Arrow — end to end, no serialization boundary
+on the bulk path**. This is **already real for the embedding-map (Atlas) payload**:
+`backend/atlas/points.py:170` serializes columns with `RecordBatchStreamWriter`,
+`/api/atlas/points` returns `application/vnd.apache.arrow.stream`, and
+`frontend/src/lib/api.ts:599` decodes it with `tableFromIPC` straight into the
+`gpu-scatter` WebGPU/WGSL renderer (the KG uses `gpu-graph`; `embedding-atlas` is
+WebGPU too). **Caveat (verified):** *search hits* currently travel as schema-
+agnostic **JSON dicts** (`qb.to_list()`), not Arrow — so the zero-copy claim holds
+for the bulk vector/point payloads (the part that actually needs it), not yet for
+the per-hit list. Storage and compute are *designed* to scale independently — the
+lakehouse decoupling, applied to multimodal/embedding data — once the Lance dataset
+moves to object storage and a Ray driver lands (today both are local / CLI; §1).
+This combination is a *category* none of FiftyOne/Lightly/Rerun occupy, and it's
+validated by where data-infra is heading (Lance + Ray, Daft), not a lone bet. The
+app surface (explorer UI, curation) is borrowable; **this pipeline is the part
+that's genuinely ours.**
 
 **The three-layer model** (the heart of every section below):
 
@@ -70,6 +80,135 @@ LightlyStudio / FiftyOne / Rerun, see
 [COMPARISON_LIGHTLY.md](COMPARISON_LIGHTLY.md). For the **module boundaries** that
 realize this model with low coupling — the storage/serving/enrichment/query/OLAP/
 schema seams, grounded in the current code — see [MODULAR_PLAN.md](MODULAR_PLAN.md).
+
+### Overall design (target) — shipped vs planned
+
+> Green = shipped & verified in code (2026-06-14). Dashed amber = planned (the
+> seam exists, the implementation doesn't yet). This is the **target** topology;
+> the cross-check table below it is the honest current state.
+
+```mermaid
+flowchart TB
+    subgraph SRC[Sources]
+        MEDIA[["Media archive<br/>video · audio · image · text"]]
+    end
+
+    subgraph COMPUTE["Compute — model serving (one layer, two drivers)"]
+        VLLM["vLLM via HTTP<br/>embed · rerank · caption · summarize"]
+        RAYSERVE["Ray Serve / KubeRay<br/>autoscaling ingress"]
+        ONLINE["online: query-time<br/>embed + rerank"]
+        OFFLINE["offline: bulk column backfill"]
+    end
+
+    subgraph ENRICH["Enrichment — data evolution (creates columns)"]
+        CLIDRV["CLI driver (FEATURES loop)"]
+        RAYDATA["Ray Data driver (DAG)"]
+        ADDCOL["lance add_columns + batch_udf<br/>(no rewrite, no migration)"]
+    end
+
+    subgraph STORE["Storage — Lance (system of record)"]
+        LANCELOCAL["Lance on local FS<br/>chunks · chunk_frames · documents · speakers"]
+        LANCES3["Lance on object storage (S3)<br/>storage_options"]
+        SCHEMA["Arrow schema = live registry"]
+    end
+
+    subgraph QUERY["Query + OLAP"]
+        ANN["ANN IVF_PQ + FTS Tantivy + reranker"]
+        OLAP["DuckDB lance extension (SQL/OLAP)"]
+    end
+
+    subgraph API["API + Frontend (SvelteKit)"]
+        COLAPI["/api/columns (scalar, role-less)"]
+        SCHEMAAPI["/api/schema (roles) + checkout_latest refresh"]
+        ATLASIPC["/api/atlas/points → Arrow IPC"]
+        HITS["search hits → JSON dicts"]
+        WEBGPU["WebGPU: gpu-scatter · gpu-graph"]
+        DYNUI["schema-driven render (roles → components)"]
+    end
+
+    MEDIA --> ADDCOL
+    CLIDRV --> ADDCOL
+    RAYDATA -.-> ADDCOL
+    OFFLINE -.-> RAYDATA
+    ONLINE --> ANN
+    VLLM --> ONLINE
+    VLLM --> OFFLINE
+    RAYSERVE -.-> VLLM
+    ADDCOL --> LANCELOCAL
+    LANCELOCAL -.-> LANCES3
+    LANCELOCAL --> SCHEMA
+    SCHEMA --> ANN
+    SCHEMA --> OLAP
+    ANN --> HITS
+    ATLASIPC --> WEBGPU
+    SCHEMA --> COLAPI
+    COLAPI -.-> SCHEMAAPI
+    SCHEMAAPI -.-> DYNUI
+    HITS --> DYNUI
+    ANN --> ATLASIPC
+    OLAP -.-> DYNUI
+
+    classDef shipped fill:#d4f7d4,stroke:#2e7d32,color:#000;
+    classDef planned fill:#fff3cd,stroke:#b8860b,color:#000,stroke-dasharray:5 3;
+
+    class MEDIA,VLLM,ONLINE,OFFLINE,CLIDRV,ADDCOL,LANCELOCAL,SCHEMA,ANN,COLAPI,ATLASIPC,HITS,WEBGPU shipped;
+    class RAYSERVE,RAYDATA,LANCES3,OLAP,SCHEMAAPI,DYNUI planned;
+```
+
+**Cross-check — does the model hold against the code? (verified 2026-06-14)**
+
+| Claim in this doc | Status | Evidence |
+|---|---|---|
+| Lance is the system of record; Arrow schema is the registry | ✅ shipped | `backend/state.py:74-109` opens Lance tables; `src/raudio/model/schema.py` |
+| Data evolution via `add_columns` (no migration) | ✅ shipped | `features/engine.py:128-137` (`@lance.batch_udf`, `add_columns(udf, read_columns=, batch_size=)` — **lance core**, not lancedb) |
+| One model layer, online + offline share a client `Protocol` | ✅ shipped | `vllm/base.py` `VLLMTransport`; online `backend/clients.py`, offline `features/columns.py:345-371` both build `VLLMEmbeddingClient(url)` |
+| ANN (IVF_PQ) + FTS (Tantivy) + reranker | ✅ shipped | `backend/search/*`, `vllm/reranker.py` |
+| Arrow IPC → WebGPU (bulk/Atlas path) | ✅ shipped | `atlas/points.py:170` `RecordBatchStreamWriter`; `api.ts:599` `tableFromIPC` → `gpu-scatter` |
+| Search hits are Arrow on the wire | ❌ **JSON today** | `backend/search/*` return `qb.to_list()` / `to_pylist()` — schema-agnostic dicts, not Arrow |
+| Serving runs on Ray Serve / KubeRay | 📋 planned | **no `ray` import anywhere, not a dependency**; serving is plain httpx→vLLM URL (Ray Serve is a URL swap behind the same Protocol — `MODULAR_PLAN §2`) |
+| Offline backfill driven by Ray Data | 📋 planned | offline driver today is the **CLI loop** (`features/columns.py`); Ray Data driver not built |
+| Lance on S3 / object storage | 📋 planned | `state.py` opens **local** paths; `s3://` appears only in media-URI docstrings (`schema.py:13,127`). `storage_options` not wired |
+| Dynamic `/api/schema` + roles + `checkout_latest` refresh | 📋 planned | only `/api/columns` (scalar, role-less) exists; handle pinned at startup (`state.py:81`) |
+| DuckDB `lance`-extension OLAP | 📋 planned | not in code; optional analytics module (§3) |
+
+### Audit — is this design actually a good idea?
+
+**Verdict: yes — the architecture is sound and the code is genuinely *structured
+for it*, so the remaining work is implementation behind seams that already exist,
+not a rewrite.** The honest detail:
+
+- **Why it makes sense (the seams are real, verified above).** The enrichment core
+  is *client-free pure functions over a path + a `compute` callable*
+  (`features/engine.py`), so a Ray Data driver can fan them out **unchanged** — the
+  hard part (idempotent, resumable, batched column creation) is done. Model access
+  is a **URL behind a `Protocol`**, so "vLLM → Ray Serve" is a config swap, not a
+  code change. The search wire is **open dicts**, so new columns ride the payload
+  without a typed-model edit. And the one place zero-copy actually matters — bulk
+  vectors → GPU — **already** runs Arrow-IPC→WebGPU. These are the expensive
+  structural decisions, and they're already the right shape.
+- **Why it's a good bet (not a lone gamble).** Lance + Ray + object storage is
+  exactly the multimodal-lakehouse direction the data-infra field is converging on
+  (Lance's own Ray integration; Daft). We're not inventing a format or a compute
+  model — we're assembling proven pieces, with a domain (audio/voice/archive) the
+  comparable tools don't touch.
+- **Where it could *not* pan out (the honest risks).**
+  1. **Ray is unproven *here*** — zero lines today. At single-node / 145k rows it's
+     arguably **YAGNI**; its value is real only at corpus scale or true multi-tenant
+     concurrency. Adopt it when a workload demands it, not preemptively (it adds a
+     cluster, a control plane, and ops weight).
+  2. **The dynamic schema has a real ceiling** (§5): generic for data/filters,
+     **role-gated** for rich interactions — not infinitely generic. Fine, but don't
+     over-invest in a fully generic renderer.
+  3. **S3-native Lance changes the latency model** — object-store reads are not
+     local-FS reads; ANN `nprobes`/caching tuned for local may need revisiting.
+  4. **Two libraries in play** (`lance` core for evolution, `lancedb` for search) —
+     keep API claims attributed to the right one (this audit corrected one such mix-up).
+- **Recommended discipline.** Build **Phase 0** (the schema seam: `/api/schema` +
+  `checkout_latest`) first — it's local, no-GPU, low-risk, and unblocks the dynamic
+  UI. Defer **Ray and S3** until a real scale/concurrency need appears; they're the
+  highest-effort, highest-uncertainty items and the code is already Ray-/S3-*ready*,
+  so waiting costs nothing. **Don't** rebuild a generic explorer to rival FiftyOne —
+  the moat is the pipeline + the domain, not the UI.
 
 ---
 
