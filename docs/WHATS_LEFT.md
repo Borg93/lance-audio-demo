@@ -206,8 +206,10 @@ versions, so fragments and superseded manifests pile up on disk.
   `cleanup_old_versions` for GC; `list_versions` / **`restore(version)`** for the
   "roll back a bad feature pass" case; `tags` / `branches` for named/experimental
   versions; **`clone_table`** (shallow, shares data files) for cheap variant
-  builds. So §2 is largely *adopting `optimize()` across all tables on a
-  schedule*, not new machinery.
+  builds — note this one is on the **async** `AsyncConnection` only, not the sync
+  `DBConnection` our retrieval path uses, so a variant build would go through the
+  async client (or `lance` core). So §2 is largely *adopting `optimize()` across all
+  tables on a schedule*, not new machinery.
 
 **❓ Open questions:** retention window for old versions (we sometimes want to
 roll back a bad feature pass — now answered by `restore(version)`); compaction
