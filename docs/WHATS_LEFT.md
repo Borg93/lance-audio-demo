@@ -27,12 +27,27 @@ Today inference is **split across two worlds** that don't share a runtime:
   `rerank-server`, pinned to ports 8001/8002 — see
   [`scripts/serve-all.sh`](../scripts/serve-all.sh)). The embedding client
   ([`src/raudio/vllm/embedding.py`](../src/raudio/vllm/embedding.py)) fans out
-  in-flight HTTP requests (`TEXT_CONCURRENCY=32`) and relies on vLLM's
-  continuous batching. Orchestration is ad-hoc shell + Makefile targets, with
-  separate one-off scripts (`scripts/build_topics.py`, `scripts/kg/*`,
-  `scripts/caption_eval.py`).
+  in-flight HTTP requests over a `ThreadPoolExecutor` (`TEXT_CONCURRENCY=32`,
+  `IMAGE_CONCURRENCY=8`) and relies on vLLM's continuous batching. The
+  **resume/checkpoint logic is hand-rolled** in
+  [`src/raudio/features/engine.py`](../src/raudio/features/engine.py): a Lance
+  `@batch_udf` with `merge_insert` null-fill for scan-derived columns, and a
+  two-pass compute→attach with a **JSONL sidecar checkpoint** for blob-derived
+  columns (frame embeds/captions). Orchestration is ad-hoc shell + Makefile
+  targets, with separate one-off scripts (`scripts/build_topics.py`,
+  `scripts/kg/*`, `scripts/caption_eval.py`). **This is exactly the hand-rolled
+  concurrency + resume machinery Ray Data's `map_batches` + actor pool replaces.**
 - **Online** (the read side): the FastAPI backend calls the *same* vLLM servers
-  per query for query-vector embedding and reranking.
+  per query for query-vector embedding and reranking. This is already cleanly
+  dependency-injected — `run_search()` (`backend/search/service.py:385-401`)
+  lazily gets the embedder via a factory (`backend/clients.py`), and upstream
+  failures map to a 503 `ServiceUnavailableError` — so the *online* rewrite is
+  mostly swapping what's behind the factory, not surgery on the search code.
+- There isn't one model server but **four+**, each its own vLLM process on its
+  own port: embed (`:8001`), rerank (`:8002`), caption/Gemma (`:8003`, external —
+  we don't even start it), summarize (`:8004`). `serve-all.sh` brings them up
+  **sequentially and health-gated** because starting embed+rerank at once trips
+  vLLM's GPU memory-profiling race.
 
 **What we want:**
 
@@ -67,10 +82,13 @@ serve-then-CLI-then-shell choreography in `serve-all.sh` / the Makefile.
 > **The Ray/KubeRay/GPU stack must stay optional.** It's the heavy path for the
 > full semantic/visual/hybrid experience. A user who only wants **FTS over a
 > Lance dataset** must be able to run that with **none of it** — no Ray, no
-> KubeRay, no GPU, no vLLM. Tantivy BM25 already lives in the dataset, so
-> keyword search is a pure-CPU read against Lance. Keep that path first-class
-> and degrade gracefully (see §4) rather than making the GPU stack a hard
-> dependency of "search the archive."
+> KubeRay, no GPU, no vLLM. The groundwork is already there: the backend defers
+> all vLLM imports to request time (`backend/clients.py`), and the `fts` /
+> `scene_fts` modes never touch the embedder. What's **missing** is graceful
+> *cross-mode* fallback — today `hybrid`/`semantic` with `text_embedding` absent
+> returns a 400, rather than degrading to FTS (see §4). Keep the no-GPU path
+> first-class rather than making the GPU stack a hard dependency of "search the
+> archive."
 
 **❓ Open questions**
 
@@ -186,12 +204,16 @@ not abstract):
   `extraid`, `topic`; the language dropdown (`filter-popover.svelte`) hardcodes
   `sv`/`en`. Document browse (`DOC_COLUMNS`) is likewise a fixed 7-field list.
 
-**What's already dynamic** (the seam to build on): `/api/columns` **exists** and
-is consumed by the *advanced* filter builder (`filter-popover.svelte` →
-`listColumns()` in `api.ts`), and the Atlas reads its colour dimensions
+**What's already dynamic** (the seam to build on): `/api/columns` **exists** on
+both ends — served by `backend/system/router.py` (introspects the `chunks`
+schema, maps types to a `ColumnKind` of `number`/`boolean`/`time`/`text`, and
+**skips `alignments_json` + every `*_embedding` column**) and consumed by the
+*advanced* filter builder (`filter-popover.svelte` → `listColumns()` in
+`api.ts`). The Atlas also reads its colour dimensions
 (`language`/`namn`/`topic`/`doc_topic`) dynamically from the Arrow payload. So
-the introspection endpoint is there — it just doesn't yet drive the table,
-detail views, cards, or quick filters.
+the introspection endpoint is there — but it's **scalar-only and role-less**
+(name+type, nothing about display/facet/embedding roles), and it doesn't yet
+drive the results table, detail views, cards, or quick filters.
 
 **Goal: FiftyOne-like flexibility** — the UI and API adapt to *whatever* columns
 the dataset has, instead of a fixed contract:
@@ -318,6 +340,101 @@ Areas that need real investment:
 **❓ Open questions:** graph storage backend (stay Lance-native vs. adopt a graph
 DB); how tightly to couple KG entities to speaker identities; whether the graph
 is rebuilt or incrementally maintained under the new eventing model (§8).
+
+---
+
+## 10. 📋 Unify multimodal search — evaluate Jina v5 Omni
+
+Retrieval today runs on **three separate embedding families**, all from
+Qwen3-VL-Embedding-2B over vLLM ([EMBEDDINGS.md](EMBEDDINGS.md),
+[`src/raudio/vllm/embedding.py`](../src/raudio/vllm/embedding.py)): `text_embedding`
+(transcript text), `frame_embedding` (chunk-level image vector), and
+`caption_embedding`. The search modes (semantic / visual / scene / hybrid /
+fused) exist partly *because* these are distinct vectors in distinct columns
+that have to be combined at query time.
+
+**Bet:** evaluate **Jina v5 Omni** (an omni-modal embedding model — text, image,
+and audio into **one shared space**) as a path to *unify* search:
+
+- **One embedding space** instead of three columns → semantic, visual, and (new)
+  **audio** retrieval become one ANN query, not three legs to fuse. Simplifies
+  the fused/hybrid logic in `backend/search/` and the schema in §5.
+- **Native audio retrieval** — query the press-conference *audio* directly
+  (prosody, non-speech cues), not only its transcript text, which the current
+  text+image-only stack can't do.
+- **Run it as a §1 actor** — slots straight into the Ray Data embed-actor model;
+  it's just a different encoder behind the same `EmbeddingClient` protocol.
+
+This is an **evaluation**, not a commitment: benchmark Jina v5 Omni retrieval
+quality (the [`evals/`](../evals) + topic/caption eval harness) against the
+current Qwen3-VL three-vector setup before migrating any column.
+
+**❓ Open questions:** does a single unified space match per-modality specialist
+vectors on recall, or do we keep both? Embedding dim / storage cost vs. the
+current 2048-d columns; re-embedding the whole corpus is a §1 batch job;
+licensing/serving (does it run under vLLM or need its own actor runtime?).
+
+---
+
+## 11. 📋 Replace easytranscriber — a Ray-native ASR pipeline
+
+The entire write side starts with **easytranscriber** (+ easyaligner) — the
+4-stage VAD → Whisper → wav2vec2 CTC → forced-alignment pipeline wrapped by
+`raudio transcribe` ([PIPELINE.md](PIPELINE.md)). It works, but it's a poor fit
+going forward: it's an **external dependency we don't control**, its stage-by-
+stage, directory-dumping design (`output/vad/`, `output/transcriptions/`,
+`output/emissions/`, …) is built for single-process batch runs, and it does **not
+map cleanly onto Ray** (the actor/`map_batches` model in §1) — `pyannote` is only
+a transitive dep through it ([TODO.md](TODO.md#in-flight)), and the resume story
+is filesystem-staging, not a managed pipeline.
+
+**Bet:** rewrite ASR as a **Ray-native pipeline** we own:
+
+- Each stage (VAD, transcription, alignment) becomes a **Ray Data stage /
+  actor** holding a warm model on the GPU, streaming Arrow batches between
+  stages instead of staging intermediates to per-stage directories.
+- The KB models stay the same (KB-Whisper, wav2vec2-voxrex, pyannote VAD — the
+  *quality* isn't the problem); what changes is the **orchestration**: managed
+  GPU scheduling, backpressure, retries, and checkpointing from Ray, on the same
+  KubeRay cluster as everything else in §1.
+- `pyannote` becomes a **first-class dependency** rather than transitive.
+- Output lands **directly in Lance** (no `output/*/` JSON hop), so transcription
+  and the downstream feature passes share one runtime and one dataset.
+
+**❓ Open questions:** how much of easyaligner's forced-alignment we reimplement
+vs. vendor; whether to keep an easytranscriber-compatible path during migration;
+validating the rewrite produces identical word alignments (regression-test
+against the current `alignments_json`).
+
+---
+
+## 12. 📋 Analytics & charting — study the corpus, not just search it
+
+There is **no analytical/visualization surface** for understanding the data in
+aggregate. The Atlas map is a 2-D embedding projection and the topic treemap
+exists, but there are **no charts** — no distributions, time series, or
+faceted breakdowns to actually *study* the corpus. The
+[TODO.md](TODO.md#curation--exploration-roadmap) "Stats / histograms" item is the
+seed; this is the broader bet.
+
+**Bet:** a real analytics layer to make graphs over the data:
+
+- **Aggregate charts** — distributions and counts over any facet (per `namn`,
+  `referenskod`, `language`, `topic`, speaker, time/duration): histograms, time
+  series, top-N bars, co-occurrence. The frontend already ships LayerChart
+  (used by the topic treemap) — extend it into a charts panel.
+- **Powered by DuckDB-over-Lance (§3)** — these are `GROUP BY`/aggregate queries,
+  exactly what DuckDB is for; a `/api/stats` (or DuckDB-WASM client-side, §4)
+  surface rather than bespoke Python scans.
+- **Schema-driven (§5)** — chartable dimensions come from the field-schema
+  (anything tagged `facet`), so new columns become chartable automatically.
+- **Curation loop** — feeds the faceted filter panel and group-by-video / near-
+  dup work in [TODO.md](TODO.md#curation--exploration-roadmap); seeing the
+  distribution is how you find the redundancy to collapse.
+
+**❓ Open questions:** server-side `/api/stats` vs. fully client-side DuckDB-WASM
+(§4); which chart library surface (lean on the existing LayerChart); precompute
+vs. on-the-fly aggregation at 145k+ rows.
 
 ---
 
