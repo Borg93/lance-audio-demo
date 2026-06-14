@@ -21,24 +21,45 @@ rest of the system.
 
 ## 0. Positioning & the architectural model
 
-**What we are building: a multimodal-media analysis engine** — "Rerun for media
-archives." [Rerun](https://rerun.io) nailed the *experience* of exploring
-multimodal data on a synchronized timeline, but it's aimed at robotics/CV (point
-clouds, 3D, `mcap`/`.rrd`). We aim the same synchronized-multimodal-exploration
-idea at **video · image · audio · text** — and explicitly **not** at point
-clouds, 3D, or robotics formats. We already have the seed (synchronized A/V
-playback, word-level alignment, the chunk timeline, the Atlas embedding map);
-the bet is to generalize it into the primary analysis surface, **modality-
-agnostic** — no modality (not even our original press-conference *videos*) is
-privileged or hardcoded. **Multimodal data in general is the first-class
-citizen.**
+**What we are building: an Arrow-native multimodal lakehouse for media archives**
+— **Lance on S3 stores, KubeRay/vLLM compute, Arrow straight to WebGPU**, with
+search · voice · KG built in. That architecture is the differentiator, not the
+app surface: the *experience* is "Rerun for media archives," but the *moat* is the
+data platform underneath. [Rerun](https://rerun.io) nailed the timeline experience
+for robotics/CV (point clouds, 3D, `mcap`/`.rrd`); we aim the same
+synchronized-multimodal-exploration idea at **video · image · audio · text**,
+**modality-agnostic** — no modality (not even our original press-conference
+*videos*) is privileged or hardcoded. **Multimodal data in general is the
+first-class citizen.**
+
+**Why the architecture is the moat (and not a borrowable app feature).** None of
+the comparable tools separate storage from compute: FiftyOne couples both in
+MongoDB, LightlyStudio in an embedded DuckDB/Postgres, Rerun in a closed `.rrd`
+viewer. We don't. The whole stack speaks **one columnar language — Arrow — with no
+serialization boundary anywhere**:
+
+```
+Lance on S3          KubeRay / vLLM        Arrow IPC            Arrow JS           WebGPU
+(Arrow columnar) ──▶ (Arrow batches) ──▶ (tableFromIPC) ──▶ (typed arrays) ──▶ (GPU buffers)
+   storage            compute               wire               browser            render
+```
+
+The same buffers flow from object storage → distributed compute → the wire
+(`frontend/src/lib/api.ts` decodes Arrow IPC via `tableFromIPC`, **not** JSON) →
+the browser → GPU memory near-zero-copy (the Atlas `gpu-scatter` and KG `gpu-graph`
+are hand-written WebGPU/WGSL renderers; `embedding-atlas` is WebGPU too). Storage
+scales on S3, compute scales on the Ray cluster, **independently** — the lakehouse
+decoupling, applied to multimodal/embedding data. This combination is a *category*
+none of FiftyOne/Lightly/Rerun occupy, and it's validated by where data-infra is
+heading (Lance + Ray, Daft), not a lone bet. The app surface (explorer UI,
+curation) is borrowable; **this pipeline is the part that's genuinely ours.**
 
 **The three-layer model** (the heart of every section below):
 
 | Layer | Role | What it means concretely |
 |---|---|---|
 | **Lance** | **storage** | S3-native columnar media + vectors + FTS/ANN. The **Arrow schema is the live registry** of what has been enriched so far — the single source of truth for the dynamic schema (§5). |
-| **Ray** | **data evolution** | The enrichment engine. It doesn't just "compute" — it **creates columns**: raw media → (ASR) `text` → (embed) `text_embedding` → (diarize) speakers → (topics/KG) facets → (select) `typicality`/`is_near_dup`. A dependency DAG of column-producing stages, incremental + idempotent, on KubeRay (§1). |
+| **Ray** | **data evolution + model serving** | The compute layer, on a **KubeRay** cluster, with **one model layer (Ray Serve + vLLM) driven two ways**: **online** — query-time embedding + reranking on the search path (low latency, one item); **offline** — batch column-evolution over the whole corpus (Ray Data jobs). It doesn't just "compute" — it **creates columns**: raw media → (ASR) `text` → (embed) `text_embedding` → (diarize) speakers → (topics/KG) facets → (select) `typicality`/`is_near_dup`. A dependency DAG of column-producing stages, incremental + idempotent. Both drivers hit the same serving layer through the same client `Protocol` and write via the same `add_columns` engine (§1, [MODULAR_PLAN §2](MODULAR_PLAN.md)). |
 | **DuckDB (`lance` extension)** | **SQL / OLAP surface (optional)** | The analytical query layer over Lance — faceting, cross-filter, GROUP BY/JOIN/aggregates, stats (§3, §12). The official **`lance` DuckDB extension** (`INSTALL lance; LOAD lance;`) exposes Lance to DuckDB SQL (`lance_vector_search`/`lance_fts`/`lance_hybrid_search`, `ATTACH … (TYPE lance)`, index + maintenance ops). Because the data stays **Lance (MVCC/ACID)**, DuckDB is just a query engine over it — DuckDB's native single-writer limit (which LightlyStudio's *relational* DuckDB hits) doesn't apply. **Retrieval already runs on the LanceDB SDK** (see below); the extension's marginal value is the SQL/OLAP surface + a DuckDB-WASM in-browser path (§4), so it's **optional, scoped to analytics — not a replacement for the SDK.** |
 
 These three imply the fourth: because **Ray continuously adds columns**, nothing
@@ -427,10 +448,44 @@ KG-derived fields, configurable chunking in §6) adds columns — and §1 makes 
 add columns *continuously*. Without this, each new column is a frontend+backend
 edit across the files listed above.
 
-**❓ Open questions:** how far to genericize (full dynamic schema vs. typed core
-+ dynamic extras); how to keep TS types honest against a dynamic schema; how to
-preserve the curated, hand-tuned default views (title selection, default
-columns) on top of a generic renderer.
+**How flexible can the frontend actually get? — feasibility + the boundary.**
+This is the right thing to be nervous about, so state it precisely. The schema-
+driven UI is **a proven, shipping pattern, not research** — and one product ships
+it on *our exact SvelteKit stack*: LightlyStudio's `GET /metadata/info` drives
+generic rendering (`CombinedMetadataDimensionsFilters.svelte` loops fields →
+sliders; `MetadataSegment.svelte` iterates `metadata_dict` → detail rows), and
+FiftyOne generates its whole sidebar from the dataset schema. **Our gap is
+narrower than theirs was**: the wire is *already* schema-agnostic (`list[dict]` /
+Arrow IPC), so only three named spots are hardcoded (`_HIT_COLUMNS`, the pinned
+handle, the zod `HitSchema`). So this part is **low-risk and achievable.**
+
+But be calibrated about the limit — there are **two tiers**, and only the first is
+fully generic:
+
+1. **Data display + filters → fully generic.** Tables, facets, detail rows, scalar
+   fields, quick filters render from `/api/schema` with zero per-column code. This
+   is the proven 90%.
+2. **Rich per-modality interactions → role-gated, not infinitely generic.** The
+   synchronized A/V karaoke player, the WebGPU Atlas, voiceprint UX, the KG graph
+   are bespoke components. The pattern is a **role → component registry**: a
+   column's `role` (`media,kind=audio`, `embedding`, `alignments`) *conditionally
+   mounts a known rich component*. A new **column** of a known role lights up
+   automatically; a genuinely new **kind of interaction** still needs a component
+   built once, then registered. You cannot render an interaction nobody has
+   written — and neither can FiftyOne (typed per-field visualizers) or Rerun
+   (per-component views). **Nobody achieves more than this.**
+
+So the realistic, honest promise is: **"any column surfaces in tables/filters/
+detail with zero edits, and known rich components activate by role"** — *not*
+"arbitrary new UI materializes from a schema." That ceiling is fine: it's exactly
+what the references deliver, and it's enough for everything on this roadmap.
+
+**❓ Open questions (the genericity dial — feasibility itself is settled):** the
+split above resolves "how far to genericize" → **generic typed core for data +
+a role-keyed registry for rich affordances**. What remains: how to keep TS types
+honest against a dynamic schema (typed core + an open `fields` bag); and how to
+preserve curated, hand-tuned default views (title selection, default columns) as
+*overrides* on top of the generic renderer.
 
 ---
 

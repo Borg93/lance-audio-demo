@@ -86,6 +86,27 @@
    single-writer limit simply doesn't apply. Same engine, opposite outcome,
    because of *where the data lives*.
 
+6. **The architecture is a different *category* — storage/compute separation +
+   Arrow end-to-end (the real moat).** This is the deepest difference, and it's
+   structural, not a feature any of them can bolt on. **None of the three separate
+   storage from compute**: FiftyOne couples both in MongoDB, LightlyStudio in an
+   embedded DuckDB/Postgres, Rerun in a closed `.rrd` viewer — all "app + embedded
+   DB," single-node-ish, with vectors either external (FiftyOne) or brute-forced
+   (Lightly). Ours is a **lakehouse**: **Lance on S3** (open columnar table format,
+   MVCC) as the system of record, **KubeRay/vLLM** as elastic compute that *evolves
+   the columns* (one model layer, online query-time + offline backfill — see
+   [MODULAR_PLAN §2](MODULAR_PLAN.md)), and **DuckDB** as an optional SQL surface
+   over the same files. Storage and compute scale independently. And the whole
+   stack speaks **one columnar language — Arrow — with no serialization boundary**:
+   Lance (Arrow on S3) → Ray (Arrow batches) → **Arrow IPC** on the wire
+   (`frontend/src/lib/api.ts` decodes via `tableFromIPC`, not JSON) → Arrow JS in
+   the browser → **WebGPU** buffers near-zero-copy (`gpu-scatter`/`gpu-graph` WGSL
+   renderers). FiftyOne/Lightly marshal rows → JSON → DOM at every hop; Rerun *is*
+   wgpu but is a closed playback silo with no search. **The renderer is replaceable;
+   the unbroken Arrow pipeline from object store to GPU is the part that's ours** —
+   and it's validated by where data-infra is heading (Lance + Ray, Daft), not a
+   lone bet. See [WHATS_LEFT §0](WHATS_LEFT.md) for the full model.
+
 ---
 
 ## 3. What they do better (and what we should borrow)
