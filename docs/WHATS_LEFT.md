@@ -199,12 +199,15 @@ versions, so fragments and superseded manifests pile up on disk.
 - **Scheduling** — a `raudio maintain` target / periodic job (a §1 Ray job?) so
   it isn't a manual ritual.
 - **Mostly wiring existing SDK calls.** The LanceDB Table API already provides the
-  whole toolkit: **`table.optimize(cleanup_older_than=…, retrain=…)`** does
-  compaction + version prune + **index retrain in one call** (the retrain covers
-  the FTS/vector tail our current `raudio compact` skips); `cleanup_old_versions`
-  for GC; `list_versions` / **`restore(version)`** for the "roll back a bad feature
-  pass" case; `tags` / `branches` for named/experimental versions. So §2 is largely
-  *adopting `optimize()` across all tables on a schedule*, not new machinery.
+  whole toolkit: **`table.optimize(cleanup_older_than=…)`** does compaction +
+  version prune + **incremental index optimization** (it folds *new* rows into the
+  existing IVF/FTS indices — the tail our current `raudio compact` leaves
+  unindexed; note the old `retrain=` flag is now a deprecated no-op);
+  `cleanup_old_versions` for GC; `list_versions` / **`restore(version)`** for the
+  "roll back a bad feature pass" case; `tags` / `branches` for named/experimental
+  versions; **`clone_table`** (shallow, shares data files) for cheap variant
+  builds. So §2 is largely *adopting `optimize()` across all tables on a
+  schedule*, not new machinery.
 
 **❓ Open questions:** retention window for old versions (we sometimes want to
 roll back a bad feature pass — now answered by `restore(version)`); compaction
@@ -373,9 +376,12 @@ The three changes that make "new column, no restart" true:
 2. **Stop the fixed `SELECT`** — derive the search column list from the schema (or
    select all non-blob columns) instead of the `_HIT_COLUMNS` constant, so new
    columns ride the (already-dict) payload automatically.
-3. **Refresh the handle, don't restart the process** — `state.py` calls
-   `dataset.checkout_latest()` (cheap: reads a manifest) on a TTL or on a §8
-   "enrichment done" event, so the snapshot sees Ray's new columns.
+3. **Refresh the handle, don't restart the process** — two SDK options: pass
+   **`read_consistency_interval=timedelta(...)`** to `lancedb.connect()` so reads
+   auto-check for other processes' writes (the built-in answer), or call
+   `table.checkout_latest()` (cheap: reads a manifest) explicitly on a §8
+   "enrichment done" event. Either way the snapshot sees Ray's new columns without
+   a process restart.
 
 Then the frontend renders generically from `/api/schema` and re-fetches it; a new
 column appears with **zero frontend edits, zero codegen, zero restart**. The only
@@ -446,6 +452,11 @@ of near-identical adjacent chunks ([TODO.md](TODO.md#curation--exploration-roadm
   units are meaningful rather than mechanical 30 s slices.
 - **Config surface** — these knobs live in one place (a build config) and flow
   through the Ray pipeline (§1), not scattered constants.
+- **Reuse LanceDB's `contextualize()`** — the SDK ships a rolling context-window
+  builder (`contextualize(df).window(n).stride(k).groupby(col).text_col(...)`)
+  that turns one-row-per-token/sentence into overlapping windows without crossing
+  group boundaries. That's exactly the fixed/sliding-window chunking above —
+  another built-in to lean on rather than hand-roll.
 
 **❓ Open questions:** re-chunking means re-embedding (expensive) — do we keep
 multiple chunk granularities side-by-side, or pick one per build? Interaction
@@ -479,7 +490,11 @@ roles — no SQLite, no state sprawl across ad-hoc files.
 
 **❓ Open questions:** does Redis also serve as the §8 event bus, or do we keep
 events in Postgres (`LISTEN/NOTIFY` / an outbox table) and use Redis purely as a
-cache? How much of the existing on-disk state (e.g. diarization shard tables)
+cache? One nuance for **tags specifically**: Lance can hold a `List<string>` tag
+column with a native **`LabelList` index** (`array_contains_all/any`), so
+*read-side* tag filtering could stay Lance-native while Postgres owns the mutable
+write/curation state — worth weighing vs. putting tags wholly in Postgres. How
+much of the existing on-disk state (e.g. diarization shard tables)
 migrates to Postgres vs. stays Lance.
 
 ---
