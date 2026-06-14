@@ -19,7 +19,49 @@ rest of the system.
 
 ---
 
-## 1. 📋 Rewrite inference — offline on Ray Data actors, online on Ray Serve + vLLM
+## 0. Positioning & the architectural model
+
+**What we are building: a multimodal-media analysis engine** — "Rerun for media
+archives." [Rerun](https://rerun.io) nailed the *experience* of exploring
+multimodal data on a synchronized timeline, but it's aimed at robotics/CV (point
+clouds, 3D, `mcap`/`.rrd`). We aim the same synchronized-multimodal-exploration
+idea at **video · image · audio · text** — and explicitly **not** at point
+clouds, 3D, or robotics formats. We already have the seed (synchronized A/V
+playback, word-level alignment, the chunk timeline, the Atlas embedding map);
+the bet is to generalize it into the primary analysis surface, **modality-
+agnostic** — no modality (not even our original press-conference *videos*) is
+privileged or hardcoded. **Multimodal data in general is the first-class
+citizen.**
+
+**The three-layer model** (the heart of every section below):
+
+| Layer | Role | What it means concretely |
+|---|---|---|
+| **Lance** | **storage** | S3-native columnar media + vectors + FTS/ANN. The **Arrow schema is the live registry** of what has been enriched so far — the single source of truth for the dynamic schema (§5). |
+| **Ray** | **data evolution** | The enrichment engine. It doesn't just "compute" — it **creates columns**: raw media → (ASR) `text` → (embed) `text_embedding` → (diarize) speakers → (topics/KG) facets → (select) `typicality`/`is_near_dup`. A dependency DAG of column-producing stages, incremental + idempotent, on KubeRay (§1). |
+| **DuckDB + quack** | **concurrent OLAP** | The analytical query layer over Lance — faceting, cross-filter, stats (§3, §12). **quack** is the protocol that gives DuckDB **concurrent read *and* write**, removing its native single-writer limit (the very limit LightlyStudio flags in its own backend docs) so the OLAP layer can serve readers while Ray writes columns. |
+
+These three imply the fourth: because **Ray continuously adds columns**, nothing
+downstream can hardcode the column set — so the **schema must be dynamic** (§5),
+read from `dataset.schema` at runtime. Modality-agnostic + Ray-evolves-columns +
+dynamic-schema are one idea from three sides. For how this contrasts with
+LightlyStudio / FiftyOne / Rerun, see
+[COMPARISON_LIGHTLY.md](COMPARISON_LIGHTLY.md).
+
+---
+
+## 1. 📋 Rewrite inference — Ray as the data-evolution (enrichment) layer
+
+> **Framing (see §0):** Ray is our **data-evolution layer**. Every enrichment is
+> a job that reads existing Lance columns, computes, and **writes new column(s)
+> back** via `add_columns` — `text` (ASR) → `text_embedding` (embed) → speakers
+> (diarize) → `topic_l*` (topics) → `typicality`/`is_near_dup` (selection). These
+> stages form a **dependency DAG** (embeddings need the transcript column; topics
+> need embeddings). The §1 rewrite isn't "swap the executor" — it's promoting
+> [`features/engine.py`](../src/raudio/features/engine.py)'s hand-rolled
+> `add_columns` + resume into a first-class engine where each stage declares
+> `input_columns → output_columns` and Ray walks the DAG incrementally and
+> idempotently on the GPU pool.
 
 Today inference is **split across two worlds** that don't share a runtime:
 
@@ -170,16 +212,21 @@ stops scaling.
   logically (namespace + table name) instead of by filesystem path, with
   consistent listing/versioning across the table set. This also cleans up the
   shard tables (`speaker_turns_shard{i}.lance`) and merge dance.
-- **DuckDB + Lance** — there is **zero DuckDB in the repo today**; wire it to
-  query Lance directly (scanner → Arrow) for
-  the analytical/faceted side: stats, histograms, group-by-video, and the
-  curation panels in [TODO.md](TODO.md#curation--exploration-roadmap). SQL over
-  Lance is a better fit for those than bespoke Python scans, and it dovetails
-  with §4.
+- **DuckDB + quack — the concurrent OLAP layer (§0).** There is **zero DuckDB in
+  the repo today**; wire it to query Lance directly (scanner → Arrow) for the
+  analytical/faceted side: stats, histograms, group-by-video, and the curation
+  panels in [TODO.md](TODO.md#curation--exploration-roadmap). SQL over Lance beats
+  bespoke Python scans and dovetails with §4 and §12. The concurrency catch —
+  DuckDB is **single-writer** by default (LightlyStudio flags exactly this in its
+  own backend docs) — is what **quack** solves: a protocol giving DuckDB
+  concurrent read+write, so the OLAP layer serves many readers *while Ray (§1)
+  writes new columns to Lance*. This is the piece that makes "DuckDB over a
+  continuously-enriched Lance dataset" actually safe.
 
 **❓ Open questions:** which namespace backend (directory-based vs. a real
 catalog like REST/Glue) for a single-node deploy; how namespacing interacts with
-the maintenance jobs in §2.
+the maintenance jobs in §2; exact role split between Lance reads, DuckDB+quack
+SQL, and DuckDB-WASM client-side (§4).
 
 ---
 
@@ -234,6 +281,20 @@ not abstract):
   pills (`active-filters.svelte`) only know `language`, `namn`, `referenskod`,
   `extraid`, `topic`; the language dropdown (`filter-popover.svelte`) hardcodes
   `sv`/`en`. Document browse (`DOC_COLUMNS`) is likewise a fixed 7-field list.
+- **The backend already speaks open dicts — but `SELECT`s a fixed list.** Good
+  news first: the search endpoints return `list[dict[str, Any]]` (raw
+  `qb.to_list()` / `to_pylist()`, not a typed `Hit` model) — so the *transport*
+  is already schema-agnostic. The catch is the **column list is a constant**:
+  `_HIT_COLUMNS` / `_PAYLOAD_COLUMNS` in
+  [`backend/search/constants.py`](../backend/search/constants.py) (`.select(_HIT_COLUMNS)`
+  in [`backend/search/service.py`](../backend/search/service.py) `:122,:239`). A
+  Ray-added column won't surface until it's added to that constant — *that* is the
+  backend hardcode, not a Pydantic model.
+- **The dataset handle is pinned at startup.** `open_resources`
+  ([`backend/state.py`](../backend/state.py)) opens every Lance handle **once**
+  and deliberately reuses `chunks_ds = chunks.to_lance()` (the comment notes
+  re-wrapping per request re-seeds the index cache). A column Ray adds *after*
+  startup is invisible to that snapshot until the handle is refreshed.
 
 **What's already dynamic** (the seam to build on): `/api/columns` **exists** on
 both ends — served by `backend/system/router.py` (introspects the `chunks`
@@ -258,9 +319,49 @@ the dataset has, instead of a fixed contract:
   hardcoding. Keep `HitSchema` as a typed *core* with a dynamic "extras" bag so
   TS types stay honest for the known fields while new columns flow through.
 
+**Can a Ray-added column reach the UI with no codegen and no restart? Yes —
+given three changes.** This is the crux: the data schema *evolves* as Ray enriches
+(see §1), so the UI must discover columns at **runtime**, not build time. The two
+"schemas" have different lifecycles:
+
+- **OpenAPI / generated TS types = the API *contract*** (endpoints, response
+  *containers*, pagination). Generated at **build time**; **static**. Adding a data
+  column does *not* change it, so no regen / no restart for a column — you only
+  regenerate when you add an endpoint or change a container shape. (LightlyStudio
+  proves the pattern: `export_schema.py` → `openapi.json` → `@hey-api/openapi-ts`,
+  per `lightly_studio_view/openapi-ts.config.ts`. We should adopt it and delete the
+  hand-written zod.)
+- **The data field-schema = which columns exist right now.** Runtime data, served
+  live from `dataset.schema`. This is the dynamic part. LightlyStudio's exact
+  analogue is `GET /metadata/info → list[MetadataInfoView]`
+  (`api/routes/api/metadata.py:26`, built per-call with name/type/min/max in
+  `get_metadata_info.py:49`).
+
+The three changes that make "new column, no restart" true:
+
+1. **`/api/columns` → `/api/schema`** — read `state.chunks.schema` **live**, return
+   every field with a `role` (`id`/`facet`/`text`/`embedding`/`blob`/`time`/`score`/
+   `media`) + label, not just scalar filter columns.
+2. **Stop the fixed `SELECT`** — derive the search column list from the schema (or
+   select all non-blob columns) instead of the `_HIT_COLUMNS` constant, so new
+   columns ride the (already-dict) payload automatically.
+3. **Refresh the handle, don't restart the process** — `state.py` calls
+   `dataset.checkout_latest()` (cheap: reads a manifest) on a TTL or on a §8
+   "enrichment done" event, so the snapshot sees Ray's new columns.
+
+Then the frontend renders generically from `/api/schema` and re-fetches it; a new
+column appears with **zero frontend edits, zero codegen, zero restart**. The only
+thing that needs a rebuild/redeploy is a genuinely new *endpoint* (capability),
+never a new *column* (data). On dynamic-but-typed storage, we beat both
+references: LightlyStudio bolts a JSON `metadata_schema` type registry
+(`models/metadata.py:104,131`) onto a fixed ORM, and FiftyOne keeps fields untyped
+in Mongo — whereas **Lance's Arrow schema is already typed *and* evolvable
+(`add_columns`, no migration)**, so the field-schema *is* the store.
+
 **Why now:** every other item here (new embedding spaces, voice/speaker columns,
-KG-derived fields, configurable chunking in §6) adds columns. Without this, each
-one is a frontend+backend edit across the files listed above.
+KG-derived fields, configurable chunking in §6) adds columns — and §1 makes Ray
+add columns *continuously*. Without this, each new column is a frontend+backend
+edit across the files listed above.
 
 **❓ Open questions:** how far to genericize (full dynamic schema vs. typed core
 + dynamic extras); how to keep TS types honest against a dynamic schema; how to

@@ -14,6 +14,17 @@
 > core**. The two overlap on "explore a big dataset of media + embeddings," and
 > that overlap is where the lessons are.
 
+> **Where we sit in the landscape.** Three adjacent tools, none of which is us:
+> **Rerun** = synchronized *timeline* multimodal viewer, but robotics/CV-leaning
+> (point clouds, 3D, `mcap`/`.rrd`); **FiftyOne** = general vision-*dataset*
+> explorer on **MongoDB**; **LightlyStudio** = vision *curation + selection* on
+> DuckDB + a Rust selection engine. **We are "Rerun for media archives"** —
+> aimed at **video · image · audio · text** (not robotics formats), where
+> **Lance stores, Ray evolves the columns, DuckDB+quack explores**, and the
+> schema is dynamic because the data is alive. The combination of timeline +
+> ANN/FTS search + voice + KG + OLAP over an S3-native columnar store is a seat
+> none of the three occupy. See [WHATS_LEFT.md §0](WHATS_LEFT.md) for the model.
+
 ---
 
 ## 1. Architecture at a glance
@@ -69,7 +80,10 @@
 5. **No single-writer bottleneck baked in.** Their own backend guide flags
    DuckDB's **single-writer model** as a live limitation of their
    `persistent_session()` design. Our append/columnar Lance writes + planned
-   Ray-driven ingestion ([§1](WHATS_LEFT.md)) sidestep that class of problem.
+   Ray-driven enrichment ([§1](WHATS_LEFT.md)) sidestep that class of problem —
+   and where we *do* add DuckDB as the OLAP layer ([§3](WHATS_LEFT.md)), we put
+   **quack** (concurrent read+write for DuckDB) in front of it precisely so we
+   don't inherit the limitation they live with.
 
 ---
 
@@ -79,15 +93,24 @@
    - The TS API client is **generated from the backend's OpenAPI** via
      `@hey-api/openapi-ts` (`export_schema.py` → `openapi.json` → frontend
      codegen). We hand-maintain zod in `frontend/src/lib/api.ts`.
-   - A runtime `/metadata_info/{collection_id}` endpoint returns **every field +
-     type + numeric bounds**, and components render **generically**:
-     `CombinedMetadataDimensionsFilters.svelte` loops discovered fields → sliders;
-     `MetadataSegment.svelte` iterates `sample.metadata_dict.data` → detail rows.
-     Add a field on the backend and it appears in the UI with **zero frontend
-     edits** — exactly what our hardcoded `TABLE_COLUMNS` / `SearchSpec` can't do.
-   - **Borrow:** (a) generate our client from FastAPI's OpenAPI and delete the
-     hand-written zod; (b) upgrade `/api/columns` into a typed field-schema; (c)
-     drive table/detail/filters from it. This is the single highest-value steal.
+   - A runtime field-schema endpoint `GET /metadata/info → list[MetadataInfoView]`
+     (`api/routes/api/metadata.py:26`, built per-call with name/type/min/max in
+     `resolvers/.../get_metadata_info.py:49`) returns **every field**, and
+     components render **generically**: `CombinedMetadataDimensionsFilters.svelte`
+     loops discovered fields → sliders; `MetadataSegment.svelte` iterates
+     `sample.metadata_dict.data` → detail rows. Add a field on the backend and it
+     appears with **zero frontend edits**.
+   - **Our gap is narrower than it looks — and the fix is precise.** Our search
+     endpoints *already* return `list[dict[str, Any]]` (raw `qb.to_list()`), so the
+     wire is schema-agnostic; the hardcodes are (a) the `_HIT_COLUMNS` constant the
+     query `.select()`s (`backend/search/constants.py`, `search/service.py:122`),
+     (b) the startup-pinned Lance handle (`backend/state.py:open_resources`), and
+     (c) the frontend zod `HitSchema`. **Borrow:** generate our client from
+     FastAPI's OpenAPI (delete the zod); turn `/api/columns` into a live
+     `/api/schema` with roles; derive the `SELECT` from the schema; and
+     `checkout_latest()` the handle on a §8 event. Then a Ray-added column reaches
+     the UI with no codegen and no restart (full mechanism in
+     [WHATS_LEFT §5](WHATS_LEFT.md)). The single highest-value steal.
 
 2. **Dynamic fields without losing types — the JSON dual-column pattern.** Rather
    than per-field tables (FiftyOne) or EAV, a `SampleMetadataTable` holds two JSON
