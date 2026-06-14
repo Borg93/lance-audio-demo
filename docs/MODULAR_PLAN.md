@@ -72,9 +72,9 @@ layer below, never its implementation.
 | **Storage (Lance)** | hold media+vectors+FTS; be the schema registry | `open(uri) → handle`, `schema()`, `refresh()`, `add_columns()`, `scan(cols, filter)` | `state.py` opens local paths, pinned. Add **S3 URIs** + `checkout_latest()` refresh; wrap behind a `DatasetRegistry` so callers stop building `db / "x.lance"` paths. |
 | **Model serving** | run embed/rerank/caption models | the `EmbeddingClient` / `RerankClient` / `CaptionClient` **Protocols** | impl is HTTP→vLLM today. Add a **Ray Serve** ingress (URL swap) + a **Ray-actor** impl for in-job batch. Logic above is untouched. |
 | **Enrichment (data-evolution)** | create columns from columns | a `Stage{name, inputs, outputs, depends_on, compute}` descriptor + a driver that walks the DAG | `FEATURES` registry + `engine.py` exist. Add `inputs/outputs/depends_on` to `Feature`; add a **Ray Data driver** beside the CLI driver. |
-| **Query** | ANN/FTS/hybrid/rerank search | `search(spec) → list[dict]` | exists (`backend/search`). Decouple from `_HIT_COLUMNS` (derive `SELECT` from schema). |
+| **Query** | ANN/FTS/hybrid/rerank search | `search(spec) → list[dict]`, **modes derived from column roles** | exists (`backend/search`) but **capability is column-bound**: `SearchMode` is a closed enum and each mode names a column (`_search_semantic`→`text_embedding`, etc.). Decouple from `_HIT_COLUMNS` *and* from the mode enum → generic `vector:<col>` / `fts:<col>` dispatch keyed on schema roles. |
 | **OLAP** | analytical SQL over Lance | `sql(query) → arrow`, `facets(field)` | **new** module: DuckDB scanning Lance, **quack** for concurrent R/W. |
-| **Schema** | describe current columns + roles | `GET /api/schema → [{name, type, role, label}]` | extend `/api/columns` to read `dataset.schema()` live + roles. |
+| **Schema** | describe current columns + **capabilities** | `GET /api/schema → [{name, type, role, label}]` where `role` drives *what you can do* (search/filter/play), not just display | extend `/api/columns` to read `dataset.schema()` live + roles; both search dispatch and UI affordances derive from it. |
 | **API + UI** | serve data; render generically | OpenAPI contract (build-time) + runtime `/api/schema` | generate TS client from OpenAPI; render table/detail/filters from schema. |
 | **Orchestration** | trigger enrichment + refresh | events ("media added", "stage done") | **new** (§8): replaces shell/Makefile chaining. |
 
@@ -159,6 +159,11 @@ class Olap(Protocol):
    driver reuses the stage without the CLI's client-building.
 3. **Derive the search `SELECT` from the schema**, retiring `_HIT_COLUMNS`
    (`backend/search/constants.py`) — decouples search from a frozen column list.
+   *And go further:* retire the closed `SearchMode` enum (`backend/search/spec.py`)
+   in favour of **role-derived dispatch** — `vector:<col>` for every `embedding`
+   column, `fts:<col>` for every `fts` column — so a new column is searchable with
+   zero backend/frontend edits. This is the "stop knowing too much" refactor: the
+   query layer knows *roles*, not column names.
 4. **`/api/schema`** reads `DatasetRegistry.schema()` live (extends
    `backend/system/router.py` `/api/columns`); the frontend renders from it.
 5. **OLAP module** is brand-new and stands alone — DuckDB+quack scanning the same

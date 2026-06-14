@@ -360,6 +360,34 @@ references: LightlyStudio bolts a JSON `metadata_schema` type registry
 in Mongo — whereas **Lance's Arrow schema is already typed *and* evolvable
 (`add_columns`, no migration)**, so the field-schema *is* the store.
 
+**It's not just *display* — the *capabilities* are column-coupled too (the
+deeper problem).** Schema-driven rendering fixes tables/filters/detail, but the
+sharper coupling is that **what you can *do*** is hardcoded against named columns:
+
+- **Search modes are a closed enum bound to specific columns.** `SearchMode`
+  (`backend/search/spec.py:16`) lists `semantic/visual/scene/scene_fts/hybrid/…`,
+  and each is a dedicated function naming a column: `_search_semantic` →
+  `"text_embedding"` (`service.py:155`), `_search_hybrid` →
+  `vector_column_name="text_embedding"` (`:232`), visual → `frame_embedding`,
+  scene → `caption_embedding`. **Add a new embedding column (a Jina-omni unified
+  vector, an `audio_embedding`) and there is no way to search it** until someone
+  adds an enum member + a dispatch fn (backend) + a mode toggle (frontend).
+- The same is true for **Atlas spaces** (`atlas_*` / `atlas_img_*` / `atlas_cap_*`
+  triplets, `--space text|visual|caption`) and **per-hit actions** (play, frame,
+  karaoke — bound to `audio_path` / `frame_blob` / `alignments_json`, so a
+  modality without audio has no affordance).
+
+So the field-schema must be a **capability descriptor**, and the backend's
+*dispatch* + the frontend's *affordances* must be **derived from roles**, not from
+column names:
+- `role=embedding` → expose a generic `vector:<column>` search automatically (no
+  new enum member); `role=fts` → keyword search; `role=facet` → a filter;
+  `role=media,kind=audio|video|image` → the matching player/frame/image action;
+  hybrid is derived from *which* embedding + fts columns exist.
+- Then both layers "know" only **roles**, never column names — a Ray-added column
+  with a role brings its operation for free. This is the real win: it removes the
+  "frontend/backend know too much" coupling, not just the display hardcoding.
+
 **Why now:** every other item here (new embedding spaces, voice/speaker columns,
 KG-derived fields, configurable chunking in §6) adds columns — and §1 makes Ray
 add columns *continuously*. Without this, each new column is a frontend+backend
