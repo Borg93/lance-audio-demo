@@ -39,7 +39,7 @@ citizen.**
 |---|---|---|
 | **Lance** | **storage** | S3-native columnar media + vectors + FTS/ANN. The **Arrow schema is the live registry** of what has been enriched so far — the single source of truth for the dynamic schema (§5). |
 | **Ray** | **data evolution** | The enrichment engine. It doesn't just "compute" — it **creates columns**: raw media → (ASR) `text` → (embed) `text_embedding` → (diarize) speakers → (topics/KG) facets → (select) `typicality`/`is_near_dup`. A dependency DAG of column-producing stages, incremental + idempotent, on KubeRay (§1). |
-| **DuckDB + quack** | **concurrent OLAP** | The analytical query layer over Lance — faceting, cross-filter, stats (§3, §12). **quack** is the protocol that gives DuckDB **concurrent read *and* write**, removing its native single-writer limit (the very limit LightlyStudio flags in its own backend docs) so the OLAP layer can serve readers while Ray writes columns. |
+| **DuckDB (`lance` extension)** | **SQL / OLAP surface (optional)** | The analytical query layer over Lance — faceting, cross-filter, GROUP BY/JOIN/aggregates, stats (§3, §12). The official **`lance` DuckDB extension** (`INSTALL lance; LOAD lance;`) exposes Lance to DuckDB SQL (`lance_vector_search`/`lance_fts`/`lance_hybrid_search`, `ATTACH … (TYPE lance)`, index + maintenance ops). Because the data stays **Lance (MVCC/ACID)**, DuckDB is just a query engine over it — DuckDB's native single-writer limit (which LightlyStudio's *relational* DuckDB hits) doesn't apply. **Retrieval already runs on the LanceDB SDK** (see below); the extension's marginal value is the SQL/OLAP surface + a DuckDB-WASM in-browser path (§4), so it's **optional, scoped to analytics — not a replacement for the SDK.** |
 
 These three imply the fourth: because **Ray continuously adds columns**, nothing
 downstream can hardcode the column set — so the **schema must be dynamic** (§5),
@@ -63,7 +63,11 @@ schema seams, grounded in the current code — see [MODULAR_PLAN.md](MODULAR_PLA
 > [`features/engine.py`](../src/raudio/features/engine.py)'s hand-rolled
 > `add_columns` + resume into a first-class engine where each stage declares
 > `input_columns → output_columns` and Ray walks the DAG incrementally and
-> idempotently on the GPU pool.
+> idempotently on the GPU pool. This is exactly the workflow Lance is *designed*
+> for: per the LanceDB team, "adding columns or backfilling existing rows… only
+> writes new files without touching existing ones… useful for workflows where
+> columns are added incrementally, such as appending derived features or
+> embeddings." The format is built for column-by-column data evolution.
 
 Today inference is **split across two worlds** that don't share a runtime:
 
@@ -213,22 +217,27 @@ stops scaling.
 - **Adopt Lance Namespace** — a catalog/namespace layer so tables are addressed
   logically (namespace + table name) instead of by filesystem path, with
   consistent listing/versioning across the table set. This also cleans up the
-  shard tables (`speaker_turns_shard{i}.lance`) and merge dance.
-- **DuckDB + quack — the concurrent OLAP layer (§0).** There is **zero DuckDB in
-  the repo today**; wire it to query Lance directly (scanner → Arrow) for the
-  analytical/faceted side: stats, histograms, group-by-video, and the curation
-  panels in [TODO.md](TODO.md#curation--exploration-roadmap). SQL over Lance beats
-  bespoke Python scans and dovetails with §4 and §12. The concurrency catch —
-  DuckDB is **single-writer** by default (LightlyStudio flags exactly this in its
-  own backend docs) — is what **quack** solves: a protocol giving DuckDB
-  concurrent read+write, so the OLAP layer serves many readers *while Ray (§1)
-  writes new columns to Lance*. This is the piece that makes "DuckDB over a
-  continuously-enriched Lance dataset" actually safe.
+  shard tables (`speaker_turns_shard{i}.lance`) and merge dance. The official
+  `lance` DuckDB extension's `ATTACH 'dir' AS ns (TYPE lance)` (incl. REST
+  namespaces / LanceDB Enterprise) is one ready-made way to get logical table
+  addressing.
+- **DuckDB `lance` extension — the optional SQL/OLAP surface (§0).** There is
+  **zero DuckDB in the repo today**, and **we don't need it for retrieval** —
+  raudio already does vector/FTS/hybrid search + indexes + compaction on the
+  **LanceDB SDK** (`ctx.chunks.search(...)`, `create_fts_index`, `create_index`).
+  The extension's value is the **analytical** side: GROUP BY / JOIN / window /
+  faceted stats / cross-filter (histograms, group-by-video, the curation panels
+  in [TODO.md](TODO.md#curation--exploration-roadmap)) — one SQL surface over
+  Lance, beating bespoke Python scans, and the DuckDB-WASM in-browser path (§4).
+  **No concurrency hazard:** querying *Lance* via the extension means the data
+  stays Lance (MVCC/ACID), so DuckDB's native single-writer limit (which
+  LightlyStudio's relational DuckDB hits) doesn't apply — readers run *while Ray
+  (§1) writes columns*.
 
-**❓ Open questions:** which namespace backend (directory-based vs. a real
-catalog like REST/Glue) for a single-node deploy; how namespacing interacts with
-the maintenance jobs in §2; exact role split between Lance reads, DuckDB+quack
-SQL, and DuckDB-WASM client-side (§4).
+**❓ Open questions:** is the LanceDB SDK + Arrow→polars enough for our analytics,
+or do we adopt the DuckDB `lance` extension for a real SQL/cross-filter surface?
+Which namespace backend (directory `ATTACH` vs. a REST catalog) for a single-node
+deploy; how namespacing interacts with the maintenance jobs in §2.
 
 ---
 
@@ -248,7 +257,9 @@ in-browser deployment.
 
 **❓ Open questions:** how much of the corpus is shippable to the browser (text +
 metadata only, not media/embeddings); whether DuckDB-WASM can read Lance
-directly or we export a Parquet/Arrow slice for the client.
+directly — the native `lance` DuckDB extension (§3) is unlikely to be WASM-built,
+so the browser path probably means **exporting a Parquet/Arrow slice** for the
+client while the server-side OLAP uses the extension over Lance.
 
 ---
 

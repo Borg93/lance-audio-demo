@@ -20,7 +20,7 @@
 > explorer on **MongoDB**; **LightlyStudio** = vision *curation + selection* on
 > DuckDB + a Rust selection engine. **We are "Rerun for media archives"** —
 > aimed at **video · image · audio · text** (not robotics formats), where
-> **Lance stores, Ray evolves the columns, DuckDB+quack explores**, and the
+> **Lance stores, Ray evolves the columns, DuckDB (lance extension) explores**, and the
 > schema is dynamic because the data is alive. The combination of timeline +
 > ANN/FTS search + voice + KG + OLAP over an S3-native columnar store is a seat
 > none of the three occupy. See [WHATS_LEFT.md §0](WHATS_LEFT.md) for the model.
@@ -79,11 +79,12 @@
 
 5. **No single-writer bottleneck baked in.** Their own backend guide flags
    DuckDB's **single-writer model** as a live limitation of their
-   `persistent_session()` design. Our append/columnar Lance writes + planned
-   Ray-driven enrichment ([§1](WHATS_LEFT.md)) sidestep that class of problem —
-   and where we *do* add DuckDB as the OLAP layer ([§3](WHATS_LEFT.md)), we put
-   **quack** (concurrent read+write for DuckDB) in front of it precisely so we
-   don't inherit the limitation they live with.
+   `persistent_session()` design — because *their DuckDB is the system of record*.
+   Ours isn't: the SoR is **Lance (MVCC/ACID)**, and where we add DuckDB as the
+   OLAP layer ([§3](WHATS_LEFT.md)) it's the official **`lance` DuckDB extension**
+   querying Lance — DuckDB is a stateless query engine over an MVCC store, so the
+   single-writer limit simply doesn't apply. Same engine, opposite outcome,
+   because of *where the data lives*.
 
 ---
 

@@ -1,7 +1,7 @@
 # Modular architecture plan — Lance · Ray · DuckDB, low coupling
 
 > The **build plan** for the model in [WHATS_LEFT §0](WHATS_LEFT.md): *Lance
-> stores, Ray evolves the columns, DuckDB+quack explores, the schema is dynamic.*
+> stores, Ray evolves the columns, DuckDB (lance extension) explores, the schema is dynamic.*
 > Where WHATS_LEFT lists the bets and [COMPARISON_LIGHTLY.md](COMPARISON_LIGHTLY.md)
 > says why, **this doc is about module boundaries** — the seams and interfaces
 > that let each layer change without dragging the others. Goal stated plainly:
@@ -30,7 +30,7 @@ The data-evolution shape and the swap-points are in place; the plan mostly
 So the work is: (1) make storage object-store + refresh-aware; (2) put **Ray
 Serve** behind the client `Protocol` (online) and **Ray Data** behind the engine
 (offline); (3) turn `FEATURES` into an enrichment **DAG**; (4) add the dynamic
-**schema** seam; (5) add **DuckDB+quack** as an OLAP module. Each is a module with
+**schema** seam; (5) add a **DuckDB (`lance` extension)** OLAP module. Each is a module with
 a contract — none reaches into another's internals.
 
 ---
@@ -47,7 +47,7 @@ layer below, never its implementation.
                             │ search (ANN/FTS)      │ OLAP (SQL)
             ┌───────────────▼──────┐   ┌────────────▼─────────────┐
             │  Query module        │   │  OLAP module             │
-            │  (rerank, hybrid)    │   │  (DuckDB + quack)        │
+            │  (rerank, hybrid)    │   │ (DuckDB lance extension) │
             └───────────────┬──────┘   └────────────┬─────────────┘
    Model serving            │ EmbeddingClient/Reranker (Protocol)  │
    ┌────────────────────┐   │                                      │
@@ -74,7 +74,7 @@ layer below, never its implementation.
 | **Model serving** | run embed/rerank/caption models | the `EmbeddingClient` / `RerankClient` / `CaptionClient` **Protocols** | impl is HTTP→vLLM today. Add a **Ray Serve** ingress (URL swap) + a **Ray-actor** impl for in-job batch. Logic above is untouched. |
 | **Enrichment (data-evolution)** | create columns from columns | a `Stage{name, inputs, outputs, depends_on, compute}` descriptor + a driver that walks the DAG | `FEATURES` registry + `engine.py` exist. Add `inputs/outputs/depends_on` to `Feature`; add a **Ray Data driver** beside the CLI driver. |
 | **Query** | ANN/FTS/hybrid/rerank search | `search(spec) → list[dict]`, **modes derived from column roles** | exists (`backend/search`) but **capability is column-bound**: `SearchMode` is a closed enum and each mode names a column (`_search_semantic`→`text_embedding`, etc.). Decouple from `_HIT_COLUMNS` *and* from the mode enum → generic `vector:<col>` / `fts:<col>` dispatch keyed on schema roles. |
-| **OLAP** | analytical SQL over Lance | `sql(query) → arrow`, `facets(field)` | **new** module: DuckDB scanning Lance, **quack** for concurrent R/W. |
+| **OLAP** | analytical SQL over Lance (optional) | `sql(query) → arrow`, `facets(field)` | **new**, optional: the official **`lance` DuckDB extension** (`lance_vector_search`/`lance_fts`/`lance_hybrid_search`, `ATTACH … (TYPE lance)`). Concurrency is **Lance MVCC** (data stays Lance), not DuckDB's single-writer. **Retrieval already uses the LanceDB SDK** — this module is for SQL/OLAP only. |
 | **Schema** | describe current columns + **capabilities** | `GET /api/schema → [{name, type, role, label}]` where `role` drives *what you can do* (search/filter/play), not just display | extend `/api/columns` to read `dataset.schema()` live + roles; both search dispatch and UI affordances derive from it. |
 | **API + UI** | serve data; render generically | OpenAPI contract (build-time) + runtime `/api/schema` | generate TS client from OpenAPI; render table/detail/filters from schema. |
 | **Orchestration** | trigger enrichment + refresh | events ("media added", "stage done") | **new** (§8): replaces shell/Makefile chaining. |
@@ -142,7 +142,7 @@ class DatasetRegistry(Protocol):
 **(d) OLAP — a thin, separate module (no coupling to search/enrichment).**
 ```python
 class Olap(Protocol):
-    def sql(self, q: str) -> pa.Table: ...    # DuckDB over Lance, quack for concurrency
+    def sql(self, q: str) -> pa.Table: ...    # DuckDB lance extension; concurrency = Lance MVCC
     def facets(self, field: str) -> list[Facet]: ...
 ```
 
@@ -167,7 +167,7 @@ class Olap(Protocol):
    query layer knows *roles*, not column names.
 4. **`/api/schema`** reads `DatasetRegistry.schema()` live (extends
    `backend/system/router.py` `/api/columns`); the frontend renders from it.
-5. **OLAP module** is brand-new and stands alone — DuckDB+quack scanning the same
+5. **OLAP module** is brand-new and stands alone — the DuckDB `lance` extension scanning the same
    Lance tables; nothing else depends on it (the UI calls it for stats/§12).
 6. **Ray Serve deployment** is config: `RAUDIO_EMBED_URL` → Serve ingress; the
    `backend/clients.py` factory already injects it.
@@ -187,7 +187,7 @@ whether the boundary is right.
    driver (still CLI). Pure refactor, no Ray yet.
 4. **Ray Data driver** behind the engine (offline backfill) + **Ray Serve** behind
    the client Protocol (online) — §1, on KubeRay.
-5. **DuckDB+quack OLAP module** (§3) → analytics/charts (§12).
+5. **DuckDB `lance`-extension OLAP module** (§3, optional) → analytics/charts (§12).
 6. **Events** (§8) wire enrichment triggers + handle refresh together.
 
 The throughline: **every step adds an implementation behind an interface that
