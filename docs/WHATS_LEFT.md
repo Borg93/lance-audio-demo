@@ -104,24 +104,34 @@ serve-then-CLI-then-shell choreography in `serve-all.sh` / the Makefile.
 
 ## 2. 📋 Lance table maintenance — GC, reindex, manifest compaction
 
-The whole archive is **one Lance dataset** (`transcripts_v2.lance/`, see
-[STORAGE.md](STORAGE.md)). Every feature pass appends/merges, every reindex adds
-index versions, and old dataset versions accumulate on disk. Today's only nod to
-this is a parked "prune old dataset versions (disk)" line in
-[TODO.md](TODO.md#parked).
+The archive is really a **dozen Lance datasets** under `transcripts_v2.lance/`
+(`chunks`, `documents`, `chunk_frames`, `speaker_turns`, `speaker_embeddings`,
+`speakers`, `topics`, plus `kg_entities`/`kg_chunks`/`kg_mentions`/
+`kg_relationships`). Every feature pass appends/merges and every reindex adds
+versions, so fragments and superseded manifests pile up on disk.
 
-We need a **first-class maintenance story**:
+**What exists today (and its gaps):**
 
-- **Compaction** — `dataset.optimize.compact_files()` to coalesce the many small
-  fragments that incremental `merge_insert` / append passes leave behind (the
-  diarization and feature backfills are the worst offenders).
-- **Garbage collection** — `dataset.cleanup_old_versions(older_than=…)` to
-  reclaim the superseded manifests/fragments that stale-version retention pins.
-- **Reindex** — rebuild IVF_PQ ANN + Tantivy FTS indices after large appends so
-  new rows are actually covered (an unindexed tail silently degrades recall —
-  cf. the `nprobes`/recall gotchas in [INVESTIGATION.md](INVESTIGATION.md)).
-- **Manifest hygiene** — schedule the above (a `raudio maintain` CLI target +/or
-  a periodic job) so it isn't a manual ritual.
+- A `raudio compact` command **already exists** (`cli/media.py`): it runs
+  `dataset.optimize.compact_files(target_rows_per_fragment=1M)` and rebuilds the
+  **IVF_PQ vector + BTREE scalar** indices — **but it does not rebuild the
+  Tantivy FTS index** (an oversight: the FTS tail silently goes stale after an
+  append) and it's manual + chunks-only.
+- `cleanup_old_versions()` is called in **exactly one place** — the KG adapter
+  (`scripts/kg/adapter.py`, `older_than=timedelta(0)`). **Every other table
+  never GCs**, so old versions accumulate indefinitely.
+
+**What's actually missing — the first-class maintenance story:**
+
+- **FTS reindex on compaction** — fold `create_fts_index(..., replace=True)` into
+  `raudio compact` so BM25 covers the new tail (recall otherwise degrades — cf.
+  the `nprobes`/recall gotchas in [INVESTIGATION.md](INVESTIGATION.md)).
+- **Garbage collection across all tables** — `cleanup_old_versions(older_than=…)`
+  with a real retention window, not just the KG table.
+- **Cover every dataset** — extend compaction/GC/reindex beyond `chunks` to the
+  frames/voice/topics/KG tables that the backfills churn hardest.
+- **Scheduling** — a `raudio maintain` target / periodic job (a §1 Ray job?) so
+  it isn't a manual ritual.
 
 **❓ Open questions:** retention window for old versions (we sometimes want to
 roll back a bad feature pass); compaction during vs. between feature passes;
@@ -131,16 +141,19 @@ whether maintenance becomes one of the Ray jobs from §1.
 
 ## 3. 📋 Lance namespacing (+ maybe DuckDB-over-Lance)
 
-Right now the "database" is a single dataset directory referenced by path
-(`DB=transcripts_v2.lance`). As we add tables (documents, chunks, chunk_frames,
-speaker_turns, speakers, topics, …) and variant builds, a **flat directory of
-`.lance` folders** stops scaling.
+Right now every table is addressed by **hardcoded filesystem path** —
+`db / "chunks.lance"`, `db / "documents.lance"`, etc., with the root from
+`RAUDIO_DB` / the Makefile `DB`. There is **no catalog, no table registry, no
+multi-dataset addressing** anywhere in the codebase. As the table count grows
+(already ~11) and variant builds appear, that flat directory of `.lance` folders
+stops scaling.
 
 - **Adopt Lance Namespace** — a catalog/namespace layer so tables are addressed
   logically (namespace + table name) instead of by filesystem path, with
   consistent listing/versioning across the table set. This also cleans up the
   shard tables (`speaker_turns_shard{i}.lance`) and merge dance.
-- **DuckDB + Lance** — wire DuckDB to query Lance directly (scanner → Arrow) for
+- **DuckDB + Lance** — there is **zero DuckDB in the repo today**; wire it to
+  query Lance directly (scanner → Arrow) for
   the analytical/faceted side: stats, histograms, group-by-video, and the
   curation panels in [TODO.md](TODO.md#curation--exploration-roadmap). SQL over
   Lance is a better fit for those than bespoke Python scans, and it dovetails
@@ -241,9 +254,13 @@ columns) on top of a generic renderer.
 ## 6. 📋 Better preprocessing & configurable chunk units
 
 Chunking is currently **fixed upstream** by the ASR pipeline
-([PIPELINE.md](PIPELINE.md)) — speech segments → ~30 s `AudioChunk`s, with the
-known "one press conference floods the page" redundancy of near-identical
-adjacent chunks ([TODO.md](TODO.md#curation--exploration-roadmap)).
+([PIPELINE.md](PIPELINE.md)) — speech segments → ~30 s `AudioChunk`s. raudio
+itself **does not chunk at all**: `flatten_chunks()`
+([`src/raudio/ingest/ingest.py`](../src/raudio/ingest/ingest.py)) just iterates
+the transcriber's pre-cut chunks and copies each one's `start`/`end`/`text`
+through verbatim — there are **no size limits, no windowing, no rechunking
+parameters**. Hence the known "one press conference floods the page" redundancy
+of near-identical adjacent chunks ([TODO.md](TODO.md#curation--exploration-roadmap)).
 
 - **Configurable chunk units** — make the unit of a "chunk" (and thus a search
   hit) a configurable preprocessing step: fixed-duration windows, sentence/
@@ -317,22 +334,32 @@ Dapr deployment until services actually multiply.
 
 ## 9. 📋 Knowledge graph — needs significant attention
 
-The KG is the **least mature** subsystem. It currently lives in detached scripts
-(`scripts/kg/build_kg.py`, `export_chunks.py`, `refine_person_types.py`,
-`generic_sv.py`, `adapter.py`) with a backend `graph/` surface and the MCP graph
-tools. Recent work was deterministic generic-noun cleanup and entity-type
-refinement (git history), but it's a long way from first-class.
+The KG is the **least mature** subsystem. It's a fully detached **three-step
+batch**: `export_chunks.py` dumps chunk text → JSONL, `build_kg.py` runs
+**LightRAG** (in an isolated `uv run --no-project --with lightrag-hku` venv,
+Gemma 4 31B for extraction + Qwen3-VL embeddings) into a GraphML, and
+`adapter.py` folds that into four `kg_*` Lance tables, served via a Cypher engine
+in the backend `graph/` surface + the MCP graph tool. None of it is triggered by
+the main pipeline; it's full-rebuild only (`mode="overwrite"`).
+
+The biggest weakness is **entity resolution**: it's purely **syntactic** —
+`entity_id = sha1(name.lower())`, plus deterministic Swedish-suffix dedup and
+single→multi-token person merges (`adapter.py`). So two different people named
+"Anders" are **conflated into one node**, and name variants that the alias rules
+miss become separate nodes. There is no semantic coreference.
 
 Areas that need real investment:
 
 - **Integration, not scripts** — fold KG construction into the unified pipeline
-  (§1) so it's incremental and reproducible, not a one-off batch.
-- **Entity resolution / disambiguation** — the "which Anders" problem
-  ([TODO.md](TODO.md)) deserves a proper coref/linking pass, ideally tied to the
-  **voice/speaker identity clusters** ([VOICE.md](VOICE.md)) and named speakers.
-- **Schema & storage** — decide how the graph is stored/queried (Lance tables +
-  DuckDB joins per §3? a dedicated graph store?) and how it stays in sync as
-  chunks/entities change.
+  (§1) so it's incremental and reproducible, not a one-off full-rebuild batch.
+- **Real entity resolution / disambiguation** — replace name-hash identity with a
+  proper coref/linking pass (the "which Anders" problem,
+  [TODO.md](TODO.md)), ideally tied to the **voice/speaker identity clusters**
+  ([VOICE.md](VOICE.md)) and named speakers so a person node is grounded in *who
+  actually spoke*, not just a string.
+- **Schema & storage** — decide how the graph is stored/queried (stay Lance
+  tables + Cypher / DuckDB joins per §3? a dedicated graph store?) and how it
+  stays in sync as chunks/entities change (incremental, not overwrite).
 - **Quality** — extraction precision/recall, typing, relation quality, and an
   eval harness (the topic/caption evals are a template).
 - **Surfacing** — richer graph queries and UI beyond the current examples rail.
@@ -442,15 +469,31 @@ vs. on-the-fly aggregation at 145k+ rows.
 
 These bets reinforce each other, which is why they're one doc:
 
-- **§1 (Ray)** is the new runtime that **§2, §6, §9** all run on, and that
-  **§8** would coordinate.
-- **§3 (namespacing/DuckDB)** + **§4 (DuckDB-WASM)** + **§5 (schema flexibility)**
-  are the "query & present any dataset" stack.
-- **§7 (state)** and **§8 (events)** are the connective tissue once there's more
-  than one moving service.
+- **§1 (Ray/KubeRay)** is the new runtime that **§2, §6, §9, §10, §11** all run
+  on, and that **§8** would coordinate. The ASR rewrite (§11) and the unified
+  embedder (§10) are the first two encoders to live as §1 actors.
+- **§3 (namespacing/DuckDB)** is the substrate for **§4 (DuckDB-WASM lightweight
+  FTS)**, **§12 (analytics/charts)**, and **§5 (schema flexibility)** — together
+  the "query & present any dataset" stack. §12's charts are §3's DuckDB
+  aggregates rendered over §5's field-schema.
+- **§7 (Postgres state + Redis cache)** and **§8 (events)** are the connective
+  tissue once there's more than one moving service.
 
 Suggested sequencing: **§5 (schema flexibility)** and **§2 (maintenance)** are
-the highest leverage / lowest risk and unblock the most other work; **§1 (Ray
-rewrite)** is the big foundational change to land before **§6/§9** build on it;
-**§3/§4** and the **§7/§8** infra choices follow once the data and runtime shapes
-settle.
+the highest leverage / lowest risk and unblock the most other work (and §2 is
+half-built — it's mostly finishing `raudio compact`). **§1 (Ray rewrite on
+KubeRay)** is the big foundational change to land before **§6/§9/§10/§11** build
+on it. **§10 (Jina Omni)** should start as an *evaluation* in parallel since it
+could simplify the schema §5 has to model. **§3/§4/§12** and the **§7/§8** infra
+choices follow once the data and runtime shapes settle.
+
+---
+
+> **A note on grounding:** the "today" descriptions above were written after a
+> full read of the inference stack (`src/raudio/vllm`, `features`, `ingest`,
+> `cli`, `serve-all.sh`, the Makefile), the backend (`backend/**`), the
+> storage/schema layer (`src/raudio/model/schema.py`, every `lance.write_dataset`
+> / index call), the KG scripts (`scripts/kg/*`), and the SvelteKit frontend.
+> Where a capability already exists in embryo (`/api/columns`, `raudio compact`,
+> the DI'd online embedder, the no-GPU FTS path) it's called out as such, so the
+> roadmap is about *finishing and reshaping* — not pretending the ground is bare.

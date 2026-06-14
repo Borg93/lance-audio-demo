@@ -3,7 +3,9 @@
 > A developer's map of `lance-audio`. The [README](README.md) is the quickstart
 > (how to install and run); this guide is the **why and how** — the mental
 > model, the data flow, the design decisions, and where to look for things.
-> For the running task list see [TODO.md](TODO.md).
+> For the running task list see [TODO.md](TODO.md); for the bigger forward-looking
+> architecture bets (Ray/KubeRay inference, Lance maintenance & namespacing,
+> schema flexibility, KG overhaul) see [WHATS_LEFT.md](WHATS_LEFT.md).
 
 ---
 
