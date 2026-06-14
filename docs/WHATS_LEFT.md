@@ -198,10 +198,18 @@ versions, so fragments and superseded manifests pile up on disk.
   frames/voice/topics/KG tables that the backfills churn hardest.
 - **Scheduling** — a `raudio maintain` target / periodic job (a §1 Ray job?) so
   it isn't a manual ritual.
+- **Mostly wiring existing SDK calls.** The LanceDB Table API already provides the
+  whole toolkit: **`table.optimize(cleanup_older_than=…, retrain=…)`** does
+  compaction + version prune + **index retrain in one call** (the retrain covers
+  the FTS/vector tail our current `raudio compact` skips); `cleanup_old_versions`
+  for GC; `list_versions` / **`restore(version)`** for the "roll back a bad feature
+  pass" case; `tags` / `branches` for named/experimental versions. So §2 is largely
+  *adopting `optimize()` across all tables on a schedule*, not new machinery.
 
 **❓ Open questions:** retention window for old versions (we sometimes want to
-roll back a bad feature pass); compaction during vs. between feature passes;
-whether maintenance becomes one of the Ray jobs from §1.
+roll back a bad feature pass — now answered by `restore(version)`); compaction
+during vs. between feature passes; whether maintenance becomes one of the Ray
+jobs from §1.
 
 ---
 
@@ -217,10 +225,12 @@ stops scaling.
 - **Adopt Lance Namespace** — a catalog/namespace layer so tables are addressed
   logically (namespace + table name) instead of by filesystem path, with
   consistent listing/versioning across the table set. This also cleans up the
-  shard tables (`speaker_turns_shard{i}.lance`) and merge dance. The official
-  `lance` DuckDB extension's `ATTACH 'dir' AS ns (TYPE lance)` (incl. REST
-  namespaces / LanceDB Enterprise) is one ready-made way to get logical table
-  addressing.
+  shard tables (`speaker_turns_shard{i}.lance`) and merge dance. **This is already
+  in the LanceDB SDK** — `create_namespace` / `list_namespaces` / `namespace_path=`
+  on `create_table`/`open_table`/`list_tables`/`rename_table`, plus
+  `namespace_client()` — so it's *adopt the SDK's namespace API*, not build a
+  catalog. (The `lance` DuckDB extension's `ATTACH 'dir' AS ns (TYPE lance)`,
+  incl. REST namespaces / LanceDB Enterprise, is the SQL-side equivalent.)
 - **DuckDB `lance` extension — the optional SQL/OLAP surface (§0).** There is
   **zero DuckDB in the repo today**, and **we don't need it for retrieval** —
   raudio already does vector/FTS/hybrid search + indexes + compaction on the
@@ -326,7 +336,12 @@ the dataset has, instead of a fixed contract:
 - **Extend `/api/columns` into a real field-schema** — name, type, nullability,
   plus a **role/tag** (`filterable` / `displayable` / `embedding` / `blob` /
   `fts` / `facet`) and display hints (label, default-visible, detail-visible),
-  the FiftyOne sample/field-schema idea adapted to Lance.
+  the FiftyOne sample/field-schema idea adapted to Lance. **Store the roles where
+  they belong: in Lance itself.** The LanceDB SDK exposes per-column metadata
+  (`table.update_field_metadata(...)`, read back via `schema.field(x).metadata`),
+  so the role/label registry lives *in the column schema* — no sidecar table, no
+  second source of truth. `/api/schema` just reads `dataset.schema` (types) +
+  field metadata (roles) and serves it.
 - **Schema-driven rendering** — generate `TABLE_COLUMNS`, the detail field rows,
   card title/subtitle, and the quick-filter set from that schema instead of
   hardcoding. Keep `HitSchema` as a typed *core* with a dynamic "extras" bag so
