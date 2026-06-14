@@ -6,7 +6,8 @@
 > says why, **this doc is about module boundaries** — the seams and interfaces
 > that let each layer change without dragging the others. Goal stated plainly:
 > **low coupling, high modularity.** Every "today" line below is grounded in the
-> current `raudio` source.
+> current `raudio` source. For the exhaustive, ranked list of the ~30 hardcoding
+> chokepoints this plan removes, see [DYNAMISM_BLOCKERS.md](DYNAMISM_BLOCKERS.md).
 
 ---
 
