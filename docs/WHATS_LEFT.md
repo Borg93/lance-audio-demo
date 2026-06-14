@@ -46,7 +46,9 @@ downstream can hardcode the column set — so the **schema must be dynamic** (§
 read from `dataset.schema` at runtime. Modality-agnostic + Ray-evolves-columns +
 dynamic-schema are one idea from three sides. For how this contrasts with
 LightlyStudio / FiftyOne / Rerun, see
-[COMPARISON_LIGHTLY.md](COMPARISON_LIGHTLY.md).
+[COMPARISON_LIGHTLY.md](COMPARISON_LIGHTLY.md). For the **module boundaries** that
+realize this model with low coupling — the storage/serving/enrichment/query/OLAP/
+schema seams, grounded in the current code — see [MODULAR_PLAN.md](MODULAR_PLAN.md).
 
 ---
 
