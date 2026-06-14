@@ -6,7 +6,9 @@
 > system should be shaped next"** discussion — rewrites, infra choices, and
 > open questions that change the architecture rather than extend it. Read it
 > alongside [GUIDE.md](GUIDE.md) (the current architecture map) and
-> [STORAGE.md](STORAGE.md) (the Lance contract).
+> [STORAGE.md](STORAGE.md) (the Lance contract). For a code-grounded comparison
+> against LightlyStudio (what we do better / can do better — it sharpens several
+> bets below), see [COMPARISON_LIGHTLY.md](COMPARISON_LIGHTLY.md).
 
 > Status legend: ✅ done · ⏳ in progress · 📋 planned · 🟡 optional/parked ·
 > ❓ open question (decision needed before work starts).
