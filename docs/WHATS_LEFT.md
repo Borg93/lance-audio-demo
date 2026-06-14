@@ -339,8 +339,10 @@ batch**: `export_chunks.py` dumps chunk text → JSONL, `build_kg.py` runs
 **LightRAG** (in an isolated `uv run --no-project --with lightrag-hku` venv,
 Gemma 4 31B for extraction + Qwen3-VL embeddings) into a GraphML, and
 `adapter.py` folds that into four `kg_*` Lance tables, served via a Cypher engine
-in the backend `graph/` surface + the MCP graph tool. None of it is triggered by
-the main pipeline; it's full-rebuild only (`mode="overwrite"`).
+in the backend `graph/` surface + the MCP graph tool (deep-dives:
+[GRAPH.md](GRAPH.md) for the graph, [MCP.md](MCP.md) for the tool surface). None
+of it is triggered by the main pipeline; it's full-rebuild only
+(`mode="overwrite"`).
 
 The biggest weakness is **entity resolution**: it's purely **syntactic** —
 `entity_id = sha1(name.lower())`, plus deterministic Swedish-suffix dedup and
@@ -462,6 +464,39 @@ seed; this is the broader bet.
 **❓ Open questions:** server-side `/api/stats` vs. fully client-side DuckDB-WASM
 (§4); which chart library surface (lean on the existing LayerChart); precompute
 vs. on-the-fly aggregation at 145k+ rows.
+
+---
+
+## 13. 📋 Documentation site — publish `docs/` with Zensical
+
+The project already has a **substantial docs corpus** — 13 markdown files under
+[`docs/`](.) (GUIDE, STORAGE, PIPELINE, EMBEDDINGS, VOICE, GRAPH, MCP,
+INVESTIGATION, REPRODUCE, TESTING, STUDIO_MERGE, TODO, and this file) plus the
+root [README](../README.md), heavy with Mermaid diagrams and cross-links. But
+it's only ever read as **raw Markdown on GitHub** (the in-app `/guide` route is a
+hand-built single page, not the docs). There's no rendered, searchable,
+navigable documentation site.
+
+**Bet:** publish `docs/` as a static site with **[Zensical](https://zensical.org)**
+— the Material-for-MkDocs team's next-generation static-site generator (a faster,
+ground-up successor to MkDocs/Material). It renders the existing Markdown +
+Mermaid into a navigable site with full-text search, a nav tree, and versioning,
+with little change to the source files.
+
+- **Reuse what's there** — the docs are already written in interlinked Markdown
+  with relative links and Mermaid blocks; Zensical consumes that directly. Mostly
+  a `zensical.toml`/nav config + a CI build, not a rewrite.
+- **Searchable + navigable** — client-side search and a generated nav over the 13
+  docs beats grepping the repo or scrolling GitHub.
+- **CI + hosting** — build on push (a §1 job or a plain GitHub Action) and deploy
+  to GitHub Pages / static hosting, so the site tracks `main`.
+- **Single source of truth** — the in-app `/guide` page and the README cheat-sheet
+  can link into the published site instead of duplicating prose.
+
+**❓ Open questions:** Zensical vs. plain Material-for-MkDocs (Zensical is newer /
+less battle-tested — worth confirming Mermaid + our cross-link style render
+cleanly); where to host (GitHub Pages vs. the app's own static route); whether
+the docs build belongs in the §1 pipeline or stays a standalone Action.
 
 ---
 
