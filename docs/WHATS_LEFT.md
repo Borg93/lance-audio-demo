@@ -157,31 +157,62 @@ directly or we export a Parquet/Arrow slice for the client.
 ## 5. 📋 Schema flexibility — stop hardcoding columns (FiftyOne-style)
 
 Both backend and frontend are **hardcoded against the current columns**
-(`doc_id`, `namn`, `referenskod`, `text`, `text_embedding`, `frame_embedding`,
-… — see [`src/raudio/model/schema.py`](../src/raudio/model/schema.py)). Adding a
-field means touching the Pydantic models, API serializers, and the SvelteKit
-components. This is the main thing blocking schema evolution.
+(`doc_id`, `namn`, `referenskod`, `bildid`, `extraid`, `text`, `caption`,
+`text_embedding`, `frame_embedding`, … — see
+[`src/raudio/model/schema.py`](../src/raudio/model/schema.py)). Adding a field
+means touching the Pydantic models, API serializers, the zod schema, and the
+SvelteKit components. This is the main thing blocking schema evolution.
+
+**Where it's actually hardcoded** (frontend audit — the coupling is concrete,
+not abstract):
+
+- **The hit contract is a fixed zod struct** — `HitSchema` in
+  [`frontend/src/lib/api.ts`](../frontend/src/lib/api.ts) pins ~17 named fields
+  (`doc_id`, `speech_id`, `chunk_id`, `start`, `end`, `text`, `namn`,
+  `referenskod`, `bildid`, `extraid`, `caption`, …). Any new column is invisible
+  until this struct (and its TS type) is edited.
+- **The results table is a hardcoded column list** — `TABLE_COLUMNS` in
+  [`frontend/src/lib/components/hit-table.svelte`](../frontend/src/lib/components/hit-table.svelte)
+  enumerates every column with a per-field `render`/`sortValue`; `DEFAULT_TABLE_COLS`
+  / `MAP_TABLE_COLS` / `WRAP_KEYS` are hand-listed field names. The
+  resizable-columns + visibility-toggle work is real but only toggles columns
+  from this fixed set.
+- **Detail + cards are hand-written field rows** — `player-pane.svelte` adds
+  `Caption/File/Time/Name/Reference/Image ID/Extra ID/Language/Segment` one line
+  at a time; `hit-card.svelte` / `doc-tile.svelte` hardcode `namn ?? audio_path
+  ?? doc_id` as the title.
+- **Quick filters are a fixed enum** — `SearchSpec` (`api.ts`) and the rendered
+  pills (`active-filters.svelte`) only know `language`, `namn`, `referenskod`,
+  `extraid`, `topic`; the language dropdown (`filter-popover.svelte`) hardcodes
+  `sv`/`en`. Document browse (`DOC_COLUMNS`) is likewise a fixed 7-field list.
+
+**What's already dynamic** (the seam to build on): `/api/columns` **exists** and
+is consumed by the *advanced* filter builder (`filter-popover.svelte` →
+`listColumns()` in `api.ts`), and the Atlas reads its colour dimensions
+(`language`/`namn`/`topic`/`doc_topic`) dynamically from the Arrow payload. So
+the introspection endpoint is there — it just doesn't yet drive the table,
+detail views, cards, or quick filters.
 
 **Goal: FiftyOne-like flexibility** — the UI and API adapt to *whatever* columns
 the dataset has, instead of a fixed contract:
 
-- A **schema/columns introspection endpoint** (`/api/columns` already exists in
-  embryo per [TODO.md](TODO.md)) that reports each field's name, type, and role
-  (filterable / displayable / embedding / blob / FTS).
-- **Generic, schema-driven rendering** on the frontend — results table columns,
-  filter panels, and detail views generated from that introspection rather than
-  hardcoded field names (the resizable-columns work is a start).
-- **Field "roles"/tags** so the system knows a column is an embedding vs. a
-  facet vs. a media blob without naming it explicitly — the FiftyOne sample/
-  field-schema idea adapted to Lance.
+- **Extend `/api/columns` into a real field-schema** — name, type, nullability,
+  plus a **role/tag** (`filterable` / `displayable` / `embedding` / `blob` /
+  `fts` / `facet`) and display hints (label, default-visible, detail-visible),
+  the FiftyOne sample/field-schema idea adapted to Lance.
+- **Schema-driven rendering** — generate `TABLE_COLUMNS`, the detail field rows,
+  card title/subtitle, and the quick-filter set from that schema instead of
+  hardcoding. Keep `HitSchema` as a typed *core* with a dynamic "extras" bag so
+  TS types stay honest for the known fields while new columns flow through.
 
 **Why now:** every other item here (new embedding spaces, voice/speaker columns,
 KG-derived fields, configurable chunking in §6) adds columns. Without this, each
-one is a frontend+backend edit.
+one is a frontend+backend edit across the files listed above.
 
-**❓ Open questions:** how far to genericize (full dynamic schema vs. a typed
-core + dynamic "extras"); how to keep TypeScript types honest against a dynamic
-schema; preserve the curated, hand-tuned views for the default columns.
+**❓ Open questions:** how far to genericize (full dynamic schema vs. typed core
++ dynamic extras); how to keep TS types honest against a dynamic schema; how to
+preserve the curated, hand-tuned default views (title selection, default
+columns) on top of a generic renderer.
 
 ---
 
@@ -208,25 +239,34 @@ with stored `alignments_json` word timings.
 
 ---
 
-## 7. ❓ Mutable state — SQLite vs. Redis vs. Postgres
+## 7. 📋 State management — Postgres for app state, Redis for cache
 
 The first curation features (tags, saved views — [TODO.md](TODO.md#curation--exploration-roadmap)
 item 5) introduce **mutable application state**, which Lance (append/columnar,
 not a transactional KV) isn't the right home for. On-demand diarization caching,
-speaker naming, and any user/session state need the same.
+speaker naming, and any user/session state need the same. Lance stays the
+**immutable corpus** store; mutable state lives elsewhere.
 
-Options to decide between:
+The decision (not a menu — these are the two stores):
 
-- **SQLite** — zero-ops, fits the single-local-node reality; already floated in
-  [TODO.md](TODO.md) as the tags/saved-views store. Likely the default.
-- **Redis** — if we need fast ephemeral state, pub/sub, or a cache/queue (ties
-  into §8's eventing and §1's job coordination).
-- **Postgres** — if state grows relational/multi-user and we want real
-  transactions + concurrency.
+- **Postgres — the system of record for application/frontend state.** Tags,
+  saved views, speaker names, user/session state, and any "work to do" queue
+  for §8's eventing. Relational, transactional, multi-user — the durable home
+  for everything that isn't the immutable Lance corpus.
+- **Redis — the cache layer.** Hot, ephemeral data: query-vector cache (the
+  parked "query-vector LRU cache" in [TODO.md](TODO.md#parked) belongs here),
+  search-result caching, session/rate-limit data, and a fast scratch space in
+  front of Postgres. Can double as the broker/coordination layer for §1's jobs
+  and §8's events.
 
-**Recommendation:** start with **SQLite** for tags/views/names; only reach for
-Redis/Postgres when concurrency or eventing (`§8`) actually demands it. Decide
-explicitly rather than letting state sprawl across ad-hoc files.
+So: **Lance** = immutable corpus + vectors + FTS; **Postgres** = durable mutable
+state; **Redis** = cache + ephemeral/coordination. Three stores, three clear
+roles — no SQLite, no state sprawl across ad-hoc files.
+
+**❓ Open questions:** does Redis also serve as the §8 event bus, or do we keep
+events in Postgres (`LISTEN/NOTIFY` / an outbox table) and use Redis purely as a
+cache? How much of the existing on-disk state (e.g. diarization shard tables)
+migrates to Postgres vs. stays Lance.
 
 ---
 
@@ -247,8 +287,9 @@ finishes — downstream steps are run by hand or chained in shell.
 
 **❓ Open questions:** is this premature at single-node scale (YAGNI), or does
 on-demand diarization + the Ray rewrite already create enough moving parts to
-justify a pub/sub spine? Polling a "work to do" table (cheap, SQLite-backed) may
-beat a full Dapr deployment until services multiply.
+justify a pub/sub spine? A "work to do" table in **Postgres** (§7) polled by
+workers — or Postgres `LISTEN/NOTIFY` / a **Redis** stream — may beat a full
+Dapr deployment until services actually multiply.
 
 ---
 
