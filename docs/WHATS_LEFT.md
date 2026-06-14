@@ -49,26 +49,42 @@ Today inference is **split across two worlds** that don't share a runtime:
   **sequentially and health-gated** because starting embed+rerank at once trips
   vLLM's GPU memory-profiling race.
 
-**What we want:**
+**What we want.** The Ray stack is **four distinct layers** — it helps to keep
+them straight, because the names collide (Ray Core → Ray Data / Ray Serve →
+KubeRay CRDs):
 
-- **Offline → Ray Data with actor-based stateful inference.** Model the feature
-  passes as a Ray Data pipeline: `read_lance() → map_batches(EmbedActor, …) →
-  write_lance()`. Each `EmbedActor` (or `CaptionActor`, `RerankActor`) holds a
-  warm model on a GPU (`num_gpus=1`, `concurrency=N` for N replicas), so Ray
-  schedules the GPU pool and handles backpressure / retries / checkpointing
-  instead of our hand-rolled concurrency + resume logic. This replaces the
-  "start a vLLM server, then run a CLI that HTTP-fans-out at it" two-step with a
-  single managed job.
-- **Online → Ray Serve in front of vLLM.** Co-locate the serving stack under
-  Ray Serve deployments (autoscaling replicas, request batching at the Serve
-  layer, a single deployment graph for embed + rerank) rather than two manually
-  health-gated server processes.
-- **KubeRay is the deployment target.** The actor pool (offline jobs) and the
-  Ray Serve deployments (online) run on a **KubeRay** `RayCluster` /
-  `RayService` — Kubernetes-native autoscaling, GPU scheduling, and lifecycle —
-  rather than a hand-managed local Ray process. This is the key piece that makes
-  the actor model worth adopting: KubeRay owns the cluster, we own the pipeline
-  and deployment definitions.
+- **Substrate: Ray Core + actors.** An **actor** is a long-lived `@ray.remote`
+  worker that loads a model **once** in `__init__` and reuses it across calls, so
+  the GPU stays warm. Every layer below is actor-backed; the actor is the unit
+  that replaces "a warm vLLM server process."
+- **Offline → Ray Data (actor pool).** Model the feature passes as a streaming
+  pipeline: `read_lance() → map_batches(EmbedActor, concurrency=N, num_gpus=1,
+  batch_size=…) → write_lance()`. Handing `map_batches` a **class** (not a
+  function) makes Ray Data stand up an **actor pool** of N warm replicas and
+  stream batches through them with backpressure, retries, and checkpointing —
+  replacing the hand-rolled `ThreadPoolExecutor` + JSONL-sidecar resume in
+  `features/engine.py`. Each `EmbedActor` / `CaptionActor` / `RerankActor` is one
+  warm model.
+- **Online → Ray Serve + vLLM.** A Serve app of actor-backed **deployments**
+  (autoscaling replicas, `@serve.batch` dynamic batching, a composition graph for
+  embed + rerank + caption fronting vLLM) — replacing the four manually
+  health-gated vLLM processes. *Naming caveat: "Ray Serve" is the Python serving
+  library; "RayService" (below) is the Kubernetes resource that operates it — not
+  the same thing.*
+- **Kubernetes → KubeRay operator + its CRDs.** KubeRay provisions and reconciles
+  the cluster on K8s. Three resources, mapped to the two workloads:
+  - **`RayCluster`** — the raw cluster (head + autoscaling GPU worker groups) that
+    everything runs on.
+  - **`RayJob`** — runs a workload **to completion** (can create an ephemeral
+    cluster, run, tear down). ← the **offline Ray Data** feature passes run here.
+  - **`RayService`** — manages a **long-lived Ray Serve app** with health checks
+    and **zero-downtime upgrades** (new cluster up → healthy → traffic switch). ←
+    the **online** embed/rerank serving runs here.
+
+  KubeRay owns provisioning, GPU scheduling, and autoscaling; we own the pipeline
+  (RayJob) and Serve (RayService) definitions. This Kubernetes layer is the key
+  piece that makes the actor model worth adopting at scale, vs. a hand-managed
+  local Ray process.
 - **Stop having "separate scripts."** Fold `scripts/build_topics.py`,
   `scripts/kg/build_kg.py`, the eval scripts, etc. into the same Ray-driven
   pipeline surface so they're **integrated with the rest of the codebase**
