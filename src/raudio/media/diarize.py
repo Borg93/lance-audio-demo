@@ -54,7 +54,7 @@ class SpeakerTurn(BaseModel):
     end: float
 
 
-def _extract_wav_16k_mono(source: Path, dest: Path, *, timeout: float = 1800.0) -> None:
+def extract_wav_16k_mono(source: Path, dest: Path, *, timeout: float = 1800.0) -> None:
     """Transcode ``source`` to a 16 kHz mono WAV at ``dest`` via ffmpeg.
 
     Raises :class:`RuntimeError` with the ffmpeg stderr tail on failure.
@@ -124,7 +124,7 @@ class Diarizer:
         """
         with tempfile.TemporaryDirectory(prefix="raudio-diar-") as tmp:
             wav = Path(tmp) / "audio_16k_mono.wav"
-            _extract_wav_16k_mono(source, wav, timeout=ffmpeg_timeout)
+            extract_wav_16k_mono(source, wav, timeout=ffmpeg_timeout)
             out = self._pipe(str(wav))
 
         # pyannote 4.x returns a DiarizeOutput; 3.x returns a bare Annotation.

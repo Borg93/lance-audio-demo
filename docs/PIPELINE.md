@@ -397,7 +397,7 @@ make speaker-turns DB=transcripts_v2.lance
 ```
 
 Grounded details from [`diarize.py`](../src/raudio/media/diarize.py) /
-[`cli/media.py`](../src/raudio/cli/media.py):
+[`cli/speaker.py`](../src/raudio/cli/speaker.py):
 
 - **In-process, no server.** A `Diarizer` loads
   `pyannote/speaker-diarization-community-1` (the `--model` default) once and

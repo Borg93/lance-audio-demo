@@ -11,7 +11,7 @@
 
 Source of truth: [`src/raudio/media/voiceprint.py`](../src/raudio/media/voiceprint.py)
 (the encoder + slicing/batching/centroid logic),
-[`src/raudio/cli/media.py`](../src/raudio/cli/media.py) (`embed-speaker-turns`,
+[`src/raudio/cli/speaker.py`](../src/raudio/cli/speaker.py) (`embed-speaker-turns`,
 `merge-speaker-embeddings`, `build-speakers`, `cluster-speakers`),
 [`src/raudio/model/schema.py`](../src/raudio/model/schema.py) (`VOICE_EMBED_DIM`,
 `SPEAKER_EMBEDDINGS_SCHEMA`, `SPEAKERS_SCHEMA`),
@@ -156,7 +156,7 @@ uv run raudio --db transcripts_v2.lance build-speakers
 uv run --extra atlas raudio --db transcripts_v2.lance cluster-speakers --seed 42 --validate
 ```
 
-**Sharding/resume semantics** (`cli/media.py::cmd_embed_speaker_turns`,
+**Sharding/resume semantics** (`cli/speaker.py::cmd_embed_speaker_turns`,
 mirrors the diarization sharding):
 
 - `--num-shards N --shard-index i` partitions videos by `shard_of(doc_id)`;
@@ -201,7 +201,7 @@ batch at once and the spike kills whoever allocates last.
 Fits a **seeded** `evoc.EVoC` over the `speakers` embedding matrix (identity
 assignment must be reproducible — unlike the Atlas projection, `--seed 42` is
 the default) and rewrites the table wholesale with the new `speaker_cluster`
-column. Two non-obvious design points (`cli/media.py`):
+column. Two non-obvious design points (`cli/speaker.py`):
 
 - **It does NOT use EVoC's own `labels_`.** That is the *persistence-max*
   layer — the dominant density scale, which for these voiceprints is the
@@ -391,8 +391,8 @@ page, an atlas voice space) is tracked in [TODO.md](TODO.md).
 |---|---|
 | Change the voice encoder / batching / centroid math | [`media/voiceprint.py`](../src/raudio/media/voiceprint.py) (`VoiceEncoder`, `embed_turn_slices`, `duration_weighted_centroid`) |
 | Change the voice vector width / table schemas | `VOICE_EMBED_DIM`, `SPEAKER_EMBEDDINGS_SCHEMA`, `SPEAKERS_SCHEMA` in [`model/schema.py`](../src/raudio/model/schema.py) |
-| Run / resume the offline passes | `embed-speaker-turns`, `merge-speaker-embeddings`, `build-speakers`, `cluster-speakers` in [`cli/media.py`](../src/raudio/cli/media.py) |
-| Change the identity-layer selection / validation pair | `_select_identity_layer`, `_same_doc_merge_rate`, `_VALIDATION_CONFIRMED_PAIR` in [`cli/media.py`](../src/raudio/cli/media.py) |
+| Run / resume the offline passes | `embed-speaker-turns`, `merge-speaker-embeddings`, `build-speakers`, `cluster-speakers` in [`cli/speaker.py`](../src/raudio/cli/speaker.py) |
+| Change the identity-layer selection / validation pair | `select_identity_layer`, `same_doc_merge_rate`, `VALIDATION_CONFIRMED_PAIR` in [`media/cluster.py`](../src/raudio/media/cluster.py) |
 | Change anchor resolution / the kNN / the chunk join | [`backend/voice/service.py`](../backend/voice/service.py) (`similar_voices`, `rank_similar_turns`, `_chunk_for_turn`) |
 | Change the upload caps / decode path | `_MAX_UPLOAD_BYTES`, `_UPLOAD_EMBED_CAP_S`, `_decode_upload_wav` in [`backend/voice/service.py`](../backend/voice/service.py) + [`backend/voice/encoder.py`](../backend/voice/encoder.py) |
 | Change the response shapes | [`backend/schemas/voice.py`](../backend/schemas/voice.py) + the Zod mirrors in [`frontend/src/lib/api.ts`](../frontend/src/lib/api.ts) |

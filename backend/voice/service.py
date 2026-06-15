@@ -353,7 +353,7 @@ def _decode_upload_wav(file_bytes: bytes) -> np.ndarray:
     mono PCM16 WAV, and are loaded with the encoder's own loader. Undecodable
     input maps to a 400 — it's the uploader's bytes, not our state.
     """
-    from raudio.media.diarize import _extract_wav_16k_mono
+    from raudio.media.diarize import extract_wav_16k_mono
     from raudio.media.voiceprint import load_wav_16k_mono
 
     with tempfile.TemporaryDirectory(prefix="raudio-voice-upload-") as tmp:
@@ -361,7 +361,7 @@ def _decode_upload_wav(file_bytes: bytes) -> np.ndarray:
         src.write_bytes(file_bytes)
         wav = Path(tmp) / "audio_16k_mono.wav"
         try:
-            _extract_wav_16k_mono(src, wav, timeout=_UPLOAD_FFMPEG_TIMEOUT_S)
+            extract_wav_16k_mono(src, wav, timeout=_UPLOAD_FFMPEG_TIMEOUT_S)
         except RuntimeError as e:
             logger.info("upload decode failed: %s", e)
             raise ValidationError("could not decode the upload as audio") from e

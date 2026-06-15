@@ -12,7 +12,7 @@ here is what wires them onto ``app`` so the entry point (``raudio.__main__``)
 sees the full command set.
 """
 
-from . import features, ingest, media, search, transcribe  # noqa: F401 — register commands
+from . import features, ingest, media, search, speaker, transcribe  # noqa: F401 — register commands
 from ._app import app
 
 __all__ = ["app"]

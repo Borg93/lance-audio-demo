@@ -24,15 +24,20 @@ model.
 from __future__ import annotations
 
 import logging
+import tempfile
 import wave
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import numpy as np
 from pydantic import BaseModel
 
-from .diarize import TARGET_SAMPLE_RATE
+from .diarize import TARGET_SAMPLE_RATE, extract_wav_16k_mono
+
+if TYPE_CHECKING:
+    import lancedb
+    import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +82,7 @@ class TurnBatchEncoder(Protocol):
 
 
 def load_wav_16k_mono(path: Path) -> np.ndarray:
-    """Decode a 16 kHz mono PCM16 WAV (``_extract_wav_16k_mono`` output) → float32 in [-1, 1].
+    """Decode a 16 kHz mono PCM16 WAV (``extract_wav_16k_mono`` output) → float32 in [-1, 1].
 
     Raises :class:`ValueError` on any other WAV layout — the encoder's fbank
     front-end assumes exactly this format, so a silent resample would corrupt
@@ -245,7 +250,7 @@ class VoiceEncoder:
     ) -> tuple[list[TurnSpan], np.ndarray]:
         """Embed one video's turns → ``(kept_turns, L2-normalized (n, 256) array)``.
 
-        ``wav_path`` must be the video's 16 kHz mono WAV (``_extract_wav_16k_mono``
+        ``wav_path`` must be the video's 16 kHz mono WAV (``extract_wav_16k_mono``
         output). Turns shorter than ``min_duration`` are skipped; row ``i``
         belongs to ``kept_turns[i]``.
         """
@@ -311,3 +316,231 @@ def write_speaker_embeddings(
         n_written += len(turns)
 
     return n_written
+
+
+def embed_videos(
+    encoder: VoiceEncoder,
+    videos: Sequence[tuple[str, Path]],
+    turns_by_doc: dict[str, list[TurnSpan]],
+    *,
+    batch_size: int,
+    min_turn_duration: float,
+    ffmpeg_timeout: float,
+    progress: Callable[[Sequence[tuple[str, Path]]], Iterable[tuple[str, Path]]] | None = None,
+) -> Iterator[tuple[str, list[TurnSpan], np.ndarray]]:
+    """Decode each video to 16 kHz mono WAV and embed its turns, video by video.
+
+    Yields one ``(doc_id, kept_turns, embeddings)`` per video in the
+    :func:`write_speaker_embeddings` contract. A video whose decode or embedding
+    raises is logged and skipped so one bad video never kills the batch.
+    ``progress`` wraps the iteration (e.g. ``tqdm``); identity when ``None``.
+    """
+    iterator = progress(videos) if progress is not None else videos
+    for doc_id, src in iterator:
+        try:
+            with tempfile.TemporaryDirectory(prefix="raudio-voice-") as tmp:
+                wav = Path(tmp) / "audio_16k_mono.wav"
+                extract_wav_16k_mono(src, wav, timeout=ffmpeg_timeout)
+                kept, embeddings = encoder.embed_turns(
+                    wav,
+                    turns_by_doc[doc_id],
+                    batch_size=batch_size,
+                    min_duration=min_turn_duration,
+                )
+        except Exception as e:  # noqa: BLE001 — one bad video must not kill the batch
+            logger.warning("voice embedding failed: %s (%s) — %s", doc_id, src, e)
+            continue
+        yield doc_id, kept, embeddings
+
+
+def build_speakers(db: lancedb.DBConnection, db_path: Path) -> tuple[int, int]:
+    """Aggregate per-turn voice embeddings → ``speakers.lance`` (overwrite).
+
+    Groups the canonical ``speaker_embeddings`` table by ``(doc_id, speaker_label)``
+    and writes one row per local speaker: turn count, total speech duration, and the
+    duration-weighted, re-L2-normalized mean of its turn embeddings. ``speaker_cluster``
+    starts at -1 for the later global-clustering pass; ``speaker_name`` starts NULL.
+    The table is tiny, so each call rebuilds it wholesale. Returns
+    ``(speaker_count, video_count)``.
+
+    Raises :class:`ValueError` when ``speaker_embeddings`` is missing, empty, or no
+    centroid could be computed.
+    """
+    import lance
+    import pyarrow as pa
+
+    from ..model.schema import SPEAKERS_SCHEMA, SPEAKERS_STORAGE_VERSION, VOICE_EMBED_DIM
+
+    if "speaker_embeddings" not in db.list_tables().tables:
+        raise ValueError(
+            f"Table 'speaker_embeddings' not found in {db_path} — run "
+            "`raudio embed-speaker-turns` first (and `raudio merge-speaker-embeddings` "
+            "if it ran sharded)."
+        )
+
+    ds = lance.dataset(str(db_path / "speaker_embeddings.lance"))
+    tbl = ds.to_table(columns=["doc_id", "speaker_label", "duration", "embedding"])
+    if tbl.num_rows == 0:
+        raise ValueError("speaker_embeddings is empty — run `raudio embed-speaker-turns` first.")
+
+    doc_ids = tbl["doc_id"].to_pylist()
+    labels = tbl["speaker_label"].to_pylist()
+    durations = tbl["duration"].to_pylist()
+    vectors = (
+        tbl["embedding"]
+        .combine_chunks()
+        .flatten()
+        .to_numpy(zero_copy_only=False)
+        .reshape(-1, VOICE_EMBED_DIM)
+        .astype(np.float32)
+    )
+
+    groups: dict[tuple[str, str], list[int]] = {}
+    for i, key in enumerate(zip(doc_ids, labels, strict=True)):
+        groups.setdefault(key, []).append(i)
+
+    out_keys: list[tuple[str, str]] = []
+    out_n_turns: list[int] = []
+    out_totals: list[float] = []
+    centroids: list[np.ndarray] = []
+    for (doc_id, label), idxs in sorted(groups.items()):
+        turn_durations = [durations[i] for i in idxs]
+        try:
+            centroid = duration_weighted_centroid(vectors[idxs], turn_durations)
+        except ValueError as e:
+            logger.warning("skipping speaker %s/%s: %s", doc_id, label, e)
+            continue
+        out_keys.append((doc_id, label))
+        out_n_turns.append(len(idxs))
+        out_totals.append(float(sum(turn_durations)))
+        centroids.append(centroid)
+
+    if not centroids:
+        raise ValueError(
+            "No speaker centroid could be computed — speaker_embeddings looks corrupt."
+        )
+
+    n = len(centroids)
+    flat = pa.array(np.concatenate(centroids), pa.float32())
+    speakers = pa.table(
+        {
+            "doc_id": pa.array([d for d, _ in out_keys], pa.string()),
+            "speaker_label": pa.array([s for _, s in out_keys], pa.string()),
+            "n_turns": pa.array(out_n_turns, pa.int32()),
+            "total_duration": pa.array(out_totals, pa.float32()),
+            "embedding": pa.FixedSizeListArray.from_arrays(flat, VOICE_EMBED_DIM),
+            "speaker_cluster": pa.array([-1] * n, pa.int32()),
+            "speaker_name": pa.array([None] * n, pa.string()),
+        },
+        schema=SPEAKERS_SCHEMA,
+    )
+    lance.write_dataset(
+        speakers,
+        str(db_path / "speakers.lance"),
+        mode="overwrite",
+        data_storage_version=SPEAKERS_STORAGE_VERSION,
+    )
+
+    speakers_tbl = db.open_table("speakers")
+    try:
+        speakers_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)
+        logger.info("built BTREE scalar index on speakers.doc_id")
+    except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
+        logger.debug("scalar index (speakers.doc_id) skipped: %s", e)
+
+    n_videos = len({d for d, _ in groups})
+    return n, n_videos
+
+
+def speaker_embeddings_indexes(emb_tbl: lancedb.table.Table) -> None:
+    """(Re)build the canonical ``speaker_embeddings`` indexes: BTREE doc_id + vector.
+
+    Shared by ``embed-speaker-turns`` (single-run) and ``merge-speaker-embeddings``.
+    """
+    from ..features.engine import ensure_vector_index
+
+    try:
+        emb_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)
+        logger.info("built BTREE scalar index on speaker_embeddings.doc_id")
+    except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
+        logger.debug("scalar index (speaker_embeddings.doc_id) skipped: %s", e)
+    # 256-d voice vectors → 16 sub-vectors (16 dims each); skips itself while
+    # the table is smaller than num_partitions (flat search is fine until then).
+    ensure_vector_index(emb_tbl, "embedding", num_partitions=256, num_sub_vectors=16)
+
+
+def fold_shards(
+    db: lancedb.DBConnection,
+    db_path: Path,
+    base_name: str,
+    *,
+    schema: pa.Schema,
+    storage_version: Literal["stable", "2.0", "2.1", "2.2", "2.3", "next", "legacy", "0.1"],
+    drop_shards: bool,
+    rebuild_indexes: Callable[[lancedb.table.Table], None],
+) -> tuple[int, int] | None:
+    """Fold ``{base_name}_shard*.lance`` staging tables into ``{base_name}.lance``.
+
+    The sharded workers each write a disjoint slice to their own staging table;
+    this concatenates them (plus any existing canonical rows, which win on a
+    ``doc_id`` collision so re-running is safe), overwrites the canonical table,
+    rebuilds its indexes via ``rebuild_indexes``, and — when ``drop_shards`` —
+    drops the staging tables. Returns ``(video_count, row_count)`` on success, or
+    ``None`` when there were no shards / nothing to merge (the caller echoes a
+    skip message).
+
+    NOTE (future / scale): this is a read-all + overwrite merge — correct and
+    effectively instant at our size (these tables are ~10^5 rows of small
+    columns), but it rewrites the whole canonical table each call. The native
+    Lance distributed-write path — each worker ``lance.fragment.write_fragments``
+    into the canonical dataset, collect the ``FragmentMetadata``, then one
+    ``LanceOperation.Append`` commit — avoids the rewrite and is the cleaner,
+    safer pattern to adopt if these tables grow large or merges get frequent. We
+    keep staging-table + overwrite for now because per-table per-video appends
+    give crash durability (a dead worker resumes mid-shard), which the
+    commit-once-at-the-end fragment path would sacrifice.
+    """
+    import lance
+    import pyarrow as pa
+
+    existing_tables = db.list_tables().tables
+    shard_names = sorted(t for t in existing_tables if t.startswith(f"{base_name}_shard"))
+    if not shard_names:
+        return None
+
+    main_path = db_path / f"{base_name}.lance"
+    # Canonical rows first so an already-merged doc_id wins over a shard's copy.
+    sources = ([base_name] if base_name in existing_tables else []) + shard_names
+
+    seen: set[str] = set()
+    parts: list[pa.Table] = []
+    for name in sources:
+        ds = lance.dataset(str(db_path / f"{name}.lance"))
+        if ds.count_rows() == 0:
+            continue
+        tbl = ds.to_table().cast(schema)
+        doc_col = tbl["doc_id"].to_pylist()
+        keep = pa.array([d not in seen for d in doc_col], pa.bool_())
+        parts.append(tbl.filter(keep))
+        seen.update(doc_col)
+
+    if not parts:
+        return None
+
+    merged = pa.concat_tables(parts)
+    lance.write_dataset(
+        merged,
+        str(main_path),
+        mode="overwrite",
+        data_storage_version=storage_version,
+    )
+
+    main_tbl = db.open_table(base_name)
+    if main_tbl.count_rows() > 0:
+        rebuild_indexes(main_tbl)
+
+    if drop_shards:
+        for name in shard_names:
+            db.drop_table(name)
+
+    return len(seen), merged.num_rows

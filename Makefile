@@ -27,6 +27,7 @@ GPU             ?= 2
 	ingest ingest-with-media ingest-full reindex-fts \
 	pipeline pipeline-sharded pipeline-multimodal \
 	embed-server rerank-server embed-server-docker rerank-server-docker vllm-stop kernels-prepare embed-chunks extract-chunk-frames embed-chunk-frames speaker-turns \
+	merge-speaker-turns embed-speaker-turns merge-speaker-embeddings build-speakers cluster-speakers \
 	caption-chunk-frames embed-captions captions topics \
 	atlas atlas-visual atlas-caption atlas-all features-all stack-up stack-down \
 	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
@@ -354,6 +355,21 @@ embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ i
 
 speaker-turns:        ## Diarize each video → speaker_turns.lance (who-spoke-when; needs pyannote + cached HF token).
 	uv run raudio --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+
+merge-speaker-turns:  ## Fold sharded speaker_turns staging tables into the canonical table.
+	uv run raudio --db $(DB) merge-speaker-turns
+
+embed-speaker-turns:  ## Per-turn WeSpeaker 256-d voiceprints → speaker_embeddings.lance (GPU; shardable).
+	uv run raudio --db $(DB) embed-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+
+merge-speaker-embeddings: ## Fold speaker_embeddings shards into the canonical table + rebuild indexes.
+	uv run raudio --db $(DB) merge-speaker-embeddings
+
+build-speakers:       ## Duration-weighted centroid per (doc, label) → speakers.lance.
+	uv run raudio --db $(DB) build-speakers
+
+cluster-speakers:     ## Seeded EVōC over speakers → speaker_cluster (cross-video identities; needs atlas extra).
+	uv run --extra atlas raudio --db $(DB) cluster-speakers --seed 42 --validate
 
 caption-chunk-frames: ## Caption EXISTING frames → chunk_frames.caption (resumable; uses your Gemma at $(CAPTION_URL)).
 	uv run --extra multimodal raudio --db $(DB) feature caption \
