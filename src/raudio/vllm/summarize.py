@@ -7,13 +7,14 @@ is stored as a plain ``string`` feature column on ``chunks`` and indexed for FTS
 
 from __future__ import annotations
 
+import os
 from typing import Protocol
 
 from .base import DEFAULT_TIMEOUT_S, VLLMTransport
 from .schemas import ChatCompletionResponse, ChatMessage
 
 SUMMARIZE_MODEL = "Qwen/Qwen3-Instruct-4B"
-DEFAULT_SUMMARIZE_URL = "http://127.0.0.1:8004"
+DEFAULT_SUMMARIZE_URL = os.getenv("RAUDIO_SUMMARIZE_URL", "http://127.0.0.1:8004")
 SUMMARIZE_INSTRUCTION = "Summarize the following transcript passage in one concise sentence."
 SUMMARIZE_CONCURRENCY = 32
 SUMMARIZE_MAX_TOKENS = 96

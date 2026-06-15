@@ -18,6 +18,8 @@ byte-compatible; drift silently degrades rerank quality.
 
 from __future__ import annotations
 
+import os
+
 import pyarrow as pa
 from lancedb.rerankers import Reranker
 
@@ -25,7 +27,7 @@ from .base import DEFAULT_TIMEOUT_S, VLLMTransport
 from .schemas import RerankResponse
 
 RERANK_MODEL = "Qwen/Qwen3-VL-Reranker-2B"
-DEFAULT_RERANK_URL = "http://127.0.0.1:8002"
+DEFAULT_RERANK_URL = os.getenv("RAUDIO_RERANK_URL", "http://127.0.0.1:8002")
 DEFAULT_TOP_K = 100  # rows sent to the cross-encoder; the rest keep fused order
 
 RERANK_INSTRUCTION = "Given a search query, retrieve relevant candidates that answer the query."

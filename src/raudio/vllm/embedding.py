@@ -11,6 +11,7 @@ The model is Qwen3-VL-Embedding-2B, served by a long-running vLLM HTTP server
 
 from __future__ import annotations
 
+import os
 from typing import Protocol
 
 import numpy as np
@@ -21,7 +22,7 @@ from .image import image_to_data_url, l2_normalize
 from .schemas import ChatMessage, EmbeddingResponse, ImagePart, ImageUrl, TextPart
 
 EMBED_MODEL = "Qwen/Qwen3-VL-Embedding-2B"
-DEFAULT_EMBED_URL = "http://127.0.0.1:8001"
+DEFAULT_EMBED_URL = os.getenv("RAUDIO_EMBED_URL", "http://127.0.0.1:8001")
 
 # Per the model card, an English instruction works best even for Swedish input.
 EMBED_INSTRUCTION = "Represent the user's input."
