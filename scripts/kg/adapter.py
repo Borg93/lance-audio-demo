@@ -38,10 +38,36 @@ SEP = "<SEP>"  # GRAPH_FIELD_SEP in lightrag 1.5.x
 # Pronouns / meta-speech "entities" the LLM extracts from first-person Swedish
 # transcripts — zero informational value and they poison co-occurrence queries.
 STOPWORDS = {
-    "jag", "vi", "man", "du", "ni", "han", "hon", "de", "dem", "det", "den",
-    "alla", "andra", "många", "ingen", "någon", "folk", "talaren", "talare",
-    "moderator", "moderatorn", "publiken", "deltagarna", "deltagare",
-    "åhörarna", "frågeställaren", "frågor", "frågan", "kronor", "procent",
+    "jag",
+    "vi",
+    "man",
+    "du",
+    "ni",
+    "han",
+    "hon",
+    "de",
+    "dem",
+    "det",
+    "den",
+    "alla",
+    "andra",
+    "många",
+    "ingen",
+    "någon",
+    "folk",
+    "talaren",
+    "talare",
+    "moderator",
+    "moderatorn",
+    "publiken",
+    "deltagarna",
+    "deltagare",
+    "åhörarna",
+    "frågeställaren",
+    "frågor",
+    "frågan",
+    "kronor",
+    "procent",
 }
 
 _NUMERIC = re.compile(r"[\d\s.,:%–—()-]+")  # incl. parens so '(2007-2011)' is junk
@@ -132,42 +158,31 @@ def norm_type(t: str | None) -> str:
     return "OTHER"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Fold LightRAG output → kg_* Lance tables.")
-    parser.add_argument(
-        "--work",
-        nargs="+",
-        default=["kg_work/rag"],
-        help="one or more LightRAG work dirs — sharded builds fold into one graph "
-        "(entity identity is name-based, so the union equals a single-run graph)",
-    )
-    parser.add_argument("--chunks", default="kg_work/chunks.jsonl")
-    parser.add_argument("--db", default="transcripts_v2.lance")
-    parser.add_argument(
-        "--type-overrides",
-        default="",
-        help="JSON {entity_id: TYPE} corrections applied after norm_type — "
-        "produced by refine_person_types.py to demote generic 'persons' "
-        "(Barn, Forskare, Jag...) to OTHER",
-    )
-    args = parser.parse_args()
-
-    db = Path(args.db)
-
-    chunk_meta = {
+def _load_chunk_meta(chunks_path: Path) -> dict[str, dict]:
+    """Index the chunks JSONL by ``doc_id:speech_id:chunk_id`` — the key form the
+    graphml ``source_id`` tokens resolve back to."""
+    return {
         f"{c['doc_id']}:{c['speech_id']}:{c['chunk_id']}": c
-        for c in (
-            json.loads(line) for line in Path(args.chunks).read_text().splitlines() if line.strip()
-        )
+        for c in (json.loads(line) for line in chunks_path.read_text().splitlines() if line.strip())
     }
 
-    ent_name: dict[str, str] = {}
-    ent_type: dict[str, str] = {}
-    ent_chunks: dict[str, set[str]] = defaultdict(set)
-    rels: list[dict] = []
-    seen_rels: set[tuple[str, str, str]] = set()
 
-    for workdir in args.work:
+def _fold_graphml(
+    workdirs: list[str],
+    chunk_meta: dict[str, dict],
+    ent_name: dict[str, str],
+    ent_type: dict[str, str],
+    ent_chunks: dict[str, set[str]],
+    rels: list[dict],
+    seen_rels: set[tuple[str, str, str]],
+) -> None:
+    """Fold every LightRAG work dir's graphml into the shared entity/relation
+    accumulators — sharded builds union by name-based identity into one graph.
+
+    Mutates ``ent_name`` / ``ent_type`` / ``ent_chunks`` / ``rels`` / ``seen_rels``
+    in place so cross-shard state carries across work dirs.
+    """
+    for workdir in workdirs:
         work = Path(workdir)
         if not (work / "graph_chunk_entity_relation.graphml").exists():
             print(f"fold {work}: SKIPPED (no graphml)")
@@ -247,12 +262,25 @@ def main() -> None:
             ent_type.setdefault(s, "OTHER")
             ent_type.setdefault(t, "OTHER")
 
-    # ── alias merging ────────────────────────────────────────────────────────
-    # 1) Swedish definite/plural suffix duplicates (Kommun/Kommunen/Kommunerna)
-    #    merge non-PERSON variants into the most-mentioned form.
-    # 2) Single-token person names merge into a multi-token superset ONLY when
-    #    exactly one candidate exists ('Bosse'→'Bosse Ringholm'; 'Pettersson'
-    #    with two Petterssons stays split — ambiguity blocks the merge).
+
+def _merge_aliases(
+    ent_name: dict[str, str],
+    ent_type: dict[str, str],
+    ent_chunks: dict[str, set[str]],
+    rels: list[dict],
+) -> list[dict]:
+    """Fold alias entities into their canonical form and remap relation rows.
+
+    Two alias rules:
+    1) Swedish definite/plural suffix duplicates (Kommun/Kommunen/Kommunerna)
+       merge non-PERSON variants into the most-mentioned form.
+    2) Single-token person names merge into a multi-token superset ONLY when
+       exactly one candidate exists ('Bosse'→'Bosse Ringholm'; 'Pettersson'
+       with two Petterssons stays split — ambiguity blocks the merge).
+
+    Mutates ``ent_name`` / ``ent_type`` / ``ent_chunks`` in place (losers popped,
+    chunks unioned into winners) and returns the remapped relation rows.
+    """
     alias: dict[str, str] = {}
     by_lower = {ent_name[e].lower(): e for e in ent_name}
     suffix_groups: dict[str, set[str]] = defaultdict(set)  # base form -> all variants
@@ -307,7 +335,7 @@ def main() -> None:
         merged += 1
     if merged:
         remapped: list[dict] = []
-        seen_rels.clear()
+        seen_rels: set[tuple[str, str, str]] = set()
         for r in rels:
             # re-sort after alias resolution to keep the undirected canonical order
             s, t = sorted((resolve(r["source_entity_id"]), resolve(r["target_entity_id"])))
@@ -318,19 +346,65 @@ def main() -> None:
             remapped.append({**r, "source_entity_id": s, "target_entity_id": t})
         rels = remapped
     print(f"alias merge: {merged} entities folded into their canonical form")
+    return rels
 
-    if args.type_overrides:
-        corrections = json.loads(Path(args.type_overrides).read_text())
-        applied = 0
-        for eid, etype in corrections.items():
-            if eid in ent_name:
-                ent_type[eid] = etype
-                applied += 1
-        print(f"type overrides: {applied} applied from {args.type_overrides}")
 
+def _apply_type_overrides(
+    ent_name: dict[str, str], ent_type: dict[str, str], overrides_path: str
+) -> None:
+    """Apply ``{entity_id: TYPE}`` corrections (from refine_person_types.py) onto
+    the surviving entities in place."""
+    if not overrides_path:
+        return
+    corrections = json.loads(Path(overrides_path).read_text())
+    applied = 0
+    for eid, etype in corrections.items():
+        if eid in ent_name:
+            ent_type[eid] = etype
+            applied += 1
+    print(f"type overrides: {applied} applied from {overrides_path}")
+
+
+def _collapse_edges(rels: list[dict]) -> list[dict]:
+    """Collapse one-row-per-chunk into ONE weighted edge per (source,target).
+
+    The model re-asserts the same relation in every co-occurring chunk
+    (Sverige→EU appeared 307×), bloating the table and the hub degrees. Keep
+    weight=distinct-chunk count and the longest (most informative) description.
+    """
+    pair_chunks: dict[tuple[str, str], set[str]] = defaultdict(set)
+    pair_best: dict[tuple[str, str], dict] = {}
+    for r in rels:
+        key = (r["source_entity_id"], r["target_entity_id"])
+        pair_chunks[key].add(r["chunk_id"])
+        prev = pair_best.get(key)
+        if prev is None or len(r["description"]) > len(prev["description"]):
+            pair_best[key] = r
+    collapsed = [
+        {
+            "source_entity_id": s,
+            "target_entity_id": t,
+            "relationship_type": "RELATIONSHIP",
+            "description": pair_best[(s, t)]["description"],
+            "weight": len(pair_chunks[(s, t)]),
+            "chunk_id": pair_best[(s, t)]["chunk_id"],
+            "doc_id": pair_best[(s, t)]["doc_id"],
+        }
+        for (s, t) in pair_chunks
+    ]
+    print(f"edges: {len(rels)} chunk-rows -> {len(collapsed)} weighted pairs")
+    return collapsed
+
+
+def _build_tables(
+    ent_name: dict[str, str],
+    ent_type: dict[str, str],
+    ent_chunks: dict[str, set[str]],
+    chunk_meta: dict[str, dict],
+    collapsed: list[dict],
+) -> dict[str, pa.Table]:
+    """Assemble the four kg_* Lance tables from the folded graph state."""
     eids = sorted(ent_name)
-    print(f"graph: {len(eids)} entities, {len(rels)} relation-rows")
-
     entity_tbl = pa.table(
         {
             "entity_id": eids,
@@ -358,32 +432,6 @@ def main() -> None:
             m_dst.append(ck)
     mentions_tbl = pa.table({"source_entity_id": m_src, "target_chunk_id": m_dst})
 
-    # Collapse one-row-per-chunk into ONE weighted edge per (source,target):
-    # the model re-asserts the same relation in every co-occurring chunk
-    # (Sverige→EU appeared 307×), bloating the table and the hub degrees. Keep
-    # weight=distinct-chunk count and the longest (most informative) description.
-    pair_chunks: dict[tuple[str, str], set[str]] = defaultdict(set)
-    pair_best: dict[tuple[str, str], dict] = {}
-    for r in rels:
-        key = (r["source_entity_id"], r["target_entity_id"])
-        pair_chunks[key].add(r["chunk_id"])
-        prev = pair_best.get(key)
-        if prev is None or len(r["description"]) > len(prev["description"]):
-            pair_best[key] = r
-    collapsed = [
-        {
-            "source_entity_id": s,
-            "target_entity_id": t,
-            "relationship_type": "RELATIONSHIP",
-            "description": pair_best[(s, t)]["description"],
-            "weight": len(pair_chunks[(s, t)]),
-            "chunk_id": pair_best[(s, t)]["chunk_id"],
-            "doc_id": pair_best[(s, t)]["doc_id"],
-        }
-        for (s, t) in pair_chunks
-    ]
-    print(f"edges: {len(rels)} chunk-rows -> {len(collapsed)} weighted pairs")
-
     cols = (
         "source_entity_id",
         "target_entity_id",
@@ -398,23 +446,27 @@ def main() -> None:
         if collapsed
         else pa.table(
             {k: [] for k in cols},
-            schema=pa.schema(
-                [(k, pa.int64() if k == "weight" else pa.string()) for k in cols]
-            ),
+            schema=pa.schema([(k, pa.int64() if k == "weight" else pa.string()) for k in cols]),
         )
     )
-
-    tables = {
+    return {
         "kg_entities": entity_tbl,
         "kg_chunks": chunk_tbl,
         "kg_mentions": mentions_tbl,
         "kg_relationships": rel_tbl,
     }
+
+
+def _write_tables(db: Path, tables: dict[str, pa.Table]) -> None:
+    """Overwrite the kg_* datasets in the Lance DB and reclaim old versions."""
     for name, tbl in tables.items():
         path = str(db / f"{name}.lance")
         lance.write_dataset(tbl, path, mode="overwrite")
         lance.dataset(path).cleanup_old_versions(older_than=timedelta(0))
 
+
+def _cypher_sanity_check(db: Path) -> None:
+    """Verify the fold via a lance-graph Cypher query over the written tables."""
     cfg = (
         lg.GraphConfigBuilder()
         .with_node_label("Entity", "entity_id")
@@ -437,6 +489,47 @@ def main() -> None:
     res = engine.execute("MATCH (a:Entity)-[:MENTIONS]->(c:Chunk) RETURN a.name, c.doc_id LIMIT 3")
     sample = res.to_pylist() if hasattr(res, "to_pylist") else list(res)
     print(f"wrote kg_* into {db} | Cypher sanity: {len(sample)} rows -> {sample[:2]}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Fold LightRAG output → kg_* Lance tables.")
+    parser.add_argument(
+        "--work",
+        nargs="+",
+        default=["kg_work/rag"],
+        help="one or more LightRAG work dirs — sharded builds fold into one graph "
+        "(entity identity is name-based, so the union equals a single-run graph)",
+    )
+    parser.add_argument("--chunks", default="kg_work/chunks.jsonl")
+    parser.add_argument("--db", default="transcripts_v2.lance")
+    parser.add_argument(
+        "--type-overrides",
+        default="",
+        help="JSON {entity_id: TYPE} corrections applied after norm_type — "
+        "produced by refine_person_types.py to demote generic 'persons' "
+        "(Barn, Forskare, Jag...) to OTHER",
+    )
+    args = parser.parse_args()
+
+    db = Path(args.db)
+    chunk_meta = _load_chunk_meta(Path(args.chunks))
+
+    ent_name: dict[str, str] = {}
+    ent_type: dict[str, str] = {}
+    ent_chunks: dict[str, set[str]] = defaultdict(set)
+    rels: list[dict] = []
+    seen_rels: set[tuple[str, str, str]] = set()
+
+    _fold_graphml(args.work, chunk_meta, ent_name, ent_type, ent_chunks, rels, seen_rels)
+    rels = _merge_aliases(ent_name, ent_type, ent_chunks, rels)
+    _apply_type_overrides(ent_name, ent_type, args.type_overrides)
+
+    print(f"graph: {len(ent_name)} entities, {len(rels)} relation-rows")
+
+    collapsed = _collapse_edges(rels)
+    tables = _build_tables(ent_name, ent_type, ent_chunks, chunk_meta, collapsed)
+    _write_tables(db, tables)
+    _cypher_sanity_check(db)
 
 
 if __name__ == "__main__":
