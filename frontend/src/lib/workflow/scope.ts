@@ -3,6 +3,7 @@
  * "WHERE" a refining Search runs under) plus hit de-duplication. No state, no
  * runes — just functions over `Hit[]`, so they're trivial to test and reuse.
  */
+import { activeView, type Row } from '$lib/descriptor';
 import type { Hit } from '$lib/api';
 import { hitKey } from '$lib/utils';
 
@@ -40,30 +41,41 @@ export function dedupeHits(hits: Hit[]): Hit[] {
   });
 }
 
-/** `doc_id IN (…)` over the distinct videos behind `hits` (capped at
- *  `MAX_SCOPE_DOCS`) — video-level refine: re-rank all chunks in those videos. */
+/** SQL literal for a key value — quoted for strings, bare for numbers. */
+function keyLiteral(value: unknown): string {
+  return typeof value === 'number' ? String(value) : sqlQuote(String(value ?? ''));
+}
+
+/** `<docKey> IN (…)` over the distinct documents behind `hits` (capped at
+ *  `MAX_SCOPE_DOCS`) — document-level refine: re-rank all rows in those docs.
+ *  The key column is the descriptor's doc key, not a hardcoded name. */
 export function videoScopeClause(hits: Hit[]): ScopeClause | null {
-  const all = [...new Set(hits.map((h) => h.doc_id))];
+  const view = activeView();
+  const docKey = view.docKeyField;
+  const all = [...new Set(hits.map((h) => String((h as Row)[docKey] ?? '')))];
   const docs = all.slice(0, MAX_SCOPE_DOCS);
   if (!docs.length) return null;
   return {
-    clause: `doc_id IN (${docs.map(sqlQuote).join(', ')})`,
+    clause: `${docKey} IN (${docs.map(sqlQuote).join(', ')})`,
     count: docs.length,
     capped: all.length > docs.length,
   };
 }
 
-/** OR of `(doc_id=… AND speech_id=… AND chunk_id=…)` over the exact upstream
- *  chunks (capped at `MAX_SCOPE_CHUNKS`) — chunk-level refine: the result is a
- *  subset of the upstream chunks, re-ranked by the new query. */
+/** OR of `(k1=… AND k2=… …)` over the exact upstream rows (capped at
+ *  `MAX_SCOPE_CHUNKS`) — row-level refine. The AND-terms are the descriptor's
+ *  identity key fields, so any dataset's key shape works. */
 export function chunkScopeClause(hits: Hit[]): ScopeClause | null {
+  const view = activeView();
+  const keyFields = view.keyFields;
   const uniq = dedupeHits(hits);
   const picked = uniq.slice(0, MAX_SCOPE_CHUNKS);
   if (!picked.length) return null;
-  const terms = picked.map(
-    (h) =>
-      `(doc_id = ${sqlQuote(h.doc_id)} AND speech_id = ${h.speech_id} AND chunk_id = ${h.chunk_id})`,
-  );
+  const terms = picked.map((h) => {
+    const row = h as Row;
+    const conds = keyFields.map((k) => `${k} = ${keyLiteral(row[k])}`);
+    return `(${conds.join(' AND ')})`;
+  });
   return {
     clause: `(${terms.join(' OR ')})`,
     count: picked.length,

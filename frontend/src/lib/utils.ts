@@ -1,6 +1,6 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import type { Hit } from '$lib/api';
+import { activeView, type Row } from '$lib/descriptor';
 
 /** shadcn-svelte's standard `cn` helper: clsx for conditionals, twMerge for conflicts. */
 export function cn(...inputs: ClassValue[]): string {
@@ -41,9 +41,9 @@ export function queryTerms(q: string): string[] {
     .filter((t) => !stop.has(t));
 }
 
-/** Stable identity key for a hit (doc + speech + chunk). */
-export const hitKey = (h: Pick<Hit, 'doc_id' | 'speech_id' | 'chunk_id'>): string =>
-  `${h.doc_id}|${h.speech_id}|${h.chunk_id}`;
+/** Stable identity key for a row, composed from the dataset descriptor's
+ *  identity key fields (replaces the old hardcoded doc/speech/chunk shape). */
+export const hitKey = (h: Row): string => activeView().rowKey(h);
 
 /**
  * Build a highlighter that wraps `terms` in <mark>…</mark> inside HTML-escaped

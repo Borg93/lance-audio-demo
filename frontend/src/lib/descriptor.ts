@@ -383,3 +383,26 @@ export class DatasetView {
     return this.isDefault ? null : this.id;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Active view — the app sets this once after loading the default dataset,
+// so pure helpers (hitKey, media URLs) stay descriptor-driven without
+// threading a view through every caller.
+// ─────────────────────────────────────────────────────────────────────
+
+let _active: DatasetView | null = null;
+
+export function setActiveView(view: DatasetView): void {
+  _active = view;
+}
+
+export function activeViewOrNull(): DatasetView | null {
+  return _active;
+}
+
+/** The active dataset view. Throws if the descriptor hasn't loaded yet — call
+ *  sites run after the app-root descriptor fetch resolves. */
+export function activeView(): DatasetView {
+  if (_active === null) throw new Error('dataset descriptor not loaded');
+  return _active;
+}
