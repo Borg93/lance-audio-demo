@@ -1,0 +1,60 @@
+{
+  "identity": {
+    "key_fields": ["doc_id", "speech_id", "chunk_id"],
+    "doc_key": "doc_id",
+    "doc_key_pattern": "^[a-f0-9]{16}$"
+  },
+  "document": {
+    "table": "documents",
+    "media_blob": "media_blob",
+    "mime": "media_mime",
+    "thumbnail": "thumbnail",
+    "thumbnail_mime": "thumbnail_mime"
+  },
+  "time": { "start": "start", "end": "end" },
+  "display": {
+    "title": ["namn", "audio_path", "doc_id"],
+    "body": "text",
+    "caption": "caption",
+    "metadata": [
+      { "field": "namn", "label": "Name" },
+      { "field": "referenskod", "label": "Ref" },
+      { "field": "bildid", "label": "Bild-ID" },
+      { "field": "extraid", "label": "ID" },
+      { "field": "language", "label": "Language" },
+      { "field": "audio_path", "label": "File" }
+    ]
+  },
+  "search": {
+    "row_table": "chunks",
+    "fts": { "table": "chunks", "column": "text", "language": "Swedish" },
+    "vectors": {
+      "semantic": { "table": "chunks", "column": "text_embedding", "dim": 2048, "query_encoder": "text" },
+      "visual": { "table": "chunk_frames", "column": "frame_embedding", "dim": 2048, "query_encoder": "image" },
+      "scene": {
+        "table": "chunk_frames",
+        "column": "caption_embedding",
+        "dim": 2048,
+        "query_encoder": "text",
+        "caption_source": "caption"
+      }
+    },
+    "filterable": ["language", "namn", "referenskod", "extraid", "topic"],
+    "rerank": true
+  },
+  "atlas": [
+    { "name": "text", "x": "atlas_x", "y": "atlas_y", "cluster": "atlas_cluster", "source_column": "text_embedding", "table": "chunks" },
+    { "name": "visual", "x": "atlas_img_x", "y": "atlas_img_y", "cluster": "atlas_img_cluster", "source_column": "frame_embedding", "table": "chunks" },
+    { "name": "caption", "x": "atlas_cap_x", "y": "atlas_cap_y", "cluster": "atlas_cap_cluster", "source_column": "caption_embedding", "table": "chunks" }
+  ],
+  "capabilities": {
+    "alignments": "chunks.alignments_json",
+    "frames": "chunk_frames.frame_blob",
+    "captions": "chunk_frames.caption",
+    "diarization": "speaker_turns",
+    "voice": "speaker_embeddings.embedding",
+    "speakers": "speakers",
+    "topics": "topics.hierarchy",
+    "graph": "kg_entities"
+  }
+}
