@@ -272,14 +272,10 @@ def write_speaker_embeddings(
     :func:`.diarize.write_speaker_turns`. Videos with no embeddable turns are
     skipped. Returns the number of rows written.
     """
-    import lance
     import pyarrow as pa
 
-    from rmedia.model.schema import (
-        SPEAKER_EMBEDDINGS_SCHEMA,
-        SPEAKER_EMBEDDINGS_STORAGE_VERSION,
-        VOICE_EMBED_DIM,
-    )
+    from rmedia.core.dataset import append_rows, overwrite_dataset
+    from rmedia.model.schema import SPEAKER_EMBEDDINGS_SCHEMA, VOICE_EMBED_DIM
 
     n_written = 0
     first_write = create
@@ -305,12 +301,10 @@ def write_speaker_embeddings(
             },
             schema=SPEAKER_EMBEDDINGS_SCHEMA,
         )
-        lance.write_dataset(
-            table,
-            str(emb_path),
-            mode="overwrite" if first_write else "append",
-            data_storage_version=SPEAKER_EMBEDDINGS_STORAGE_VERSION,
-        )
+        if first_write:
+            overwrite_dataset(emb_path, table)
+        else:
+            append_rows(emb_path, table)
         first_write = False
         n_written += len(turns)
 
@@ -368,7 +362,8 @@ def build_speakers(db: lancedb.DBConnection, db_path: Path) -> tuple[int, int]:
     import lance
     import pyarrow as pa
 
-    from rmedia.model.schema import SPEAKERS_SCHEMA, SPEAKERS_STORAGE_VERSION, VOICE_EMBED_DIM
+    from rmedia.core.dataset import overwrite_dataset
+    from rmedia.model.schema import SPEAKERS_SCHEMA, VOICE_EMBED_DIM
 
     if "speaker_embeddings" not in db.list_tables().tables:
         raise ValueError(
@@ -433,12 +428,7 @@ def build_speakers(db: lancedb.DBConnection, db_path: Path) -> tuple[int, int]:
         },
         schema=SPEAKERS_SCHEMA,
     )
-    lance.write_dataset(
-        speakers,
-        str(db_path / "speakers.lance"),
-        mode="overwrite",
-        data_storage_version=SPEAKERS_STORAGE_VERSION,
-    )
+    overwrite_dataset(db_path / "speakers.lance", speakers)
 
     speakers_tbl = db.open_table("speakers")
     try:

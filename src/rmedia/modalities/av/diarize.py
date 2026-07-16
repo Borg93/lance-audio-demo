@@ -169,10 +169,10 @@ def write_speaker_turns(
     :func:`rmedia.modalities.av.frames.write_chunk_frames`. Videos that produced no turns
     are skipped (no rows written for them).
     """
-    import lance
     import pyarrow as pa
 
-    from rmedia.model.schema import SPEAKER_TURNS_SCHEMA, SPEAKER_TURNS_STORAGE_VERSION
+    from rmedia.core.dataset import append_rows, overwrite_dataset
+    from rmedia.model.schema import SPEAKER_TURNS_SCHEMA
 
     n_written = 0
     first_write = create
@@ -190,12 +190,10 @@ def write_speaker_turns(
             },
             schema=SPEAKER_TURNS_SCHEMA,
         )
-        lance.write_dataset(
-            table,
-            str(turns_path),
-            mode="overwrite" if first_write else "append",
-            data_storage_version=SPEAKER_TURNS_STORAGE_VERSION,
-        )
+        if first_write:
+            overwrite_dataset(turns_path, table)
+        else:
+            append_rows(turns_path, table)
         first_write = False
         n_written += len(turns)
 

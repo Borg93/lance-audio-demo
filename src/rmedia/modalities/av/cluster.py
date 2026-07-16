@@ -232,7 +232,8 @@ def cluster_speakers(
     import numpy as np
     import pyarrow as pa
 
-    from rmedia.model.schema import SPEAKERS_SCHEMA, SPEAKERS_STORAGE_VERSION, VOICE_EMBED_DIM
+    from rmedia.core.dataset import overwrite_dataset
+    from rmedia.model.schema import SPEAKERS_SCHEMA, VOICE_EMBED_DIM
 
     if "speakers" not in db.list_tables().tables:
         raise ValueError(
@@ -277,12 +278,7 @@ def cluster_speakers(
         SPEAKERS_SCHEMA.field("speaker_cluster"),
         pa.array(clusters, pa.int32()),
     ).cast(SPEAKERS_SCHEMA)
-    lance.write_dataset(
-        out,
-        str(speakers_path),
-        mode="overwrite",
-        data_storage_version=SPEAKERS_STORAGE_VERSION,
-    )
+    overwrite_dataset(speakers_path, out)
 
     # The overwrite invalidates the BTREE index build-speakers made — rebuild it.
     speakers_tbl = db.open_table("speakers")

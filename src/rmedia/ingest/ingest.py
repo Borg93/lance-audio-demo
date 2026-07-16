@@ -33,12 +33,12 @@ import lancedb
 import pyarrow as pa
 from lance import blob_array
 
+from rmedia.core.dataset import append_rows, create_dataset
+
 from ..model.datamodel import AlignmentSegment, AudioMetadata
 from ..model.schema import (
     CHUNK_SCHEMA,
-    CHUNK_STORAGE_VERSION,
     DOC_SCHEMA,
-    DOC_STORAGE_VERSION,
 )
 from .audio import compose_media_uri, guess_mime, resolve_source
 
@@ -301,20 +301,9 @@ def _write_documents_table(
     if Path(dataset_path).exists():
         ds = lance.dataset(dataset_path)
         ds.delete(_doc_id_in_filter(r["doc_id"] for r in rows))
-        lance.write_dataset(
-            table,
-            dataset_path,
-            mode="append",
-            allow_external_blob_outside_bases=True,
-        )
+        append_rows(dataset_path, table, allow_external_blobs=True)
     else:
-        lance.write_dataset(
-            table,
-            dataset_path,
-            mode="create",
-            data_storage_version=DOC_STORAGE_VERSION,
-            allow_external_blob_outside_bases=True,
-        )
+        create_dataset(dataset_path, table.schema, data=table, allow_external_blobs=True)
 
 
 def _build_chunks_table(rows: list[dict[str, Any]]) -> pa.Table:
@@ -345,7 +334,8 @@ def _write_chunks_table(
 ) -> lancedb.table.Table:
     """Create the chunks table, or idempotently replace these docs' rows in it.
 
-    First write uses ``lance.write_dataset`` so the storage version can be pinned
+    First write goes through ``rmedia.core.dataset.create_dataset`` so every
+    create-time invariant is pinned
     (lancedb's ``create_table`` doesn't expose it). A re-ingest deletes the
     incoming docs' rows then appends the fresh ones; ``_align_to_schema``
     null-fills any column the live table gained after ingest (e.g.
@@ -353,12 +343,7 @@ def _write_chunks_table(
     """
     if table_name not in db.list_tables().tables:
         chunks_path = str(Path(db_path) / f"{table_name}.lance")
-        lance.write_dataset(
-            chunks_table,
-            chunks_path,
-            mode="create",
-            data_storage_version=CHUNK_STORAGE_VERSION,
-        )
+        create_dataset(chunks_path, chunks_table.schema, data=chunks_table)
         return db.open_table(table_name)
 
     table = db.open_table(table_name)

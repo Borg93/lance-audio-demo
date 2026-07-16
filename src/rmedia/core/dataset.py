@@ -49,11 +49,14 @@ def create_dataset(
     *,
     descriptor: Mapping[str, Any] | None = None,
     data: pa.Table | pa.RecordBatch | None = None,
+    allow_external_blobs: bool = False,
 ) -> lance.LanceDataset:
     """Create a Lance dataset with the lance-media invariants applied.
 
     ``data`` seeds initial rows (it must match ``schema``); omitted, the table
     is created empty and populated by later :func:`append_rows` calls.
+    ``allow_external_blobs`` permits Blob-v2 external URIs outside registered
+    base paths (the documents table's ``file://``/``hf://`` media pointers).
     """
     stamped = _with_descriptor(schema, descriptor)
     table = pa.table({f.name: pa.array([], type=f.type) for f in stamped}, schema=stamped)
@@ -69,12 +72,23 @@ def create_dataset(
         mode="create",
         data_storage_version=DATA_STORAGE_VERSION,
         enable_stable_row_ids=True,
+        allow_external_blob_outside_bases=allow_external_blobs,
     )
 
 
-def append_rows(path: str | Path, data: pa.Table | pa.RecordBatch) -> lance.LanceDataset:
+def append_rows(
+    path: str | Path,
+    data: pa.Table | pa.RecordBatch,
+    *,
+    allow_external_blobs: bool = False,
+) -> lance.LanceDataset:
     """Append rows to an existing dataset (create-time flags are inherited)."""
-    return lance.write_dataset(data, str(path), mode="append")
+    return lance.write_dataset(
+        data,
+        str(path),
+        mode="append",
+        allow_external_blob_outside_bases=allow_external_blobs,
+    )
 
 
 def overwrite_dataset(

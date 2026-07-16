@@ -175,11 +175,11 @@ def write_chunk_frames(
     extraction failed (``error`` set / no bytes) are counted, logged (first few),
     and skipped — never written.
     """
-    import lance
     import pyarrow as pa
     from lance import blob_array
 
-    from rmedia.model.schema import CHUNK_FRAMES_SCHEMA, CHUNK_FRAMES_STORAGE_VERSION
+    from rmedia.core.dataset import append_rows, overwrite_dataset
+    from rmedia.model.schema import CHUNK_FRAMES_SCHEMA
 
     n_ok = n_fail = 0
     first_write = create
@@ -204,12 +204,10 @@ def write_chunk_frames(
             },
             schema=CHUNK_FRAMES_SCHEMA,
         )
-        lance.write_dataset(
-            table,
-            str(frames_path),
-            mode="overwrite" if first_write else "append",
-            data_storage_version=CHUNK_FRAMES_STORAGE_VERSION,
-        )
+        if first_write:
+            overwrite_dataset(frames_path, table)
+        else:
+            append_rows(frames_path, table)
         first_write = False
         n_ok += len(good)
 

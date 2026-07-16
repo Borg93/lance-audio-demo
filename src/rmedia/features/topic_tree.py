@@ -92,7 +92,7 @@ def build_topic_tree(db_path: str | Path) -> int:
     import lance
     import pyarrow as pa
 
-    from rmedia.model.schema import CHUNK_STORAGE_VERSION
+    from rmedia.core.dataset import overwrite_dataset
 
     db_path = Path(db_path)
     chunks = lance.dataset(str(db_path / "chunks.lance"))
@@ -115,8 +115,6 @@ def build_topic_tree(db_path: str | Path) -> int:
         }
     )
     topics_path = db_path / "topics.lance"
-    lance.write_dataset(
-        table, str(topics_path), mode="overwrite", data_storage_version=CHUNK_STORAGE_VERSION
-    )
+    overwrite_dataset(topics_path, table)
     logger.info("wrote topic tree: %s chunks · %s layers → %s", len(rows), n_layers, topics_path)
     return len(rows)
