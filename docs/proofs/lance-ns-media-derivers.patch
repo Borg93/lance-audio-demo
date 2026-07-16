@@ -1,0 +1,456 @@
+diff --git a/services/medallion/services/compute.py b/services/medallion/services/compute.py
+index a5436c1..04d3517 100644
+--- a/services/medallion/services/compute.py
++++ b/services/medallion/services/compute.py
+@@ -27,7 +27,7 @@ from common import blobs, schema
+ from lance import blob_array, blob_field
+ from pydantic import BaseModel, Field
+ 
+-from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts
++from medallion.services.derivers import ARTIFACT_COLUMNS, derive_artifacts, derive_fanout
+ 
+ _STAGE_COLUMN = "stage"
+ #: Row-level provenance: the stable ``_rowid`` of the RAW-zone row this output descends from. Minted at the
+@@ -172,6 +172,47 @@ def transform_stage(
+     return result
+ 
+ 
++def transform_stage_fanout(
++    from_uri: str, to_uri: str, storage_options: dict[str, str], *, stage: str
++) -> tuple[WriteResult, dict[str, WriteResult]]:
++    """PROTOTYPE (lance-media docs/LANCE_NS_INTEGRATION.md §4, model 2): ``transform_stage`` + FAN-OUT.
++
++    Identical to :func:`transform_stage` for the primary silver table, but ALSO writes any sibling tables a
++    fan-out deriver emits (video → one ``frames`` row per extracted frame) to ``f"{to_uri}__{name}"`` at the
++    same 2.2 + stable-row-id contract, each frame keyed to its parent by ``source_rowid``. Additive: when no
++    fan-out deriver matches (image / audio / tabular), the siblings map is empty and this is byte-identical
++    to ``transform_stage``. Proves the column-additive deriver contract extends to new-table stages
++    (``extract_frames`` / ``diarize`` / ``voiceprint`` → ``speaker_turns``) with NO change to the mover,
++    cascade, lineage, or gates — only a parallel registry.
++    """
++    ds = lance.dataset(from_uri, storage_options=storage_options)
++    out, blob_payloads = _carry_forward(ds, stage)
++    primary = derive_artifacts(out, blob_payloads)
++    lance.write_dataset(
++        primary,
++        to_uri,
++        mode="overwrite",
++        storage_options=storage_options,
++        data_storage_version="2.2",
++        enable_stable_row_ids=True,
++    )
++    primary_result = measure(to_uri, storage_options)
++    primary_result.column_map = _column_map(ds.schema, primary.column_names, set(blob_payloads))
++    siblings: dict[str, WriteResult] = {}
++    for name, child in derive_fanout(out, blob_payloads).items():
++        sibling_uri = f"{to_uri}__{name}"
++        lance.write_dataset(
++            child,
++            sibling_uri,
++            mode="overwrite",
++            storage_options=storage_options,
++            data_storage_version="2.2",
++            enable_stable_row_ids=True,
++        )
++        siblings[name] = measure(sibling_uri, storage_options)
++    return primary_result, siblings
++
++
+ def _column_map(
+     in_schema: pa.Schema, out_names: list[str], blob_cols: set[str]
+ ) -> list[tuple[str, str, str]]:
+diff --git a/services/medallion/services/derivers.py b/services/medallion/services/derivers.py
+index b3a6b14..4b84d2b 100644
+--- a/services/medallion/services/derivers.py
++++ b/services/medallion/services/derivers.py
+@@ -19,20 +19,31 @@ from __future__ import annotations
+ from collections.abc import Callable
+ 
+ import pyarrow as pa
++from lance import blob_array, blob_field
+ 
+ from medallion.services import media
+ 
+ #: A per-modality deriver: the carried table + one blob column's payloads -> the table with artifacts.
+ Deriver = Callable[[pa.Table, list[bytes]], pa.Table]
+ 
++#: A per-modality FAN-OUT deriver (lance-media §4 model 2): the carried table + one blob column's
++#: payloads -> a map of {sibling_table_name: table} with a DIFFERENT row cardinality (e.g. video → one
++#: row per extracted frame). This is the seam the column-additive :data:`Deriver` cannot express; the
++#: compute stage writes each sibling to its own dataset alongside the primary.
++FanoutDeriver = Callable[[pa.Table, list[bytes]], "dict[str, pa.Table]"]
++
++_SOURCE_ROWID_COLUMN = "source_rowid"  # root-provenance FK carried on every cascade row (compute.py)
++_FRAMES_PER_VIDEO = 3
++
+ _THUMBNAIL_COLUMN = "thumbnail"
+ _EMBEDDING_COLUMN = "embedding"
++_VOICEPRINT_COLUMN = "voiceprint"  # lance-media audio lane artifact
+ 
+ #: The columns a deriver may ADD to the carried table (absent upstream) — the single source of truth for
+ #: compute's columnLineage edge classification (#1): an output column matching one of these that is NOT in
+ #: the upstream schema was DERIVED from the blob content (TRANSFORMATION); everything else that survives a
+ #: stage is carried forward (IDENTITY). Extend alongside ``_DERIVERS`` when a new modality adds artifacts.
+-ARTIFACT_COLUMNS: tuple[str, ...] = (_THUMBNAIL_COLUMN, _EMBEDDING_COLUMN)
++ARTIFACT_COLUMNS: tuple[str, ...] = (_THUMBNAIL_COLUMN, _EMBEDDING_COLUMN, _VOICEPRINT_COLUMN)
+ 
+ 
+ class UnderivableMediaError(ValueError):
+@@ -71,9 +82,97 @@ def _image_artifacts(table: pa.Table, payloads: list[bytes]) -> pa.Table:
+     )
+ 
+ 
++def _audio_artifacts(table: pa.Table, payloads: list[bytes]) -> pa.Table:
++    """The AUDIO deriver (lance-media voiceprint lane): inline ``voiceprint`` feature from the payloads;
++    the original stays a blob. A payload past the ``is_audio`` probe that fails to decode raises
++    :class:`UnderivableMediaError` naming the row — the run FAILs in lineage and the trigger is DROPPED as
++    deterministic bad data, exactly like the image deriver.
++    """
++    prints: list[list[float]] = []
++    for index, payload in enumerate(payloads):
++        try:
++            prints.append(media.derive_voiceprint(payload))
++        except Exception as exc:
++            raise UnderivableMediaError(
++                f"blob payload at row {index} matched the audio probe but failed to decode: {exc}"
++            ) from exc
++    return table.append_column(
++        pa.field(_VOICEPRINT_COLUMN, pa.list_(pa.float32(), media.AUDIO_EMBEDDING_DIMS)),
++        pa.array(prints, type=pa.list_(pa.float32(), media.AUDIO_EMBEDDING_DIMS)),
++    )
++
++
+ #: (content probe, deriver) — checked in order against the first payload of a blob column. Adding a
+ #: media type = one probe + one deriver here; the platform and the chart do not change.
+-_DERIVERS: tuple[tuple[Callable[[bytes], bool], Deriver], ...] = ((media.is_image, _image_artifacts),)
++_DERIVERS: tuple[tuple[Callable[[bytes], bool], Deriver], ...] = (
++    (media.is_image, _image_artifacts),
++    (media.is_audio, _audio_artifacts),
++)
++
++
++def _video_frames(table: pa.Table, payloads: list[bytes]) -> dict[str, pa.Table]:
++    """The VIDEO fan-out deriver (lance-media ``extract_frames`` lane): one video row → ``_FRAMES_PER_VIDEO``
++    frame rows in a SIBLING table, each frame a blob keyed back to its parent by ``source_rowid`` (root
++    provenance) + ``id``. Model-free stand-in: segments the payload deterministically — a real deriver
++    decodes keyframes via ffmpeg, exactly as the image deriver's pixel features stand in for a real model.
++    """
++    parent_rowids = table.column(_SOURCE_ROWID_COLUMN).to_pylist()
++    parent_ids = table.column("id").to_pylist()
++    frames: list[bytes] = []
++    fk_rowids: list[int] = []
++    fk_ids: list[int] = []
++    indices: list[int] = []
++    for row, payload in enumerate(payloads):
++        segment = max(1, len(payload) // _FRAMES_PER_VIDEO)
++        for frame_idx in range(_FRAMES_PER_VIDEO):
++            chunk = payload[frame_idx * segment : (frame_idx + 1) * segment] or payload[-segment:]
++            frames.append(bytes(chunk))
++            fk_rowids.append(parent_rowids[row])
++            fk_ids.append(parent_ids[row])
++            indices.append(frame_idx)
++    child = pa.table(
++        {
++            "parent_source_rowid": pa.array(fk_rowids, pa.uint64()),
++            "parent_id": pa.array(fk_ids, pa.int64()),
++            "frame_idx": pa.array(indices, pa.int32()),
++            "frame": blob_array(frames),
++        },
++        schema=pa.schema(
++            [
++                pa.field("parent_source_rowid", pa.uint64()),
++                pa.field("parent_id", pa.int64()),
++                pa.field("frame_idx", pa.int32()),
++                blob_field("frame"),
++            ]
++        ),
++    )
++    return {"frames": child}
++
++
++#: (content probe, fan-out deriver) — like ``_DERIVERS`` but for stages that emit NEW sibling tables with a
++#: different row cardinality. Additive: image/audio/tabular match nothing here, so the single-table path is
++#: unchanged. Adding a fan-out modality = one probe + one deriver here; the platform does not change.
++_FANOUT_DERIVERS: tuple[tuple[Callable[[bytes], bool], FanoutDeriver], ...] = (
++    (media.is_video, _video_frames),
++)
++
++
++def derive_fanout(table: pa.Table, blob_payloads: dict[str, list[bytes]]) -> dict[str, pa.Table]:
++    """Fan-out derivation (lance-media §4 model 2): the sibling tables a stage emits from blob content.
++
++    Same content-dispatch as :func:`derive_artifacts` (first payload of the first blob column), but returns
++    a ``{sibling_name: table}`` map instead of a single carried table. Returns ``{}`` for image / audio /
++    tabular / unrecognised content, so a stage with no fan-out deriver behaves exactly as today.
++    """
++    if not blob_payloads:
++        return {}
++    payloads = blob_payloads[min(blob_payloads)]
++    if not payloads:
++        return {}
++    for probe, deriver in _FANOUT_DERIVERS:
++        if probe(payloads[0]):
++            return deriver(table, payloads)
++    return {}
+ 
+ 
+ def derive_artifacts(table: pa.Table, blob_payloads: dict[str, list[bytes]]) -> pa.Table:
+@@ -87,7 +186,7 @@ def derive_artifacts(table: pa.Table, blob_payloads: dict[str, list[bytes]]) ->
+     """
+     if not blob_payloads:
+         return table
+-    if _THUMBNAIL_COLUMN in table.column_names or _EMBEDDING_COLUMN in table.column_names:
++    if any(c in table.column_names for c in ARTIFACT_COLUMNS):
+         return table
+     payloads = blob_payloads[min(blob_payloads)]
+     if not payloads:
+diff --git a/services/medallion/services/media.py b/services/medallion/services/media.py
+index 494e621..5511695 100644
+--- a/services/medallion/services/media.py
++++ b/services/medallion/services/media.py
+@@ -11,11 +11,16 @@ from __future__ import annotations
+ 
+ import io
+ import warnings
++import wave
++from array import array
+ 
+ from PIL import Image
+ 
+ THUMBNAIL_SIZE = (128, 128)
+ EMBEDDING_DIMS = 8
++# lance-media audio lane: the fixed-size speaker feature the voiceprint deriver emits (stand-in dims for
++# the WeSpeaker 256-d vector — kept small + model-free so silver derivation needs no torch/pyannote).
++AUDIO_EMBEDDING_DIMS = 8
+ 
+ # Decompression-bomb ceiling (audit 2026-07-12): Pillow's DEFAULT raises only above 2× its limit —
+ # the [limit, 2×limit) band merely WARNS and then fully decodes, so a small-on-disk ~150M-pixel PNG
+@@ -69,3 +74,52 @@ def derive_embedding(image_bytes: bytes, dims: int = EMBEDDING_DIMS) -> list[flo
+         # An 8-bit "L" image's tobytes() is one byte per pixel, so iterating yields ints (0-255); the
+         # explicit resample pins the downsample so the embedding is deterministic across environments.
+         return [value / 255.0 for value in columns.tobytes()]
++
++
++# ── lance-media AUDIO lane (the "an audio deriver slots into _DERIVERS later" extension) ──────────────
++def is_audio(payload: bytes) -> bool:
++    """Whether ``payload`` DECODES as WAV audio — the content probe for voiceprint derivation.
++
++    Symmetric with :func:`is_image` (which verifies, not just sniffs magic): a RIFF/WAVE header alone is
++    not enough — the fmt chunk must actually parse — so a blob that merely *starts* like a WAV but is not
++    valid audio is correctly "not audio" and carries through untouched. Extend with more codecs as more
++    audio derivers land.
++    """
++    if not (len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WAVE"):
++        return False
++    try:
++        with wave.open(io.BytesIO(payload)) as handle:
++            handle.getnframes()
++    except Exception:  # noqa: BLE001 — any decode failure means "not (valid) audio", never an error
++        return False
++    return True
++
++
++def is_video(payload: bytes) -> bool:
++    """Whether ``payload`` is ISO-BMFF/MP4 video — the content probe for the frame-extraction FAN-OUT.
++
++    ISO base media format marks the ``ftyp`` box at bytes 4:8. A real deriver would decode keyframes;
++    the model-free stand-in (``derivers._video_frames``) segments the bytes deterministically instead —
++    same "prove the plumbing without a heavy dep" trick as the image/audio derivers.
++    """
++    return len(payload) >= 12 and payload[4:8] == b"ftyp"
++
++
++def derive_voiceprint(audio_bytes: bytes, dims: int = AUDIO_EMBEDDING_DIMS) -> list[float]:
++    """A deterministic ``dims``-length speaker feature — the 16-bit PCM samples' mean-magnitude in ``dims``
++    time buckets. Real audio-content-derived features (the model-free stand-in a WeSpeaker/pyannote
++    voiceprint swaps into in prod), so silver's voiceprint actually depends on the media — no ML dep.
++    """
++    with wave.open(io.BytesIO(audio_bytes)) as handle:
++        frames = handle.readframes(handle.getnframes())
++    samples = array("h")
++    samples.frombytes(frames[: len(frames) - (len(frames) % samples.itemsize)])
++    if not samples:
++        return [0.0] * dims
++    bucket = max(1, len(samples) // dims)
++    return [
++        sum(abs(s) for s in (samples[i * bucket : (i + 1) * bucket] or samples[-bucket:]))
++        / len(samples[i * bucket : (i + 1) * bucket] or samples[-bucket:])
++        / 32768.0
++        for i in range(dims)
++    ]
+diff --git a/tests/unit/test_lance_media_audio_deriver.py b/tests/unit/test_lance_media_audio_deriver.py
+new file mode 100644
+index 0000000..c8c517a
+--- /dev/null
++++ b/tests/unit/test_lance_media_audio_deriver.py
+@@ -0,0 +1,85 @@
++"""PROOF (lance-media × lance-ns): a lance-media compute stage runs as a lance-ns SILVER deriver.
++
++An AUDIO blob flows bronze → silver through the platform's UNCHANGED generic compute seam
++(``transform_stage``) and gains a lance-media ``voiceprint`` artifact — the media-lane docstring's
++"an audio deriver slots into _DERIVERS later" made real, on a REAL Lance dataset (no fakes). This is the
++day-one de-risk of "our batch stages become medallion silver derivers": if the image lane's exact harness
++works for our audio modality with only a (probe, deriver) pair added, every rmedia column-additive stage
++lands the same way.
++
++Mirrors tests/unit/test_medallion_derivers.py::test_image_blobs_derive_artifacts_through_the_generic_stage.
++"""
++
++from __future__ import annotations
++
++import io
++import math
++import wave
++from array import array
++from pathlib import Path
++
++import lance
++import pyarrow as pa
++from lance import blob_array, blob_field
++from medallion.services import media
++from medallion.services.compute import transform_stage
++
++
++def _wav(freq_hz: int, n: int = 4000, rate: int = 16000) -> bytes:
++    """A deterministic mono 16-bit PCM WAV tone — real audio bytes, no ffmpeg."""
++    samples = array("h", [int(30000 * math.sin(2 * math.pi * freq_hz * i / rate)) for i in range(n)])
++    buffer = io.BytesIO()
++    with wave.open(buffer, "wb") as handle:
++        handle.setnchannels(1)
++        handle.setsampwidth(2)
++        handle.setframerate(rate)
++        handle.writeframes(samples.tobytes())
++    return buffer.getvalue()
++
++
++def _bronze_media(tmp_path: Path, payloads: list[bytes]) -> str:
++    """The bronze-media blob-v2 table shape the ingest head writes (id, payload blob, source_uri)."""
++    uri = str(tmp_path / "bronze_media")
++    table = pa.table(
++        {
++            "id": pa.array(range(len(payloads)), pa.int64()),
++            "payload": blob_array(payloads),
++            "source_uri": pa.array([f"s3://audio/{i}" for i in range(len(payloads))], pa.string()),
++        },
++        schema=pa.schema(
++            [pa.field("id", pa.int64()), blob_field("payload"), pa.field("source_uri", pa.string())]
++        ),
++    )
++    lance.write_dataset(table, uri, mode="overwrite", data_storage_version="2.2")
++    return uri
++
++
++def test_audio_blobs_derive_voiceprint_through_the_generic_stage(tmp_path: Path) -> None:
++    """The media lane needs NO special mover for audio either: the SAME generic stage derives a voiceprint
++    from audio content — proving a lance-media stage slots into the cascade as a silver deriver."""
++    bronze = _bronze_media(tmp_path, [_wav(220), _wav(880)])
++    silver = str(tmp_path / "silver_media")
++
++    result = transform_stage(bronze, silver, {}, stage="silver-media")
++
++    ds = lance.dataset(silver)
++    # The audio artifact landed; the image artifacts did NOT (content-dispatched, not config-driven).
++    assert "voiceprint" in ds.schema.names
++    assert "thumbnail" not in ds.schema.names and "embedding" not in ds.schema.names
++    # Blob carried forward intact at file format 2.2, original still a blob.
++    assert ds.data_storage_version == "2.2"
++    assert ds.schema.field("payload").type.extension_name == "lance.blob.v2"
++    # source_uri provenance + the stage stamp survive (the DERIVED_FROM inputs / stage column).
++    assert ds.to_table(columns=["source_uri"]).column("source_uri").to_pylist() == [
++        "s3://audio/0",
++        "s3://audio/1",
++    ]
++    assert ds.to_table(columns=["stage"]).column("stage").to_pylist() == ["silver-media", "silver-media"]
++    # The voiceprints are real, content-derived, fixed-size, and differ by audio content.
++    voiceprints = ds.to_table(columns=["voiceprint"]).column("voiceprint").to_pylist()
++    assert all(len(v) == media.AUDIO_EMBEDDING_DIMS for v in voiceprints)
++    assert voiceprints[0] != voiceprints[1]  # 220 Hz vs 880 Hz → different voiceprints
++    # The lineage WROTE-edge schema facet records the derived column as a Lance array type.
++    facet_types = {f["name"]: f["type"] for f in result.fields}
++    assert facet_types["payload"] == "blob"
++    assert facet_types["voiceprint"].startswith("array")
+diff --git a/tests/unit/test_lance_media_fanout_deriver.py b/tests/unit/test_lance_media_fanout_deriver.py
+new file mode 100644
+index 0000000..b5650df
+--- /dev/null
++++ b/tests/unit/test_lance_media_fanout_deriver.py
+@@ -0,0 +1,79 @@
++"""PROOF (lance-media × lance-ns §4, model 2): a FAN-OUT compute stage runs as a lance-ns silver deriver.
++
++The column-additive ``Deriver`` cannot express a stage that emits a NEW table with a different row
++cardinality — our ``extract_frames`` (1 video → N frame rows), ``diarize`` (1 doc → N speaker turns),
++``voiceprint`` (N turns → N vectors). This proves the small, additive extension (a ``_FANOUT_DERIVERS``
++registry + ``derive_fanout`` + ``transform_stage_fanout``) makes those stages first-class: a video blob
++flows bronze → silver through the platform's primitives and produces BOTH the carried primary silver table
++AND a sibling ``frames`` table with correct fan-out cardinality + parent provenance — on REAL Lance
++datasets, with NO change to the mover / cascade / lineage / gates.
++
++Mirrors tests/unit/test_medallion_derivers.py; companion to test_lance_media_audio_deriver.py.
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++import lance
++import pyarrow as pa
++from lance import blob_array, blob_field
++from medallion.services.compute import transform_stage_fanout
++
++
++def _mp4(marker: bytes, body_len: int = 300) -> bytes:
++    """A minimal ISO-BMFF/MP4 blob: a real ``ftyp`` box header + a marker-filled body (distinct per video
++    so extracted frames differ). ``is_video`` keys on the ftyp box at bytes 4:8."""
++    header = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
++    return header + (marker * body_len)[:body_len]
++
++
++def _bronze_media(tmp_path: Path, payloads: list[bytes]) -> str:
++    uri = str(tmp_path / "bronze_media")
++    table = pa.table(
++        {
++            "id": pa.array(range(len(payloads)), pa.int64()),
++            "payload": blob_array(payloads),
++            "source_uri": pa.array([f"s3://video/{i}" for i in range(len(payloads))], pa.string()),
++        },
++        schema=pa.schema(
++            [pa.field("id", pa.int64()), blob_field("payload"), pa.field("source_uri", pa.string())]
++        ),
++    )
++    lance.write_dataset(table, uri, mode="overwrite", data_storage_version="2.2")
++    return uri
++
++
++def test_video_blob_fans_out_to_a_frames_sibling_table(tmp_path: Path) -> None:
++    """One video row → N frame rows in a sibling silver table, keyed to the parent — model-2 fan-out."""
++    bronze = _bronze_media(tmp_path, [_mp4(b"A"), _mp4(b"B")])
++    silver = str(tmp_path / "silver_media")
++
++    primary, siblings = transform_stage_fanout(bronze, silver, {}, stage="silver-media")
++
++    # PRIMARY silver: the video blob carried forward untouched (not image/audio → no artifact column).
++    primary_ds = lance.dataset(silver)
++    assert primary.row_count == 2
++    assert "voiceprint" not in primary_ds.schema.names
++    assert "thumbnail" not in primary_ds.schema.names and "embedding" not in primary_ds.schema.names
++    assert primary_ds.schema.field("payload").type.extension_name == "lance.blob.v2"
++
++    # FAN-OUT: a NEW sibling table with N frames per parent, blob-v2, at file format 2.2.
++    assert set(siblings) == {"frames"}
++    frames_ds = lance.dataset(f"{silver}__frames")
++    assert frames_ds.data_storage_version == "2.2"
++    assert frames_ds.count_rows() == 6  # 2 videos × 3 frames
++    assert siblings["frames"].row_count == 6
++    assert frames_ds.schema.field("frame").type.extension_name == "lance.blob.v2"
++
++    # Parent provenance survives the fan-out: each frame names its source row (root _rowid) + parent id.
++    keys = frames_ds.to_table(columns=["parent_source_rowid", "parent_id", "frame_idx"])
++    assert keys.column("parent_source_rowid").to_pylist() == [0, 0, 0, 1, 1, 1]
++    assert keys.column("parent_id").to_pylist() == [0, 0, 0, 1, 1, 1]
++    assert keys.column("frame_idx").to_pylist() == [0, 1, 2, 0, 1, 2]
++
++    # The frame blobs are real, content-derived, and differ across the two source videos.
++    frame_of_video_a = frames_ds.read_blobs("frame", indices=[0])[0][1]
++    frame_of_video_b = frames_ds.read_blobs("frame", indices=[3])[0][1]
++    assert frame_of_video_a and frame_of_video_b
++    assert frame_of_video_a != frame_of_video_b
