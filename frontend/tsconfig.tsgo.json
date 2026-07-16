@@ -1,0 +1,22 @@
+{
+  "//": "TypeScript 7 (tsgo) type-checks the pure-TS descriptor + logic layer. Files that import *.svelte need svelte2tsx's module augmentation (svelte-check owns those); tsgo covers the schema-agnostic core where the strictest typing matters.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["@webgpu/types"],
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/lib/descriptor.ts",
+    "src/lib/api.ts",
+    "src/lib/utils.ts",
+    "src/lib/atlas/atlas-geometry.ts",
+    "src/lib/atlas/atlas-grid.ts",
+    "src/lib/atlas/atlas-colors.ts",
+    "src/lib/atlas/atlas-legend.ts",
+    "src/lib/workflow/scope.ts",
+    "src/lib/workflow/export.ts",
+    "src/lib/workflow/fingerprint.ts",
+    "src/lib/workflow/types.ts",
+    "src/lib/**/*.test.ts"
+  ]
+}
