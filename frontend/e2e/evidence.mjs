@@ -51,10 +51,15 @@ async function searchEvidence(page, dataset, query) {
   return cards;
 }
 
+// A restored sample doc (media bytes present locally) — scripts/sample_docs.txt.
+const RESTORED_DOC = '018f41ad28a1bc1b';
+
 async function videoEvidence(page) {
-  log('\n— <video> playback evidence (transcripts sample doc) —');
-  // Open the first hit into the player pane.
-  await page.locator('[data-hit-key]').first().click();
+  log('\n— <video> playback evidence (restored sample doc) —');
+  // Deep-link straight to a restored doc so the media resolves (most search
+  // hits point at docs whose bytes live only in the HCP bucket).
+  await page.goto(`${BASE}/?doc=${RESTORED_DOC}&t=5`, { waitUntil: 'networkidle' });
+  await waitDescriptor(page);
   await page.waitForSelector('video', { timeout: 30000 }).catch(() => {});
   const info = await page.evaluate(async () => {
     const v = document.querySelector('video');
@@ -83,6 +88,16 @@ async function atlasEvidence(page) {
   log('\n— atlas WebGPU evidence (transcripts) —');
   await page.goto(`${BASE}/atlas`, { waitUntil: 'networkidle' });
   await waitDescriptor(page);
+  const adapter = await page.evaluate(async () => {
+    if (!navigator.gpu) return 'no navigator.gpu';
+    try {
+      const a = await navigator.gpu.requestAdapter();
+      return a ? 'adapter OK' : 'requestAdapter() returned null';
+    } catch (e) {
+      return 'requestAdapter threw: ' + (e instanceof Error ? e.message : String(e));
+    }
+  });
+  log(`  WebGPU: ${adapter}`);
   const stats = await page.evaluate(async () => {
     const deadline = Date.now() + 25000;
     while (Date.now() < deadline) {
@@ -96,15 +111,16 @@ async function atlasEvidence(page) {
   check(!!stats && stats.pointsDrawn > 0, `atlas scatter drew ${stats?.pointsDrawn ?? 0} points`);
 }
 
+const HEADED = process.env.HEADED === '1';
 const browser = await chromium.launch({
   executablePath: CHROME,
-  headless: true,
+  headless: !HEADED,
   args: [
     '--no-sandbox',
     '--enable-unsafe-webgpu',
     '--enable-features=Vulkan',
-    '--use-angle=swiftshader',
     '--ignore-gpu-blocklist',
+    ...(HEADED ? [] : ['--use-angle=vulkan', '--use-gl=angle']),
   ],
 });
 try {

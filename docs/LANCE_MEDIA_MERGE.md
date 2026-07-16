@@ -254,3 +254,14 @@ The lance-media merge PREPARATION defined in docs/LANCE_MEDIA_MERGE.md is comple
 | `src/rmedia` pipeline | a rask brick (`components/cli/` or `packages/`) | submitted via ray-kit `JobSubmissionClient`; KubeRay in prod |
 | Lance DB | rustfs/S3 bucket + `dir`→`rest` namespace flip; rebase old-corpus blob URIs (`base_store_params`) or re-ingest | storage_options via the settings helper pattern |
 | gotchas | `RASK_API_PREFIX` is `/api` in chart+dev-micro but `/api/v1` in code defaults; Dapr eats trailing slashes (keep SlashToleranceMiddleware) | verified 2026-07-16 |
+
+## 10. Phase 3 evidence reproduction (2026-07-16)
+
+All P3.1–P3.4 checks pass; the runner is `frontend/e2e/evidence.mjs`.
+
+- Backend up on :8000 (transcripts_v2 default + smoke via `config/descriptors/smoke.json`); embed :8011.
+- Frontend dev server: `bunx vite dev --port 5180 --host 127.0.0.1` (proxies /api → :8000).
+- Browser: the Playwright chromium build lacks proprietary codecs (no H.264) and gives no headless WebGPU adapter here. Use **real Google Chrome** (extracted via `dpkg-deb -x google-chrome-stable.deb`) in **headless** mode — it has H.264 AND WebGPU over the GPU DRM render node (no display/xvfb needed):
+  `LD_LIBRARY_PATH=<chrome-dir> bun frontend/e2e/evidence.mjs http://127.0.0.1:5180 <chrome-dir>/chrome`
+- Result (EVIDENCE OK): transcripts — 100 hit-card DOM nodes for "regeringen", `<video readyState=4>` on restored doc 018f41ad28a1bc1b; atlas — WebGPU adapter OK, scatter drew 145,175 points; acid test — the SAME build rendered the smoke dataset (identity `[doc_id]`, no time axis) from its descriptor alone (3 cards), `git diff --stat frontend/src` empty between the two renders.
+- Type/test/gate: svelte-check 0 errors, tsgo (TS7) 0 errors on the pure-TS layer, vitest 11/11, P3.2 corpus-literal gate GATE OK.
