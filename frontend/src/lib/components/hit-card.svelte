@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { type Hit, thumbnailUrl, chunkFrameUrl, isVoiceHit, voiceBandOf } from '$lib/api';
+  import { activeView } from '$lib/descriptor';
   import { features } from '$lib/feature-flags.svelte';
   import { voiceSearch } from '$lib/voice-search.svelte';
   import { audioPreview } from '$lib/audio-preview.svelte';
@@ -32,8 +33,26 @@
     onclick,
   }: Props = $props();
 
-  const title = $derived(hit.namn ?? hit.audio_path ?? hit.doc_id);
+  // The active dataset view — every corpus field (title / body / caption /
+  // metadata / time / media URLs) is read through it, so this card renders any
+  // dataset's schema instead of hardcoded columns.
+  const view = activeView();
+  const docId = $derived(view.docId(hit));
+  const title = $derived(view.title(hit));
+  const body = $derived(view.body(hit));
+  const caption = $derived(view.caption(hit));
+  const time = $derived(view.time(hit));
   const highlight = $derived(highlightProp ?? makeHighlighter(queryTerms(query)));
+
+  // Compact meta line: the time span (when the dataset has one) followed by the
+  // declared metadata values (empties already dropped), skipping any row that
+  // just repeats the title. ` · `-joined, truncated to a single line.
+  const metaLine = $derived.by(() => {
+    const segs: string[] = [];
+    if (time) segs.push(`${fmtTime(time.start)} → ${fmtTime(time.end)}`);
+    for (const m of view.metadata(hit)) if (m.value !== title) segs.push(m.value);
+    return segs.join('  ·  ');
+  });
 
   // ── Voice search ──
   // Voice-mode hits carry the matched diarized turn; render its speaker chip +
@@ -54,13 +73,14 @@
    *  and diarized turns disagree at boundaries). Auto-applies: the request
    *  queues on the shared store, and the Search page consumes it. */
   function findVoice() {
-    const stem = hit.audio_path.replace(/\.[^.]+$/, '');
-    if (voice) voiceSearch.request({ docId: hit.doc_id, turnId: voice.turn_id }, stem);
-    else
-      voiceSearch.request({ docId: hit.doc_id, t: (hit.start + hit.end) / 2 }, stem, {
-        docId: hit.doc_id,
-        t: hit.start,
-      });
+    const label = title;
+    if (voice) voiceSearch.request({ docId, turnId: voice.turn_id }, label);
+    else {
+      const t = view.time(hit);
+      const mid = t ? (t.start + t.end) / 2 : 0;
+      const start = t ? t.start : 0;
+      voiceSearch.request({ docId, t: mid }, label, { docId, t: start });
+    }
     // Only +page.svelte consumes `pending`, but HitCard also renders on /tree
     // (topic results panel) — navigate like player-pane does. goto('/') is a
     // no-op-safe same-route navigation when the Search page is already up.
@@ -109,9 +129,9 @@
        matched), not the max-overlap ASR chunk span. -->
   {@const rowKey = hitKey(hit)}
   {@const playing = audioPreview.isPlaying(rowKey)}
-  {@const failed = audioPreview.isFailed(hit.doc_id)}
-  {@const clipStart = voice ? voice.turn_start : hit.start}
-  {@const clipEnd = voice ? voice.turn_end : hit.end}
+  {@const failed = audioPreview.isFailed(docId)}
+  {@const clipStart = voice ? voice.turn_start : (time?.start ?? 0)}
+  {@const clipEnd = voice ? voice.turn_end : (time?.end ?? 0)}
   <button
     type="button"
     disabled={failed}
@@ -124,7 +144,7 @@
     aria-pressed={playing}
     onclick={(e) => {
       e.stopPropagation();
-      audioPreview.toggle({ key: rowKey, docId: hit.doc_id, start: clipStart, end: clipEnd });
+      audioPreview.toggle({ key: rowKey, docId, start: clipStart, end: clipEnd });
     }}
     class={cn(
       'inline-flex size-6 items-center justify-center rounded-md transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed',
@@ -159,7 +179,7 @@
     >
       <div class="relative aspect-video w-full overflow-hidden bg-muted">
         <img
-          src={thumbnailUrl(hit.doc_id)}
+          src={thumbnailUrl(hit)}
           loading="lazy"
           alt=""
           class="h-full w-full object-cover transition-transform group-hover:scale-105"
@@ -167,7 +187,7 @@
         />
         {#if !features.framesUnavailable}
           <img
-            src={chunkFrameUrl(hit.doc_id, hit.speech_id, hit.chunk_id)}
+            src={chunkFrameUrl(hit)}
             loading="lazy"
             alt=""
             class="absolute right-1.5 bottom-1.5 h-10 w-16 rounded border border-background bg-black object-cover shadow"
@@ -177,26 +197,27 @@
             }}
           />
         {/if}
-        <span
-          class="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-white"
-        >
-          {fmtTime(hit.start)}
-        </span>
+        {#if time}
+          <span
+            class="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-white"
+          >
+            {fmtTime(time.start)}
+          </span>
+        {/if}
       </div>
       <div class="flex flex-1 flex-col gap-1 p-2.5">
         <div class="line-clamp-1 text-xs font-semibold leading-snug">{title}</div>
-        <div class="font-mono text-[10px] text-muted-foreground">
-          {fmtTime(hit.start)} → {fmtTime(hit.end)}
-          {#if hit.referenskod}· {hit.referenskod}{/if}
-        </div>
+        {#if metaLine}
+          <div class="truncate font-mono text-[10px] text-muted-foreground">{metaLine}</div>
+        {/if}
         {@render voiceMeta()}
         <div class="line-clamp-3 text-xs leading-snug [overflow-wrap:anywhere]">
           <!-- highlight() HTML-escapes then wraps matches — safe to inject -->
-          {@html highlight(hit.text ?? '')}
+          {@html highlight(body)}
         </div>
-        {#if hit.caption}
-          <div class="line-clamp-2 text-[10px] italic text-muted-foreground" title={hit.caption}>
-            🎬 {hit.caption}
+        {#if caption}
+          <div class="line-clamp-2 text-[10px] italic text-muted-foreground" title={caption}>
+            🎬 {caption}
           </div>
         {/if}
       </div>
@@ -234,7 +255,7 @@
     >
       <div class="relative flex-none">
         <img
-          src={thumbnailUrl(hit.doc_id)}
+          src={thumbnailUrl(hit)}
           loading="lazy"
           alt=""
           class="h-[54px] w-[96px] rounded bg-black object-cover"
@@ -242,7 +263,7 @@
         />
         {#if !features.framesUnavailable}
           <img
-            src={chunkFrameUrl(hit.doc_id, hit.speech_id, hit.chunk_id)}
+            src={chunkFrameUrl(hit)}
             loading="lazy"
             alt=""
             class="absolute -right-0.5 -bottom-0.5 h-5 w-9 rounded-sm border border-background bg-black object-cover"
@@ -258,19 +279,17 @@
         <div class="line-clamp-2 text-sm font-semibold leading-snug [overflow-wrap:anywhere]">
           {title}
         </div>
-        <div class="font-mono text-[11px] text-muted-foreground">
-          {fmtTime(hit.start)} → {fmtTime(hit.end)}
-          {#if hit.language}· {hit.language}{/if}
-          {#if hit.referenskod}· {hit.referenskod}{/if}
-        </div>
+        {#if metaLine}
+          <div class="truncate font-mono text-[11px] text-muted-foreground">{metaLine}</div>
+        {/if}
         {@render voiceMeta()}
         <div class="line-clamp-3 text-sm leading-snug [overflow-wrap:anywhere]">
           <!-- highlight() HTML-escapes then wraps matches — safe to inject -->
-          {@html highlight(hit.text ?? '')}
+          {@html highlight(body)}
         </div>
-        {#if hit.caption}
-          <div class="line-clamp-1 text-[11px] italic text-muted-foreground" title={hit.caption}>
-            🎬 {hit.caption}
+        {#if caption}
+          <div class="line-clamp-1 text-[11px] italic text-muted-foreground" title={caption}>
+            🎬 {caption}
           </div>
         {/if}
       </div>

@@ -3,39 +3,43 @@
  * the hits already live in the browser, so no backend round-trip). An Export
  * node picks the format (JSON / CSV) and which columns to include; both formats
  * honour that column selection.
+ *
+ * The exportable column set is DERIVED from the active dataset descriptor (its
+ * identity keys, time span, display body/caption, and declared metadata fields
+ * — plus the rank score and tags), so a flat export names no corpus column.
  */
-import type { Hit } from '$lib/api';
+import { activeView, type Hit } from '$lib/api';
 
-/** The chunk-level columns an Export node can include (the per-word
- *  `alignments`/`words` arrays are intentionally excluded — a flat export wants
- *  scalar fields). `_score` is the rank score. This order IS the export order. */
-export const EXPORT_COLUMNS = [
-  'doc_id',
-  'audio_path',
-  'speech_id',
-  'chunk_id',
-  'start',
-  'end',
-  'duration',
-  'text',
-  'caption',
-  'language',
-  'namn',
-  'referenskod',
-  'bildid',
-  'extraid',
-  '_score',
-  'tags',
-] as const;
+/** The exportable columns for the ACTIVE dataset, in canonical export order:
+ *  identity keys, time span (+ derived duration), the display body & caption,
+ *  each declared metadata field, then the rank score and tags. The per-word
+ *  `alignments` arrays are intentionally excluded — a flat export wants scalar
+ *  fields. Reads the descriptor, so it MUST be called after it has loaded
+ *  (render / export time), never at module-eval. */
+export function exportColumns(): string[] {
+  const view = activeView();
+  const { declared } = view.descriptor;
+  const cols: string[] = [...view.keyFields];
+  if (declared.time) cols.push(declared.time.start, declared.time.end, 'duration');
+  if (view.bodyField) cols.push(view.bodyField);
+  if (view.captionField) cols.push(view.captionField);
+  for (const { field } of view.metadataFields) cols.push(field);
+  cols.push('_score', 'tags');
+  return [...new Set(cols)]; // dedupe (a metadata field may repeat a key/body)
+}
 
-export type ExportColumn = (typeof EXPORT_COLUMNS)[number];
-
-/** Keep only known columns, in canonical EXPORT_COLUMNS order — defends against
- *  stale persisted selections and guarantees a stable column order regardless
- *  of the order the user toggled them in. */
+/** Keep only columns valid for the active dataset, in canonical export order —
+ *  defends against stale persisted selections and guarantees a stable column
+ *  order regardless of the order the user toggled them in. */
 function orderColumns(columns: readonly string[]): string[] {
   const want = new Set(columns);
-  return EXPORT_COLUMNS.filter((c) => want.has(c));
+  return exportColumns().filter((c) => want.has(c));
+}
+
+/** Resolve a stored selection to a concrete ordered list: `null` means "every
+ *  column the active dataset offers", an array is filtered + ordered. */
+export function resolveColumns(columns: readonly string[] | null): string[] {
+  return columns === null ? exportColumns() : orderColumns(columns);
 }
 
 function csvCell(value: unknown): string {
@@ -46,11 +50,8 @@ function csvCell(value: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export function hitsToJson(
-  hits: readonly Hit[],
-  columns: readonly string[] = EXPORT_COLUMNS,
-): string {
-  const cols = orderColumns(columns);
+export function hitsToJson(hits: readonly Hit[], columns: readonly string[] | null = null): string {
+  const cols = resolveColumns(columns);
   const rows = hits.map((h) => {
     const rec = h as Record<string, unknown>;
     const out: Record<string, unknown> = {};
@@ -60,11 +61,8 @@ export function hitsToJson(
   return JSON.stringify(rows, null, 2);
 }
 
-export function hitsToCsv(
-  hits: readonly Hit[],
-  columns: readonly string[] = EXPORT_COLUMNS,
-): string {
-  const cols = orderColumns(columns);
+export function hitsToCsv(hits: readonly Hit[], columns: readonly string[] | null = null): string {
+  const cols = resolveColumns(columns);
   const header = cols.join(',');
   const rows = hits.map((h) =>
     cols.map((c) => csvCell((h as Record<string, unknown>)[c])).join(','),
@@ -83,12 +81,12 @@ export function downloadFile(filename: string, content: string, mime: string): v
 }
 
 /** Download the result hits as JSON or CSV with a timestamped filename, limited
- *  to the chosen columns. */
+ *  to the chosen columns (`null` = every column the active dataset offers). */
 export function exportHits(
   hits: readonly Hit[],
   format: 'json' | 'csv',
   now: Date,
-  columns: readonly string[] = EXPORT_COLUMNS,
+  columns: readonly string[] | null = null,
 ): void {
   if (hits.length === 0) return;
   const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');

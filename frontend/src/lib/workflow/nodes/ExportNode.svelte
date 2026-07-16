@@ -5,14 +5,16 @@
   import { Handle, Position, type NodeProps } from '@xyflow/svelte';
   import { Download } from 'lucide-svelte';
   import { graph } from '$lib/workflow/graph.svelte';
-  import { exportHits } from '$lib/workflow/export';
+  import { exportColumns, exportHits } from '$lib/workflow/export';
   import NodeShell from './NodeShell.svelte';
 
   let { id, selected }: NodeProps = $props();
   const rt = $derived(graph.runtime[id]);
   const cfg = $derived(graph.config[id]);
   const hits = $derived(rt?.hits ?? []);
-  const canDownload = $derived(hits.length > 0 && (cfg?.exportColumns.length ?? 0) > 0);
+  // Resolve the stored selection (`null` = every column the dataset offers).
+  const cols = $derived(cfg ? (cfg.exportColumns ?? exportColumns()) : []);
+  const canDownload = $derived(hits.length > 0 && cols.length > 0);
 </script>
 
 {#if rt && cfg}
@@ -22,9 +24,9 @@
       <div class="text-[11px] text-muted-foreground">
         {#if hits.length}
           <span class="text-foreground">{hits.length}</span> hits ·
-          {cfg.exportColumns.length} col{cfg.exportColumns.length === 1 ? '' : 's'} ·
+          {cols.length} col{cols.length === 1 ? '' : 's'} ·
           {cfg.exportFormat.toUpperCase()}
-          {#if cfg.exportColumns.includes('tags')}<span class="text-primary">+ tags</span>{/if}
+          {#if cols.includes('tags')}<span class="text-primary">+ tags</span>{/if}
         {:else if rt.status === 'idle'}
           Run the graph to feed this export.
         {:else}

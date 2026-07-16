@@ -209,7 +209,11 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
   for (const o of predOutputs) {
     if (o.spec.q) qContrib += 1;
     if (o.spec.image) imgContrib += 1;
-    Object.assign(inSpec, o.spec);
+    // Merge structured filters field-by-field so two Filter nodes don't clobber
+    // each other (the rest of the spec keeps last-writer-wins, as before).
+    const { filters, ...rest } = o.spec;
+    Object.assign(inSpec, rest);
+    if (filters) inSpec.filters = { ...inSpec.filters, ...filters };
     if (o.hits && o.hits.length) {
       scopeHits.push(...o.hits);
       sourceHitSets.push(o.hits);
@@ -237,8 +241,13 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
       case 'filter': {
         const spec: Partial<SearchSpec> = {};
         if (cfg.where.trim()) spec.where = cfg.where.trim();
-        if (cfg.language.trim()) spec.language = cfg.language.trim();
-        if (cfg.namn.trim()) spec.namn = cfg.namn.trim();
+        // Structured facets keyed by descriptor filterable field name.
+        const filters: Record<string, string> = {};
+        for (const [field, value] of Object.entries(cfg.filters)) {
+          const v = value.trim();
+          if (v) filters[field] = v;
+        }
+        if (Object.keys(filters).length) spec.filters = filters;
         deps.patchRuntime(id, { status: Object.keys(spec).length ? 'done' : 'idle' });
         return { spec, hits: null };
       }
@@ -314,8 +323,7 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
           spec.rerankN = RERANK_TOP_N;
         }
         if (image) spec.image = image;
-        if (inSpec.language) spec.language = inSpec.language;
-        if (inSpec.namn) spec.namn = inSpec.namn;
+        if (inSpec.filters) spec.filters = inSpec.filters;
 
         // WHERE: any upstream filter, ANDed with the refinement scope — either
         // the upstream videos (`doc_id IN`) or the exact upstream chunks.

@@ -61,10 +61,10 @@ export interface NodeConfig {
    *  Image node can prompt for re-upload. */
   image: File | null;
   imageName: string;
-  /** filter: a raw SQL WHERE plus the common scalar facets. */
+  /** filter: a raw SQL WHERE plus structured facets keyed by descriptor
+   *  filterable field name (matches SearchSpec.filters). */
   where: string;
-  language: string;
-  namn: string;
+  filters: Record<string, string>;
   /** search: how the merged inputs are ranked. */
   mode: SearchMode;
   n: number;
@@ -72,17 +72,18 @@ export interface NodeConfig {
   /** search: drop hits whose normalized relevance (`relevanceOf`, higher =
    *  better) is below this. `null` = off; hits with no ranking signal pass. */
   minScore: number | null;
-  /** search: when scoped by an upstream result set, narrow to those videos
-   *  (`doc_id IN`, may return new chunks) or to the exact upstream chunks
-   *  (`(doc_id,speech_id,chunk_id) IN`, result ⊆ upstream). */
+  /** search: when scoped by an upstream result set, narrow to those documents
+   *  (doc-key `IN`, may return new rows) or to the exact upstream rows (the
+   *  descriptor's identity-key `IN`, result ⊆ upstream). */
   refineScope: RefineScope;
   /** combine: union vs intersect of incoming result sets. */
   combineMode: CombineMode;
   /** tagger: tags this node stamps onto every hit that flows through it. */
   tags: string[];
-  /** export: download format + which chunk columns to include. */
+  /** export: download format + which columns to include. `null` = every column
+   *  the active dataset offers (resolved from the descriptor at export time). */
   exportFormat: 'json' | 'csv';
-  exportColumns: string[];
+  exportColumns: string[] | null;
   /** atlas: the exact hit set the user captured in the Atlas modal viewer
    *  (lasso/box/legend selection). `null` until a selection is confirmed; the
    *  executor emits this downstream (NOT the live global crossFilter). Not

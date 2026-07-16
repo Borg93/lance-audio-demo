@@ -3,7 +3,7 @@
   import FilterPopover from './filter-popover.svelte';
   import HelpPopover from './help-popover.svelte';
   import SearchSettings from './search-settings.svelte';
-  import type { SearchSpec, SearchMode } from '$lib/api';
+  import { activeView, type SearchSpec, type SearchMode } from '$lib/api';
   import { voiceSearch } from '$lib/voice-search.svelte';
   import { AudioLines, Loader2, Paperclip, Search, X, ImagePlus } from 'lucide-svelte';
 
@@ -43,12 +43,28 @@
   let qVec = $state(spec.qVec ?? '');
   let imageFile = $state<File | null>(spec.image ?? null);
 
-  const kindOptions: SelectOption[] = [
-    { value: 'keyword', label: 'Keyword' },
-    { value: 'meaning', label: 'Vector' },
-    { value: 'both', label: 'Hybrid' },
-    { value: 'scene', label: 'Scene' },
-  ];
+  // Offered search kinds come from the dataset's declared modes — a mode the
+  // dataset lacks (e.g. no Scene captions, no vectors) never shows.
+  const kindOptions = $derived.by<SelectOption[]>(() => {
+    const view = activeView();
+    const opts: SelectOption[] = [];
+    if (view.hasMode('fts')) opts.push({ value: 'keyword', label: 'Keyword' });
+    if (view.hasMode('semantic')) opts.push({ value: 'meaning', label: 'Vector' });
+    if (view.hasMode('hybrid')) opts.push({ value: 'both', label: 'Hybrid' });
+    if (view.hasMode('scene')) opts.push({ value: 'scene', label: 'Scene' });
+    return opts;
+  });
+
+  // Whether the dataset supports image-similarity (visual) search — gates the
+  // Image attach affordance below.
+  const hasVisual = $derived(activeView().hasMode('visual'));
+
+  // Keep `kind` valid if the dataset doesn't offer the current mode.
+  $effect(() => {
+    if (kindOptions.length > 0 && !kindOptions.some((o) => o.value === kind)) {
+      kind = kindOptions[0]!.value;
+    }
+  });
 
   let imagePreview: string | null = $state(null);
   $effect(() => {
@@ -87,10 +103,7 @@
       // Filter fields are owned by <FilterPopover> on `spec` — pass them
       // through so a new search keeps the active filters (the old buildSpec
       // dropped `where`/`prefilter`, silently discarding the SQL filter).
-      language: spec.language,
-      namn: spec.namn,
-      referenskod: spec.referenskod,
-      extraid: spec.extraid,
+      filters: spec.filters,
       where: spec.where,
       prefilter: spec.prefilter,
     };
@@ -130,7 +143,7 @@
     const onDrop = (e: DragEvent) => {
       e.preventDefault();
       const f = e.dataTransfer?.files?.[0];
-      if (f && f.type.startsWith('image/')) imageFile = f;
+      if (hasVisual && f && f.type.startsWith('image/')) imageFile = f;
     };
     node.addEventListener('dragover', onDragOver);
     node.addEventListener('drop', onDrop);
@@ -219,27 +232,29 @@
         {summary}
       </span>
       <div class="ml-auto flex items-center gap-1.5">
-        <Button
-          type="button"
-          variant="outline"
-          size="default"
-          title="Attach an image (drag-drop also works) — search by visual similarity"
-          onclick={() => fileInput?.click()}
-        >
-          <Paperclip class="size-4" />
-          Image
-        </Button>
-        <input
-          bind:this={fileInput}
-          type="file"
-          accept="image/*"
-          class="hidden"
-          onchange={(e) => {
-            const f = e.currentTarget.files?.[0];
-            if (f && f.type.startsWith('image/')) imageFile = f;
-            e.currentTarget.value = '';
-          }}
-        />
+        {#if hasVisual}
+          <Button
+            type="button"
+            variant="outline"
+            size="default"
+            title="Attach an image (drag-drop also works) — search by visual similarity"
+            onclick={() => fileInput?.click()}
+          >
+            <Paperclip class="size-4" />
+            Image
+          </Button>
+          <input
+            bind:this={fileInput}
+            type="file"
+            accept="image/*"
+            class="hidden"
+            onchange={(e) => {
+              const f = e.currentTarget.files?.[0];
+              if (f && f.type.startsWith('image/')) imageFile = f;
+              e.currentTarget.value = '';
+            }}
+          />
+        {/if}
         {#if voiceSearch.built}
           <Button
             type="button"

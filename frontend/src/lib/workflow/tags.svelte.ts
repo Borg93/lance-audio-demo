@@ -7,10 +7,12 @@
 import type { Hit } from '$lib/api';
 import { hitKey } from '$lib/utils';
 
-type ChunkRef = Pick<Hit, 'doc_id' | 'speech_id' | 'chunk_id'>;
+/** Anything carrying the dataset's identity key fields — `hitKey` reads them
+ *  through the active DatasetView, so a bare Row is enough. */
+type ChunkRef = Hit;
 
 export class WorkflowTags {
-  /** tags keyed by `hitKey` (doc_id:speech_id:chunk_id). */
+  /** tags keyed by `hitKey` (the dataset's identity key). */
   byChunk = $state<Record<string, string[]>>({});
 
   /** Current tags for a chunk (empty array when untagged). */

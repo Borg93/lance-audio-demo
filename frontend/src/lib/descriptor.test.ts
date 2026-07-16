@@ -11,13 +11,13 @@ const TRANSCRIPTS = {
       version: 3,
       columns: [
         { name: 'doc_id', arrow_type: 'string', nullable: false },
-        { name: 'text_embedding', arrow_type: 'fixed_size_list<float>[2048]', nullable: true, vector_dim: 2048 },
+        { name: 'semantic_vec', arrow_type: 'fixed_size_list<float>[2048]', nullable: true, vector_dim: 2048 },
       ],
       indexes: [],
     },
   },
   declared: {
-    identity: { key_fields: ['doc_id', 'speech_id', 'chunk_id'], doc_key: 'doc_id', doc_key_pattern: '^[a-f0-9]{16}$' },
+    identity: { key_fields: ['doc_id', 'seg_id', 'chunk_id'], doc_key: 'doc_id', doc_key_pattern: '^[a-f0-9]{16}$' },
     document: { table: 'documents', media_blob: 'media_blob', mime: 'media_mime', thumbnail: 'thumbnail' },
     time: { start: 'start', end: 'end' },
     display: {
@@ -33,7 +33,7 @@ const TRANSCRIPTS = {
       row_table: 'chunks',
       fts: { table: 'chunks', column: 'text', language: 'Swedish' },
       vectors: {
-        semantic: { table: 'chunks', column: 'text_embedding', dim: 2048, query_encoder: 'text' },
+        semantic: { table: 'chunks', column: 'semantic_vec', dim: 2048, query_encoder: 'text' },
         visual: { table: 'chunk_frames', column: 'frame_embedding', dim: 2048, query_encoder: 'image' },
         scene: { table: 'chunk_frames', column: 'caption_embedding', dim: 2048, query_encoder: 'text', caption_source: 'caption' },
       },
@@ -46,7 +46,7 @@ const TRANSCRIPTS = {
         x: 'atlas_x',
         y: 'atlas_y',
         cluster: 'atlas_cluster',
-        source_column: 'text_embedding',
+        source_column: 'semantic_vec',
         table: 'chunks',
         channels: [
           { name: 'language', column: 'language' },
@@ -83,9 +83,9 @@ describe('DatasetView — transcripts corpus', () => {
   const v = view(TRANSCRIPTS);
 
   it('composes the row key from the descriptor identity, not a hardcoded shape', () => {
-    const row = { doc_id: 'abc', speech_id: 2, chunk_id: 7 } as Row;
+    const row = { doc_id: 'abc', seg_id: 2, chunk_id: 7 } as Row;
     expect(v.rowKey(row)).toBe('abc|2|7');
-    expect(v.keyFields).toEqual(['doc_id', 'speech_id', 'chunk_id']);
+    expect(v.keyFields).toEqual(['doc_id', 'seg_id', 'chunk_id']);
   });
 
   it('picks the first non-empty declared title field', () => {
@@ -110,7 +110,7 @@ describe('DatasetView — transcripts corpus', () => {
   });
 
   it('builds identity-arity media URLs', () => {
-    const row = { doc_id: 'abc', speech_id: 2, chunk_id: 7 } as Row;
+    const row = { doc_id: 'abc', seg_id: 2, chunk_id: 7 } as Row;
     expect(v.mediaUrl(row)).toBe('/api/media/abc');
     expect(v.frameUrl(row)).toBe('/api/chunk-frame/abc/2/7');
   });

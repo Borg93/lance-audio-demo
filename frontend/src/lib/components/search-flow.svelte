@@ -74,7 +74,8 @@
         <div class="border-b border-border p-1.5 text-foreground">💬 Meaning</div>
         <div class="border-b border-l border-border p-1.5">your text → a vector</div>
         <div class="border-b border-l border-border p-1.5">
-          <code>text_embedding</code> of each transcript. Good at: topics, paraphrases.
+          the <strong class="text-foreground">semantic vector</strong> of each transcript. Good at: topics,
+          paraphrases.
         </div>
       </div>
       <!-- image -->
@@ -131,7 +132,7 @@
       </div>
       <div class="rounded border border-border bg-background px-2 py-1.5 text-center">
         Text-vector leg
-        <div class="text-[10px] text-muted-foreground"><code>text_embedding</code></div>
+        <div class="text-[10px] text-muted-foreground">the transcript's semantic vector</div>
       </div>
       <div class="rounded border border-border bg-background px-2 py-1.5 text-center">
         Frame-vector leg

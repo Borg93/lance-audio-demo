@@ -5,9 +5,22 @@
  * easy to find and evolve. `safeParseGraph` is the one entry point.
  */
 import { z } from 'zod';
-import { SearchModeSchema } from '$lib/api';
+import type { SearchMode } from '$lib/api';
 import { DEFAULT_N, MAX_N, MIN_N, NODE_KINDS } from './types';
-import { EXPORT_COLUMNS } from './export';
+
+// SearchMode is a plain union in the descriptor (no zod schema is exported), so
+// mirror its members here to parse a persisted `mode`, healing anything unknown
+// to 'fts'. `satisfies` keeps this list a subset of the SearchMode union.
+const MODE_VALUES = [
+  'fts',
+  'semantic',
+  'visual',
+  'scene',
+  'scene_fts',
+  'hybrid',
+  'all',
+] as const satisfies readonly SearchMode[];
+const SearchModeSchema = z.enum(MODE_VALUES);
 
 /** Per-node config as stored (no image File). Every field self-heals to a sane
  *  default on bad/old data via `.catch`, and `n` is clamped to [1, 100]. */
@@ -15,8 +28,7 @@ const ConfigSchema = z.object({
   q: z.string().catch(''),
   imageName: z.string().catch(''),
   where: z.string().catch(''),
-  language: z.string().catch(''),
-  namn: z.string().catch(''),
+  filters: z.record(z.string(), z.string()).catch(() => ({})),
   mode: SearchModeSchema.catch('fts'),
   n: z
     .number()
@@ -28,12 +40,14 @@ const ConfigSchema = z.object({
   combineMode: z.enum(['union', 'intersect']).catch('union'),
   tags: z.array(z.string()).catch(() => []),
   exportFormat: z.enum(['json', 'csv']).catch('csv'),
-  exportColumns: z.array(z.string()).catch(() => [...EXPORT_COLUMNS]),
-  // Atlas modal capture is a full Hit[] (audio_path, alignments, …) — too heavy
+  // `null` = every column the active dataset offers; stale field names in a
+  // persisted array self-heal at export time (orderColumns drops unknowns).
+  exportColumns: z.array(z.string()).nullable().catch(null),
+  // Atlas modal capture is a full Hit[] (media path, alignments, …) — too heavy
   // and stale-prone to round-trip through localStorage, so it is NOT persisted:
   // the schema always heals it to null, and a reload discards the capture (the
-  // user re-opens the modal to re-select). TODO: persist a minimal key set
-  // (doc_id|speech_id|chunk_id) + rehydrate via /api/atlas/chunks if needed.
+  // user re-opens the modal to re-select). TODO: persist a minimal identity-key
+  // set + rehydrate via /api/atlas/chunks if needed.
   capturedAtlasSelection: z.null().catch(null),
   label: z.string().catch(''),
   enabled: z.boolean().catch(true),

@@ -27,7 +27,6 @@ import type { Edge, Node } from '@xyflow/svelte';
 import { browser } from '$app/environment';
 import { type Hit, type SearchMode } from '$lib/api';
 import { nodeFingerprint } from './fingerprint';
-import { EXPORT_COLUMNS } from './export';
 import { WorkflowTags } from './tags.svelte';
 import { UndoHistory } from './history.svelte';
 import { autoLayout } from './layout';
@@ -106,8 +105,7 @@ function defaultConfig(): NodeConfig {
     image: null,
     imageName: '',
     where: '',
-    language: '',
-    namn: '',
+    filters: {},
     mode: 'fts',
     n: DEFAULT_N,
     rerank: false,
@@ -116,7 +114,7 @@ function defaultConfig(): NodeConfig {
     combineMode: 'union',
     tags: [],
     exportFormat: 'csv',
-    exportColumns: [...EXPORT_COLUMNS],
+    exportColumns: null,
     capturedAtlasSelection: null,
     label: '',
     enabled: true,
@@ -671,8 +669,7 @@ class WorkflowGraph {
         q: c.q,
         imageName: c.imageName,
         where: c.where,
-        language: c.language,
-        namn: c.namn,
+        filters: c.filters,
         mode: c.mode,
         n: c.n,
         rerank: c.rerank,

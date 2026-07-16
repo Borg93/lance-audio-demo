@@ -15,7 +15,7 @@
   import ResizableSplit from '$lib/components/resizable-split.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
-  import type { Hit } from '$lib/api';
+  import { activeView, type Hit } from '$lib/api';
   import { Columns3, Check } from 'lucide-svelte';
 
   let active = $state<Hit | null>(null);
@@ -24,8 +24,17 @@
 
   // Columns the user can show. `caption` (the frame's Swedish caption) is joined
   // from chunk_frames by the /chunks endpoint — it isn't a column on chunks.
-  const OFFERED_COLS = TABLE_COLUMNS;
-  const DEFAULT_COLS = ['thumbnail', 'namn', 'referenskod', 'language', 'start', 'text', 'caption'];
+  const OFFERED_COLS = TABLE_COLUMNS();
+  // Default column set is descriptor-driven: the thumbnail, the declared
+  // metadata fields (by name), then time/body/caption. Keys not backed by a
+  // TABLE_COLUMN are ignored by the render filter, so this is safe as-is.
+  const DEFAULT_COLS = [
+    'thumbnail',
+    ...activeView().metadataFields.map((m) => m.field),
+    'start',
+    'text',
+    'caption',
+  ];
   const COLS_KEY = 'raudio-atlas-cols-v2'; // bumped so the caption column shows by default
 
   let visibleCols = $state<string[]>([...DEFAULT_COLS]);

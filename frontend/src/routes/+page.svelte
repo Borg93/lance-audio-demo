@@ -7,6 +7,7 @@
     voiceSimilar,
     voiceSimilarUpload,
     ApiError,
+    activeView,
     thumbnailUrl,
     type Hit,
     type SearchSpec,
@@ -45,6 +46,30 @@
     AudioLines,
     X,
   } from 'lucide-svelte';
+
+  // The active dataset view — corpus column names (identity, time, display,
+  // metadata) are read through it, so this page renders any dataset's schema.
+  // Named `ds` because `view` is the layout-mode state below.
+  const ds = activeView();
+  // Declared time binding (the start/end field names), or null when the dataset
+  // has no time dimension — used when stamping synthetic player rows.
+  const timeBinding = ds.descriptor.declared.time;
+
+  /** A minimal "hit" the player can open: the doc key plus an optional time
+   *  span. `extra` (a browsed Document) supplies the display fields — its title
+   *  and metadata ride along untouched so the card/player still show them. */
+  function playerRow(docId: string, start: number, end: number, extra?: Hit): Hit {
+    const row: Hit = { ...(extra ?? {}), _score: 0, alignments: [] };
+    for (const k of ds.keyFields) {
+      if (!(k in row)) row[k] = k === ds.docKeyField ? docId : 0;
+    }
+    row[ds.docKeyField] = docId;
+    if (timeBinding) {
+      row[timeBinding.start] = start;
+      row[timeBinding.end] = end;
+    }
+    return row;
+  }
 
   const PAGE_STEP = 30;
   // Default result count shown per search (the Settings "Results to return").
@@ -102,7 +127,7 @@
   const gridHighlight = $derived(makeHighlighter(queryTerms(resultsQuery)));
 
   /** Distinct document count for the current results. */
-  const docCount = $derived(new Set(hits.map((h) => h.doc_id)).size);
+  const docCount = $derived(new Set(hits.map((h) => ds.docId(h))).size);
 
   // ── Document browse (when query is empty) ──
   const PER_PAGE = 24;
@@ -120,7 +145,17 @@
   // results table + player read this set while the Map view is active.
   let mapHits = $state<Hit[]>([]);
   let mapSelectionTotal = $state(0);
-  const MAP_TABLE_COLS = ['play', 'thumbnail', 'score', 'namn', 'language', 'start', 'text'];
+  // Descriptor-declared metadata field keys (the table columns map 1:1 to them).
+  const META_KEYS = ds.metadataFields.map((m) => m.field);
+  // Compact Map-view table: the UI columns + the primary label + time + body.
+  const MAP_TABLE_COLS = [
+    'play',
+    'thumbnail',
+    'score',
+    ...META_KEYS.slice(0, 1),
+    ...(ds.hasTime ? ['start'] : []),
+    ...(ds.bodyField ? [ds.bodyField] : []),
+  ];
 
   // The Map-view table shows the lasso/legend selection when there is one,
   // otherwise the active search hits (text or image search) — which are also
@@ -169,18 +204,19 @@
   // v6 bundles widths + wrap with visibility; v5 was visibility-only
   // ({cols, known}); the v4 legacy key predates the merge format and
   // `speaker` is the only default column newer than that era.
-  const TABLE_COL_KEYS = TABLE_COLUMNS.map((c) => c.key);
+  const TABLE_COL_KEYS = TABLE_COLUMNS().map((c) => c.key);
+  // Default visible columns, derived from the descriptor: the fixed UI columns
+  // (play/thumbnail/score/speaker) plus the declared metadata fields, time span,
+  // and body/caption where the dataset declares them.
   const DEFAULT_TABLE_COLS = [
     'play',
     'thumbnail',
     'score',
-    'namn',
+    ...META_KEYS,
     'speaker',
-    'start',
-    'end',
-    'duration',
-    'text',
-    'caption',
+    ...(ds.hasTime ? ['start', 'end', 'duration'] : []),
+    ...(ds.bodyField ? [ds.bodyField] : []),
+    ...(ds.captionField ? [ds.captionField] : []),
   ];
   const TABLE_PREFS_KEY = 'raudio-table-cols-v6';
   const initialTablePrefs = loadTablePrefs({
@@ -194,7 +230,7 @@
   let tableCols = $state<string[]>(initialTablePrefs.cols);
   /** Dragged column widths (px) by column key — absent key = auto-sized. */
   let tableWidths = $state<Record<string, number>>(initialTablePrefs.widths);
-  /** Wrap text-like columns (text/caption/namn) instead of truncating. */
+  /** Wrap long free-text columns (body/caption/title) instead of truncating. */
   let tableWrap = $state<boolean>(initialTablePrefs.wrap);
 
   function persistTable() {
@@ -222,12 +258,26 @@
   // carry fewer fields than search hits, so this is its own small set.
   const DOC_COLUMNS: { key: string; label: string; get: (d: Document) => string }[] = [
     { key: 'thumbnail', label: 'Thumb', get: () => '' },
-    { key: 'namn', label: 'Name', get: (d) => d.namn ?? '' },
-    { key: 'referenskod', label: 'Ref', get: (d) => d.referenskod ?? '' },
-    { key: 'bildid', label: 'Bild ID', get: (d) => d.bildid ?? '' },
-    { key: 'extraid', label: 'Internal ID', get: (d) => d.extraid ?? '' },
-    { key: 'duration', label: 'Dur', get: (d) => (d.duration != null ? fmtTime(d.duration) : '') },
-    { key: 'audio_path', label: 'File', get: (d) => d.audio_path },
+    ...ds.metadataFields.map(({ field, label }) => ({
+      key: field,
+      label,
+      get: (d: Document) => {
+        const v = d[field];
+        return v == null ? '' : String(v);
+      },
+    })),
+    ...(ds.hasTime
+      ? [
+          {
+            key: 'duration',
+            label: 'Dur',
+            get: (d: Document) => {
+              const dur = ds.duration(d);
+              return dur != null ? fmtTime(dur) : '';
+            },
+          },
+        ]
+      : []),
   ];
   function toggleCol(key: string) {
     tableCols = tableCols.includes(key) ? tableCols.filter((k) => k !== key) : [...tableCols, key];
@@ -266,7 +316,7 @@
   }
 
   /** Selected document in browse mode (so the grid can highlight it). */
-  const activeDocId = $derived(active?.doc_id ?? null);
+  const activeDocId = $derived(active ? ds.docId(active) : null);
 
   const isBrowsing = $derived(!spec.q && !spec.image && !spec.topic && !voiceActive);
   const docsTotalPages = $derived(Math.max(1, Math.ceil(docsTotal / PER_PAGE)));
@@ -602,55 +652,24 @@
       }
     }
     // Deep-link from the graph explorer: open a doc in the player at time `t`.
-    // Player media is keyed on doc_id; a minimal synthetic hit seeks to start=t.
+    // Player media is keyed on the doc id; a minimal synthetic hit seeks to t.
     const docId = page.url.searchParams.get('doc');
     if (docId) {
       const t = Number(page.url.searchParams.get('t'));
       const start = Number.isFinite(t) ? Math.max(0, t) : 0;
-      active = {
-        _score: 0,
-        doc_id: docId,
-        audio_path: '',
-        speech_id: 0,
-        chunk_id: 0,
-        start,
-        end: start,
-        duration: null,
-        text: '',
-        language: null,
-        namn: null,
-        referenskod: null,
-        bildid: null,
-        extraid: null,
-        alignments: [],
-      };
+      active = playerRow(docId, start, start);
     }
   });
 
   /**
    * When user clicks a doc tile, just open it in the player with a synthetic
-   * full-document "hit" pointing at start=0. Earlier I auto-set the `namn`
-   * filter — it then silently stuck across the next search and produced 0
-   * hits. Now nothing is implicitly filtered.
+   * full-document "hit" pointing at start=0 (carrying the doc's own display
+   * fields). Earlier I auto-set a metadata filter — it then silently stuck
+   * across the next search and produced 0 hits. Now nothing is implicitly
+   * filtered.
    */
   function openDoc(doc: Document) {
-    active = {
-      _score: 0,
-      doc_id: doc.doc_id,
-      audio_path: doc.audio_path,
-      speech_id: 0,
-      chunk_id: 0,
-      start: 0,
-      end: doc.duration ?? 0,
-      duration: doc.duration ?? null,
-      text: '',
-      language: null,
-      namn: doc.namn ?? null,
-      referenskod: doc.referenskod ?? null,
-      bildid: doc.bildid ?? null,
-      extraid: doc.extraid ?? null,
-      alignments: [],
-    };
+    active = playerRow(ds.docId(doc), 0, ds.duration(doc) ?? 0, doc);
   }
 </script>
 
@@ -851,10 +870,10 @@
                   class="grid gap-4 p-4"
                   style:grid-template-columns="repeat({gridCols}, minmax(0, 1fr))"
                 >
-                  {#each docs as doc (doc.doc_id)}
+                  {#each docs as doc (ds.docId(doc))}
                     <DocTile
                       {doc}
-                      active={activeDocId === doc.doc_id}
+                      active={activeDocId === ds.docId(doc)}
                       onclick={() => openDoc(doc)}
                     />
                   {/each}
@@ -890,10 +909,10 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each docs as doc (doc.doc_id)}
+                      {#each docs as doc (ds.docId(doc))}
                         <tr
                           class={'cursor-pointer border-b border-border/60 hover:bg-secondary/40 ' +
-                            (activeDocId === doc.doc_id
+                            (activeDocId === ds.docId(doc)
                               ? 'bg-primary/15 font-medium [box-shadow:inset_3px_0_0_0_var(--color-primary)]'
                               : '')}
                           onclick={() => openDoc(doc)}
@@ -902,7 +921,7 @@
                             {#if c.key === 'thumbnail'}
                               <td class="px-3 py-1.5 align-top">
                                 <img
-                                  src={thumbnailUrl(doc.doc_id)}
+                                  src={thumbnailUrl(doc)}
                                   loading="lazy"
                                   alt=""
                                   class="h-9 w-16 rounded bg-muted object-cover"
@@ -927,16 +946,16 @@
                 </div>
               {:else}
                 <ul class="divide-y divide-border">
-                  {#each docs as doc (doc.doc_id)}
+                  {#each docs as doc (ds.docId(doc))}
                     <li>
                       <button
                         type="button"
                         onclick={() => openDoc(doc)}
                         class="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-secondary/40"
                       >
-                        <span class="flex-1 truncate text-sm">{doc.namn ?? doc.audio_path}</span>
+                        <span class="flex-1 truncate text-sm">{ds.title(doc)}</span>
                         <span class="font-mono text-[11px] text-muted-foreground">
-                          {doc.referenskod ?? ''}
+                          {ds.metadata(doc).find((m) => m.value !== ds.title(doc))?.value ?? ''}
                         </span>
                       </button>
                     </li>
@@ -1009,7 +1028,7 @@
                 class="flex flex-wrap items-center gap-1 border-b border-border bg-card/30 px-3 py-2 text-[11px]"
               >
                 <span class="mr-1 text-muted-foreground">Columns:</span>
-                {#each TABLE_COLUMNS as c (c.key)}
+                {#each TABLE_COLUMNS() as c (c.key)}
                   <button
                     type="button"
                     onclick={() => toggleCol(c.key)}

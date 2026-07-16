@@ -5,12 +5,13 @@
     type Hit,
     type DocTranscriptChunk,
     type DiarTurn,
+    activeView,
     getDocTranscript,
     getDiarization,
     mediaUrl,
   } from '$lib/api';
   import { voiceSearch } from '$lib/voice-search.svelte';
-  import { fmtTime } from '$lib/utils';
+  import { fmtTime, hitKey } from '$lib/utils';
   import { ChevronRight, Maximize2, Minimize2 } from 'lucide-svelte';
   import TranscriptWindow from './transcript-window.svelte';
   import ChunkTimeline from './chunk-timeline.svelte';
@@ -48,7 +49,7 @@
   // the WHOLE document transcript (keyed on doc_id) so a sliding window of chunks
   // around the playhead can render past the selected chunk; atlas/selection hits
   // carry only the selected chunk so we can't rely on `hit.alignments`. The seek
-  // $effect below sets currentTime to hit.start, and the windowed transcript
+  // $effect below sets currentTime to the hit's start, and the windowed transcript
   // tracks it once these absolute-time chunks populate. `docChunks` is the single
   // source — we no longer flatten into one giant alignments array.
   $effect(() => {
@@ -59,7 +60,7 @@
     }
     docChunks = [];
     let cancelled = false; // supersede guard + leak guard
-    getDocTranscript(h.doc_id)
+    getDocTranscript(activeView().docId(h))
       .then((doc) => {
         if (!cancelled) docChunks = doc.chunks;
       })
@@ -83,7 +84,7 @@
     }
     diarTurns = [];
     let cancelled = false; // supersede guard + leak guard
-    getDiarization(h.doc_id)
+    getDiarization(activeView().docId(h))
       .then((d) => {
         if (!cancelled) diarTurns = d.turns;
       })
@@ -113,14 +114,13 @@
   const findVoice = (pick: { speaker: string } | { turnId: number }) => {
     const h = hit;
     if (!h) return;
-    // Chip label: the video filename stem (mirrors hit-card). Synthetic
-    // deep-link hits carry audio_path '' → omit so the chip shows doc_id.
-    const stem = h.audio_path.replace(/\.[^.]+$/, '');
+    const view = activeView();
+    const docId = view.docId(h);
+    // Chip label: the descriptor's display title for this row (mirrors hit-card).
+    const label = view.title(h) || undefined;
     voiceSearch.request(
-      'speaker' in pick
-        ? { docId: h.doc_id, speaker: pick.speaker }
-        : { docId: h.doc_id, turnId: pick.turnId },
-      stem || undefined,
+      'speaker' in pick ? { docId, speaker: pick.speaker } : { docId, turnId: pick.turnId },
+      label,
     );
     void goto('/');
   };
@@ -136,17 +136,25 @@
   const currentChunkIdx = $derived.by((): number => {
     const cs = docChunks;
     if (cs.length === 0) return 0;
+    const view = activeView();
     const t = currentTime;
-    const i = cs.findIndex((c) => t >= c.start && t < c.end);
+    const i = cs.findIndex((c) => {
+      const span = view.time(c);
+      return span != null && t >= span.start && t < span.end;
+    });
     if (i !== -1) return i;
     if (t > 0) {
       let last = 0;
-      for (let k = 0; k < cs.length; k++) if (cs[k]!.start <= t) last = k;
+      for (let k = 0; k < cs.length; k++) {
+        const span = view.time(cs[k]!);
+        if (span != null && span.start <= t) last = k;
+      }
       return last;
     }
     const h = hit;
     if (h) {
-      const j = cs.findIndex((c) => c.speech_id === h.speech_id && c.chunk_id === h.chunk_id);
+      const hk = hitKey(h);
+      const j = cs.findIndex((c) => hitKey(c) === hk);
       if (j !== -1) return j;
     }
     return 0;
@@ -167,14 +175,20 @@
     return cs.slice(lo, hi);
   });
 
-  // "<speech_id>:<chunk_id>" of the opened hit → highlights its segment.
-  const activeKey = $derived(hit ? `${hit.speech_id}:${hit.chunk_id}` : null);
+  // The descriptor row key of the opened hit → highlights its segment.
+  const activeKey = $derived(hit ? hitKey(hit) : null);
 
   // The playing chunk's [start,end] → feeds the diarization timeline's "Chunk"
   // zoom. Falls back to the opened hit's span before the doc transcript loads.
   const currentChunk = $derived(docChunks[currentChunkIdx]);
-  const chunkStart = $derived(currentChunk?.start ?? hit?.start ?? 0);
-  const chunkEnd = $derived(currentChunk?.end ?? hit?.end ?? 0);
+  const chunkStart = $derived.by((): number => {
+    const c = currentChunk ?? hit;
+    return c ? (activeView().time(c)?.start ?? 0) : 0;
+  });
+  const chunkEnd = $derived.by((): number => {
+    const c = currentChunk ?? hit;
+    return c ? (activeView().time(c)?.end ?? 0) : 0;
+  });
 
   // Timeline click → jump there and play. Mirrors the hit-seek $effect; here
   // the doc is already loaded so we seek immediately.
@@ -217,38 +231,34 @@
   // the height the transcript needs — expand on demand.
   let showMeta = $state(false);
 
-  // Archival metadata shown under the player — only fields that are present.
+  // Archival metadata shown under the player — descriptor-declared fields plus
+  // caption + time span, only the ones present (absent values already dropped).
   const metaRows = $derived.by((): [string, string][] => {
     const h = hit;
     if (!h) return [];
+    const view = activeView();
     const rows: [string, string][] = [];
-    const add = (label: string, v: string | number | null | undefined) => {
-      if (v !== null && v !== undefined && v !== '') rows.push([label, String(v)]);
-    };
-    add('Caption', h.caption);
-    add('File', h.audio_path);
-    add('Time', `${fmtTime(h.start)} → ${fmtTime(h.end)}`);
-    if (h.duration != null) add('Length', fmtTime(h.duration));
-    add('Name', h.namn);
-    add('Reference', h.referenskod);
-    add('Image ID', h.bildid);
-    add('Extra ID', h.extraid);
-    add('Language', h.language);
-    add('Segment', `speech ${h.speech_id} · chunk ${h.chunk_id}`);
+    const caption = view.caption(h);
+    if (caption) rows.push(['Caption', caption]);
+    const t = view.time(h);
+    if (t) rows.push(['Time', `${fmtTime(t.start)} → ${fmtTime(t.end)}`]);
+    const dur = view.duration(h);
+    if (dur != null) rows.push(['Length', fmtTime(dur)]);
+    for (const m of view.metadata(h)) rows.push([m.label, m.value]);
     return rows;
   });
 
   /**
-   * Whenever `hit` changes, seek the player to `hit.start` and play.
+   * Whenever `hit` changes, seek the player to the hit's start and play.
    *
-   * `src` is owned reactively by the `<video src={mediaUrl(hit.doc_id)}>`
-   * binding below — this effect must NOT touch it. The old code called
+   * `src` is owned reactively by the `<video src={mediaUrl(hit)}>` binding
+   * below — this effect must NOT touch it. The old code called
    * `el.removeAttribute('src'); el.load()` in cleanup; when the next hit was
    * in the *same* document the bound URL didn't change, so Svelte never
    * re-applied `src` and the element was left sourceless and wedged (the
    * "second click freezes the player until full refresh" bug).
    *
-   * We read `hit.doc_id` + `hit.start` so the effect re-runs on either a new
+   * We read the hit's doc id + start so the effect re-runs on either a new
    * document (src changes → metadata reloads → seek on `loadedmetadata`) or a
    * new chunk in the same already-loaded document (seek immediately, since
    * `loadedmetadata`/`canplay` won't fire again).
@@ -258,7 +268,7 @@
     if (!hit || !mediaEl) return;
 
     const el = mediaEl;
-    const start = hit.start;
+    const start = activeView().time(hit)?.start ?? 0;
     let cancelled = false;
     const seek = () => {
       if (cancelled) return;
@@ -345,7 +355,7 @@
         controls
         controlslist="nofullscreen"
         preload="metadata"
-        src={mediaUrl(hit.doc_id)}
+        src={mediaUrl(hit)}
         class={isFullscreen
           ? 'min-h-0 w-full flex-1 bg-black object-contain'
           : 'aspect-video max-h-[45vh] w-full shrink-0 bg-black object-contain'}
@@ -459,7 +469,7 @@
     {#if mediaError}
       <div class="shrink-0 text-sm text-destructive">
         Video failed to load: {mediaError}. Check
-        <code>/api/media/{hit.doc_id}</code>.
+        <code>{mediaUrl(hit)}</code>.
       </div>
     {/if}
 

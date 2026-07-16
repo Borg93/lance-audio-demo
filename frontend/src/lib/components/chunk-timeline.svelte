@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { DocTranscriptChunk } from '$lib/api';
+  import { activeView, type DocTranscriptChunk } from '$lib/api';
+  import { hitKey } from '$lib/utils';
 
   type Props = {
     chunks: DocTranscriptChunk[];
@@ -13,9 +14,13 @@
   };
   let { chunks, duration, currentTime, activeKey, currentChunkIdx, onSeek }: Props = $props();
 
-  // Stable identity for a chunk = speech_id+chunk_id (matches the activeKey the
-  // parent derives from the opened hit). Built once per chunks change.
-  const key = (c: DocTranscriptChunk): string => `${c.speech_id}:${c.chunk_id}`;
+  // Stable identity for a chunk = the descriptor's row key (matches the
+  // activeKey the parent derives from the opened hit). Built per chunk.
+  const key = (c: DocTranscriptChunk): string => hitKey(c);
+
+  // Chunk time span + label read through the active view (raw row fields are
+  // untyped passthrough) so this stays schema-agnostic.
+  const view = activeView();
 
   // Playhead fraction in [0,1]; clamped so a stale currentTime can't overflow.
   const playFrac = $derived(duration > 0 ? Math.min(1, Math.max(0, currentTime / duration)) : 0);
@@ -36,26 +41,30 @@
     aria-label="Chunk timeline"
   >
     {#each chunks as c, i (key(c))}
-      <!-- Clamp to [0,100] so drifted data (end>duration, end<start) can't
-           overflow the track or render a negative-width segment. -->
-      {@const left = Math.min(100, Math.max(0, (c.start / duration) * 100))}
-      {@const width = Math.min(100 - left, Math.max(0, ((c.end - c.start) / duration) * 100))}
-      {@const isCurrent = i === currentChunkIdx}
-      <!-- Precedence: isCurrent (solid + ring + taller) > activeKey (opened hit)
-           > muted. The current segment grows past the track via -top/extra
-           height so it reads as "live" while the window slides. -->
-      <button
-        type="button"
-        title={c.text}
-        aria-label={c.text}
-        onclick={() => onSeek(c.start)}
-        class="absolute cursor-pointer border-r border-background/70 transition-colors hover:bg-primary/30 {isCurrent
-          ? '-top-0.5 z-10 h-[calc(100%+0.25rem)] bg-primary ring-1 ring-primary'
-          : key(c) === activeKey
-            ? 'top-0 h-full bg-primary/40'
-            : 'top-0 h-full bg-muted'}"
-        style="left: {left}%; width: {width}%;"
-      ></button>
+      {@const t = view.time(c)}
+      {#if t}
+        <!-- Clamp to [0,100] so drifted data (end>duration, end<start) can't
+             overflow the track or render a negative-width segment. -->
+        {@const left = Math.min(100, Math.max(0, (t.start / duration) * 100))}
+        {@const width = Math.min(100 - left, Math.max(0, ((t.end - t.start) / duration) * 100))}
+        {@const isCurrent = i === currentChunkIdx}
+        {@const label = view.body(c)}
+        <!-- Precedence: isCurrent (solid + ring + taller) > activeKey (opened hit)
+             > muted. The current segment grows past the track via -top/extra
+             height so it reads as "live" while the window slides. -->
+        <button
+          type="button"
+          title={label}
+          aria-label={label}
+          onclick={() => onSeek(t.start)}
+          class="absolute cursor-pointer border-r border-background/70 transition-colors hover:bg-primary/30 {isCurrent
+            ? '-top-0.5 z-10 h-[calc(100%+0.25rem)] bg-primary ring-1 ring-primary'
+            : key(c) === activeKey
+              ? 'top-0 h-full bg-primary/40'
+              : 'top-0 h-full bg-muted'}"
+          style="left: {left}%; width: {width}%;"
+        ></button>
+      {/if}
     {/each}
     <!-- Playhead: a thin vertical line at currentTime/duration. pointer-events
          none so it never eats segment clicks. -->

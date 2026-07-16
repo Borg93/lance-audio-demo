@@ -1,8 +1,9 @@
 <script lang="ts">
   import '../app.css';
+  import { onMount, type Snippet } from 'svelte';
   import { browser } from '$app/environment';
   import { page } from '$app/state';
-  import type { Snippet } from 'svelte';
+  import { descriptor } from '$lib/descriptor-store.svelte';
   import {
     AudioLines,
     Search,
@@ -64,6 +65,12 @@
     return m ? m[1] === 'true' : true;
   }
   let sidebarOpen = $state(initialOpen());
+
+  // Load the dataset descriptor once before rendering any route — every
+  // renderer reads the active DatasetView, so it must be set first.
+  onMount(() => {
+    void descriptor.load();
+  });
 </script>
 
 <Sidebar.Provider bind:open={sidebarOpen} class="h-svh overflow-hidden">
@@ -138,7 +145,18 @@
       {/if}
     </header>
     <div class="min-h-0 flex-1 overflow-hidden">
-      {@render children()}
+      {#if descriptor.view}
+        {@render children()}
+      {:else if descriptor.error}
+        <div class="grid h-full place-items-center p-6 text-center">
+          <div class="max-w-md">
+            <p class="text-foreground text-sm font-medium">Could not load the dataset descriptor</p>
+            <p class="text-muted-foreground mt-1 text-xs">{descriptor.error}</p>
+          </div>
+        </div>
+      {:else}
+        <div class="text-muted-foreground grid h-full place-items-center text-sm">Loading dataset…</div>
+      {/if}
     </div>
   </Sidebar.Inset>
 </Sidebar.Provider>

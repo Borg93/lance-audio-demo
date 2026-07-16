@@ -1,6 +1,7 @@
 <script lang="ts" module>
   import type { Hit } from '$lib/api';
   import { relevanceOf, isVoiceHit } from '$lib/api';
+  import { activeView, type DatasetView } from '$lib/descriptor';
   import { fmtTime } from '$lib/utils';
 
   /** A table column. `render` gives the displayed string. Set `numeric` for
@@ -18,78 +19,142 @@
     sortValue?: (h: Hit) => number | null;
   };
 
-  /** Result fields shown as table columns (everything the search payload carries
-   *  — see api.ts:HitSchema). `play`, `thumbnail` and `text` are rendered
-   *  specially in the markup (audio-preview button / image / highlighted HTML);
-   *  their `render` is unused. */
-  export const TABLE_COLUMNS: TableColumn[] = [
-    // Per-row audio preview (the shared one-element audioPreview store).
-    { key: 'play', label: 'Play', render: () => '' },
-    { key: 'thumbnail', label: 'Thumb', render: () => '' },
-    {
-      // Mode-agnostic relevance (higher = better); blank for unranked hits.
-      key: 'score',
-      label: 'Relevance',
-      numeric: true,
-      sortValue: (h) => relevanceOf(h),
-      render: (h) => {
-        const r = relevanceOf(h);
-        return r != null ? r.toFixed(3) : '';
+  const asStr = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
+  const asNum = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+  /** Title-case a raw identity field name for a header (drops a trailing `id`,
+   *  so `doc_id` → "Doc", `chunk_id` → "Chunk"). */
+  function humanize(field: string): string {
+    const parts = field.split(/[_\s]+/).filter((p) => p && p.toLowerCase() !== 'id');
+    const base = parts.length ? parts.join(' ') : field;
+    return base.charAt(0).toUpperCase() + base.slice(1);
+  }
+
+  /** Numeric per the discovered Arrow type — mirrors the backend's column-kind
+   *  test so a column sorts/filters the same way `/api/columns` classifies it. */
+  function isNumericArrow(t: string | null): boolean {
+    if (!t) return false;
+    return (
+      t.startsWith('int') ||
+      t.startsWith('uint') ||
+      t === 'float' ||
+      t === 'double' ||
+      t === 'halffloat'
+    );
+  }
+
+  /** Discovered Arrow type of a field — the search row table first, then any. */
+  function arrowTypeOf(view: DatasetView, field: string): string | null {
+    const tables = view.descriptor.tables;
+    const rowTable = view.descriptor.declared.search?.row_table;
+    const ordered =
+      rowTable && tables[rowTable]
+        ? [tables[rowTable], ...Object.values(tables)]
+        : Object.values(tables);
+    for (const t of ordered) {
+      const col = t.columns.find((c) => c.name === field);
+      if (col) return col.arrow_type;
+    }
+    return null;
+  }
+
+  /** A generic scalar column reading `field` off the row. Numeric sort/filter
+   *  is driven by the field's discovered Arrow type, so it behaves like the
+   *  underlying value without naming any corpus column here. */
+  function valueColumn(view: DatasetView, field: string, label: string): TableColumn {
+    const numeric = isNumericArrow(arrowTypeOf(view, field));
+    const col: TableColumn = { key: field, label, numeric, render: (h) => asStr(h[field]) ?? '' };
+    if (numeric) col.sortValue = (h) => asNum(h[field]);
+    return col;
+  }
+
+  /** The table column set, rebuilt from the active dataset descriptor: envelope
+   *  columns (play / thumbnail / relevance / speaker) + identity key fields +
+   *  time (start/end) + duration + declared metadata + body + caption. Called
+   *  from render (never at import) so the active view is always loaded. `play`,
+   *  `thumbnail` and `text` are rendered specially in the markup (audio-preview
+   *  button / image / highlighted HTML); their `render` output is unused there. */
+  export function TABLE_COLUMNS(): TableColumn[] {
+    const view = activeView();
+    const cols: TableColumn[] = [
+      // Per-row audio preview (the shared one-element audioPreview store).
+      { key: 'play', label: 'Play', render: () => '' },
+      { key: 'thumbnail', label: 'Thumb', render: () => '' },
+      {
+        // Mode-agnostic relevance (higher = better); blank for unranked hits.
+        key: 'score',
+        label: 'Relevance',
+        numeric: true,
+        sortValue: (h) => relevanceOf(h),
+        render: (h) => {
+          const r = relevanceOf(h);
+          return r != null ? r.toFixed(3) : '';
+        },
       },
-    },
-    { key: 'namn', label: 'Name', render: (h) => h.namn ?? '' },
-    { key: 'referenskod', label: 'Ref', render: (h) => h.referenskod ?? '' },
-    { key: 'bildid', label: 'Bild ID', render: (h) => h.bildid ?? '' },
-    { key: 'extraid', label: 'Internal ID', render: (h) => h.extraid ?? '' },
-    { key: 'language', label: 'Lang', render: (h) => h.language ?? '' },
-    {
-      // Voice-search results only (blank for text hits): the matched diarized
-      // turn — per-video speaker label plus the turn's time span.
-      key: 'speaker',
-      label: 'Speaker',
-      render: (h) =>
-        isVoiceHit(h) ? `${h.speaker_label} · ${fmtTime(h.turn_start)}–${fmtTime(h.turn_end)}` : '',
-    },
-    {
-      key: 'speech_id',
-      label: 'Speech',
-      numeric: true,
-      sortValue: (h) => h.speech_id,
-      render: (h) => String(h.speech_id),
-    },
-    {
-      key: 'chunk_id',
-      label: 'Chunk',
-      numeric: true,
-      sortValue: (h) => h.chunk_id,
-      render: (h) => String(h.chunk_id),
-    },
-    {
-      key: 'start',
-      label: 'Start',
-      numeric: true,
-      sortValue: (h) => h.start,
-      render: (h) => fmtTime(h.start),
-    },
-    {
-      key: 'end',
-      label: 'End',
-      numeric: true,
-      sortValue: (h) => h.end,
-      render: (h) => fmtTime(h.end),
-    },
-    {
-      key: 'duration',
-      label: 'Dur',
-      numeric: true,
-      sortValue: (h) => h.duration ?? null,
-      render: (h) => (h.duration != null ? fmtTime(h.duration) : ''),
-    },
-    { key: 'doc_id', label: 'Doc', render: (h) => h.doc_id },
-    { key: 'audio_path', label: 'File', render: (h) => h.audio_path },
-    { key: 'text', label: 'Text', render: (h) => h.text },
-    { key: 'caption', label: 'Caption', render: (h) => h.caption ?? '' },
-  ];
+      {
+        // Voice-search results only (blank for text hits): the matched diarized
+        // turn — per-video speaker label plus the turn's time span.
+        key: 'speaker',
+        label: 'Speaker',
+        render: (h) =>
+          isVoiceHit(h)
+            ? `${h.speaker_label} · ${fmtTime(h.turn_start)}–${fmtTime(h.turn_end)}`
+            : '',
+      },
+    ];
+
+    // Identity key fields (doc key + any per-row keys) as their own columns.
+    for (const field of view.keyFields) cols.push(valueColumn(view, field, humanize(field)));
+
+    // Time span + duration, when the dataset declares a time binding.
+    if (view.hasTime) {
+      cols.push({
+        key: 'start',
+        label: 'Start',
+        numeric: true,
+        sortValue: (h) => view.time(h)?.start ?? null,
+        render: (h) => {
+          const t = view.time(h);
+          return t ? fmtTime(t.start) : '';
+        },
+      });
+      cols.push({
+        key: 'end',
+        label: 'End',
+        numeric: true,
+        sortValue: (h) => view.time(h)?.end ?? null,
+        render: (h) => {
+          const t = view.time(h);
+          return t ? fmtTime(t.end) : '';
+        },
+      });
+      cols.push({
+        key: 'duration',
+        label: 'Dur',
+        numeric: true,
+        sortValue: (h) => view.duration(h),
+        render: (h) => {
+          const d = view.duration(h);
+          return d != null ? fmtTime(d) : '';
+        },
+      });
+    }
+
+    // Declared metadata fields (name / ref / language / … — descriptor-driven).
+    const keyFields = new Set(view.keyFields);
+    for (const { field, label } of view.metadataFields) {
+      if (keyFields.has(field)) continue; // already shown as an identity column
+      cols.push(valueColumn(view, field, label));
+    }
+
+    // Body + caption (rendered specially in the markup, keyed by their role).
+    if (view.bodyField) cols.push({ key: 'text', label: 'Text', render: (h) => view.body(h) });
+    if (view.captionField)
+      cols.push({ key: 'caption', label: 'Caption', render: (h) => view.caption(h) ?? '' });
+
+    return cols;
+  }
 
   /** A column's comparable value: the numeric `sortValue` for numeric columns,
    *  else the lowercased `render` string. Used by both sort and filter so they
@@ -124,14 +189,19 @@
     /** Dragged column widths (px) by column key — a dragged width wins over
      *  the default (auto) sizing; absent key = auto. */
     widths?: Record<string, number>;
-    /** Wrap text-like columns (text/caption/namn) instead of truncating. */
+    /** Wrap the free-text columns (body / caption / title) instead of truncating. */
     wrap?: boolean;
     /** A resize-handle drag ended (px) or was double-clicked (null = reset
      *  to auto) — the parent persists alongside the column-visibility prefs. */
     onwidthchange?: (key: string, width: number | null) => void;
   } = $props();
 
-  const cols = $derived(TABLE_COLUMNS.filter((c) => visible.includes(c.key)));
+  // The active dataset view — media URLs, body/caption text, time + identity all
+  // read through it (safe: this component only renders once the layout has the
+  // descriptor). Columns are rebuilt from the same view.
+  const view = activeView();
+  const allColumns = $derived(TABLE_COLUMNS());
+  const cols = $derived(allColumns.filter((c) => visible.includes(c.key)));
   const terms = $derived(queryTerms(query));
   const highlight = $derived(makeHighlighter(terms));
   const activeKey = $derived(active ? hitKey(active) : null);
@@ -146,8 +216,16 @@
   const DATALESS_KEYS = ['play', 'thumbnail'];
   const SORTABLE = (c: TableColumn): boolean => !DATALESS_KEYS.includes(c.key);
 
-  // Columns the "Wrap text" pref applies to (long free-text values).
-  const WRAP_KEYS = ['text', 'caption', 'namn'];
+  // Columns the "Wrap text" pref applies to (long free-text values): the body,
+  // the caption, and the declared title field(s). Descriptor-driven, so it holds
+  // for any dataset instead of a fixed corpus list.
+  const wrapKeys = $derived.by((): Set<string> => {
+    const keys = new Set<string>();
+    if (view.bodyField) keys.add('text');
+    if (view.captionField) keys.add('caption');
+    for (const f of view.descriptor.declared.display.title) keys.add(f);
+    return keys;
+  });
 
   // ── Column resize (pointer-drag on the header-edge handles) ──
   // Drag geometry caches at pointerdown and width writes coalesce to one per
@@ -259,7 +337,7 @@
   const displayedHits = $derived.by(() => {
     const key = sortKey;
     if (key === null) return filteredHits;
-    const col = TABLE_COLUMNS.find((c) => c.key === key);
+    const col = allColumns.find((c) => c.key === key);
     if (!col) return filteredHits;
     const dir = sortDir === 'asc' ? 1 : -1;
     // Sort a shallow copy — never the source array.
@@ -363,11 +441,11 @@
             {#if c.key === 'play'}
               {@const rowKey = hitKey(hit)}
               {@const playing = audioPreview.isPlaying(rowKey)}
-              {@const failed = audioPreview.isFailed(hit.doc_id)}
+              {@const failed = audioPreview.isFailed(view.docId(hit))}
               <!-- Voice hits preview the matched diarized TURN (the audio that
                    actually matched), not the max-overlap ASR chunk span. -->
-              {@const clipStart = isVoiceHit(hit) ? hit.turn_start : hit.start}
-              {@const clipEnd = isVoiceHit(hit) ? hit.turn_end : hit.end}
+              {@const clipStart = isVoiceHit(hit) ? hit.turn_start : (view.time(hit)?.start ?? 0)}
+              {@const clipEnd = isVoiceHit(hit) ? hit.turn_end : (view.time(hit)?.end ?? 0)}
               <td class="px-2 py-1 align-top">
                 <!-- One shared <audio> behind every button (audioPreview):
                      playing a row pauses any other, clicking again pauses. -->
@@ -385,7 +463,7 @@
                     e.stopPropagation(); // don't also select the row
                     audioPreview.toggle({
                       key: rowKey,
-                      docId: hit.doc_id,
+                      docId: view.docId(hit),
                       start: clipStart,
                       end: clipEnd,
                     });
@@ -403,7 +481,7 @@
             {:else if c.key === 'thumbnail'}
               <td class="px-3 py-1.5 align-top">
                 <img
-                  src={thumbnailUrl(hit.doc_id)}
+                  src={thumbnailUrl(hit)}
                   loading="lazy"
                   alt=""
                   class="h-9 w-16 rounded bg-muted object-cover"
@@ -412,16 +490,17 @@
                 />
               </td>
             {:else if c.key === 'text'}
+              {@const body = view.body(hit)}
               <td
                 class="max-w-[32rem] px-3 py-1.5 align-top text-foreground [overflow-wrap:anywhere]"
                 style={w !== undefined ? `max-width:${w}px` : undefined}
-                title={hit.text}
+                title={body}
               >
                 <!-- highlight() escapes then wraps matches — safe to inject -->
-                <div class={wrap ? '' : 'line-clamp-2'}>{@html highlight(hit.text)}</div>
+                <div class={wrap ? '' : 'line-clamp-2'}>{@html highlight(body)}</div>
               </td>
             {:else}
-              {@const wraps = wrap && WRAP_KEYS.includes(c.key)}
+              {@const wraps = wrap && wrapKeys.has(c.key)}
               <td
                 class={'max-w-[28rem] px-3 py-1.5 align-top text-muted-foreground ' +
                   (wraps ? 'whitespace-normal break-words' : 'truncate whitespace-nowrap')}

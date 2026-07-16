@@ -28,6 +28,7 @@
     type Hit,
   } from '$lib/api';
   import { crossFilter, buildKeyIndex, hitKey, type ColorBy } from './cross-filter.svelte';
+  import { activeView } from '$lib/descriptor';
   import { buildGrid, nearestIndex, type SpatialGrid } from './atlas-grid';
   import { hexToRgb, hueRgb, buildHuePalette, type Rgb } from './atlas-colors';
   import { indicesInPolygon, type Pt } from './atlas-geometry';
@@ -38,6 +39,7 @@
     buildClusterLegend,
     clusterStats as buildClusterStats,
     buildCategoryLegend,
+    channelLabel,
     categoryTitle as deriveCategoryTitle,
     type CategoryChannel,
     type ClusterRanking,
@@ -57,6 +59,11 @@
     /** Surface the lasso/box selection's hits to the page (drives HitTable). */
     onSelectionHits?: (hits: Hit[], total: number) => void;
   } = $props();
+
+  // The dataset descriptor — every space/channel/identity read routes through
+  // it, so the map names no corpus column. Loaded by the root layout before any
+  // route renders, so it's resolved here.
+  const view = activeView();
 
   // The WebGPU scatter reads TRUE per-point alpha, so the old 256-slot /
   // categoryColors palette (and its grey-padding monochrome bug) is gone: we
@@ -80,8 +87,10 @@
     maxY: 1,
   });
   let grid = $state.raw<SpatialGrid | null>(null); // uniform bucket index for hover
-  let visualBuilt = $state(false); // whether atlas_img_* exists (gates the toggle)
-  let captionBuilt = $state(false); // whether atlas_cap_* exists (gates the toggle)
+  // Which declared spaces are built (x column has non-null rows), keyed by
+  // declared space name — gates each space tab. The first/current space stays
+  // selectable even before /status resolves.
+  let builtSpaces = $state.raw<Record<string, boolean>>({});
 
   let pointSize = $state(0); // 0 = auto
   let filterAlpha = $state(8); // 0..120 — opacity of EXCLUDED points (search-filtered OR lasso-not-selected)
@@ -150,7 +159,7 @@
       // Compute the data extent from the SAME decoded f32 so GpuScatter's fit
       // lines up with the f16 GPU positions (both derive from these bits).
       fitBounds = boundsOf(xs, ys);
-      crossFilter.resetForSpace(buildKeyIndex(p.docs, p.doc, p.speech_id, p.chunk_id));
+      crossFilter.resetForSpace(buildKeyIndex(p));
       onSelectionHits?.([], 0);
     } catch (e) {
       pts = null;
@@ -165,18 +174,25 @@
     }
   }
 
-  // Probe which spaces exist (gates the Visual toggle), then load the current one.
+  // Keep the shown space valid for THIS dataset: if the persisted/default space
+  // isn't one the descriptor declares, fall back to the first declared space.
+  $effect(() => {
+    const spaces = view.atlasSpaces;
+    if (spaces.length > 0 && !spaces.some((s) => s.name === crossFilter.space)) {
+      crossFilter.setSpace(spaces[0]!.name);
+    }
+  });
+
+  // Probe which declared spaces are built (gates the space tabs), then load the
+  // current one. /status reports every declared space's built-ness by name.
   $effect(() => {
     let cancelled = false;
     (async () => {
       try {
         const status = await getAtlasStatus(crossFilter.space);
-        if (!cancelled) {
-          visualBuilt = status.spaces?.visual ?? false;
-          captionBuilt = status.spaces?.caption ?? false;
-        }
+        if (!cancelled) builtSpaces = status.spaces ?? {};
       } catch {
-        /* leave visualBuilt as-is */
+        /* leave builtSpaces as-is */
       }
     })();
     return () => {
@@ -192,8 +208,7 @@
 
   async function switchSpace(space: AtlasSpace): Promise<void> {
     if (space === crossFilter.space) return;
-    if (space === 'visual' && !visualBuilt) return; // gated
-    if (space === 'caption' && !captionBuilt) return; // gated
+    if (spaceTabs.find((t) => t.value === space)?.disabled) return; // gated until built
     crossFilter.setSpace(space);
   }
 
@@ -223,19 +238,12 @@
     return { slotOf, distinct };
   });
 
-  /** The factorized (codes, labels) pair backing a categorical colour mode.
-   *  `cluster` is NOT here — it has its own noise/#id/hide semantics. */
+  /** The factorized (codes, labels) pair backing a categorical colour mode — a
+   *  declared atlas channel read by name from `points.channels`. `cluster`/`none`
+   *  are NOT channels (cluster carries its own noise/#id/hide semantics). */
   function channelFor(p: AtlasPoints | null, mode: ColorBy): CategoryChannel | null {
-    if (!p) return null;
-    if (mode === 'language' && p.language && p.languages)
-      return { codes: p.language, labels: p.languages };
-    if (mode === 'topic' && p.topic && p.topics) return { codes: p.topic, labels: p.topics };
-    if (mode === 'doc_topic' && p.doc_topic && p.doc_topics)
-      return { codes: p.doc_topic, labels: p.doc_topics };
-    // `doc`/`docs` (the video ids) are always shipped, so colour-by-Video is
-    // always available — one hue per source video.
-    if (mode === 'doc') return { codes: p.doc, labels: p.docFiles ?? p.docs };
-    return null;
+    if (!p || mode === 'cluster' || mode === 'none') return null;
+    return p.channels[mode] ?? null;
   }
 
   // Membership state enum bytes (must match the WGSL fragment + the old alphaFor
@@ -409,61 +417,66 @@
   const categoryTotal = $derived(categoryChannel?.labels.length ?? 0);
   const categoryTitleValue = $derived(deriveCategoryTitle(crossFilter.colorBy));
 
-  // Topic modes appear only once the columns are built (factorized into the
-  // points payload); cluster + none are always available.
+  // Colour modes: `cluster` (always), then each declared atlas channel present
+  // in the points payload (by name, in descriptor order), then `none`. A channel
+  // only appears once its column is built into /points, so the menu tracks data.
   const colorOptions = $derived.by((): (SelectOption & { value: ColorBy })[] => {
     const opts: (SelectOption & { value: ColorBy })[] = [{ value: 'cluster', label: 'Cluster' }];
-    if (pts?.language) opts.push({ value: 'language', label: 'Language' });
-    if (pts?.topic) opts.push({ value: 'topic', label: 'Topic' });
-    if (pts?.doc_topic) opts.push({ value: 'doc_topic', label: 'Video topic' });
-    opts.push({ value: 'doc', label: 'Video' });
+    const p = pts;
+    if (p) {
+      for (const name of view.atlasChannels(crossFilter.space)) {
+        if (p.channels[name]) opts.push({ value: name, label: channelLabel(name) });
+      }
+    }
     opts.push({ value: 'none', label: 'None' });
     return opts;
   });
-  const ALL_COLOR_BY: ColorBy[] = ['cluster', 'language', 'topic', 'doc_topic', 'doc', 'none'];
-  const isColorBy = (v: string): v is ColorBy => (ALL_COLOR_BY as string[]).includes(v);
+  const colorValues = $derived(new Set(colorOptions.map((o) => o.value as string)));
 
   // Toolbar: the size/opacity sliders live in a ⚙ popover to keep the bar clean.
   let showSettings = $state(false);
 
-  // Space tabs (DRY the segmented toggle); each disabled until its map is built.
+  // Space tabs come from the descriptor's declared atlas spaces (DRY the
+  // segmented toggle). The first declared space stays selectable; the rest are
+  // gated until /status reports their projection built.
   const spaceTabs = $derived.by(
-    (): { value: AtlasSpace; label: string; disabled: boolean; title: string }[] => [
-      {
-        value: 'text',
-        label: 'Text',
-        disabled: false,
-        title: 'Transcript-semantics map (text_embedding)',
-      },
-      {
-        value: 'visual',
-        label: 'Visual',
-        disabled: !visualBuilt,
-        title: visualBuilt
-          ? 'Frame-image map (frame_embedding)'
-          : 'Not built yet — run `raudio feature atlas --space visual`',
-      },
-      {
-        value: 'caption',
-        label: 'Caption',
-        disabled: !captionBuilt,
-        title: captionBuilt
-          ? 'Frame-caption map (caption_embedding)'
-          : 'Not built yet — run `raudio feature atlas --space caption`',
-      },
-    ],
+    (): { value: AtlasSpace; label: string; disabled: boolean; title: string }[] =>
+      view.atlasSpaces.map((s, i) => {
+        const built = builtSpaces[s.name] ?? false;
+        const disabled = i > 0 && !built;
+        const label = channelLabel(s.name);
+        return {
+          value: s.name,
+          label,
+          disabled,
+          title: disabled
+            ? `Not built yet — run \`raudio feature atlas --space ${s.name}\``
+            : `${label} embedding map`,
+        };
+      }),
   );
 
   // ── selection helpers (data-space) ────────────────────────────────────────
-  function keyAt(i: number): [string, number, number] | null {
+  /** The identity key path for point `i`, in descriptor key order: the doc key
+   *  (resolved through the `doc` dictionary) then the remaining key fields from
+   *  `points.keys`. Feeds getAtlasChunk (route arity = identity key fields). */
+  function keyAt(i: number): (string | number)[] | null {
     const p = pts;
     if (!p) return null;
-    const dc = p.doc[i];
-    const doc = dc !== undefined ? p.docs[dc] : undefined;
-    const s = p.speech_id[i];
-    const c = p.chunk_id[i];
-    if (doc === undefined || s === undefined || c === undefined) return null;
-    return [doc, s, c];
+    const path: (string | number)[] = [];
+    for (const field of view.keyFields) {
+      if (field === view.docKeyField) {
+        const dc = p.doc[i];
+        const doc = dc !== undefined ? p.docs[dc] : undefined;
+        if (doc === undefined) return null;
+        path.push(doc);
+      } else {
+        const v = p.keys[field]?.[i];
+        if (v === undefined) return null;
+        path.push(v);
+      }
+    }
+    return path;
   }
 
   // Pure geometry/grid helpers live in ./atlas-geometry + ./atlas-grid; these
@@ -534,7 +547,7 @@
     const key = keyAt(i);
     if (!key) return;
     try {
-      active = await getAtlasChunk(key[0], key[1], key[2]);
+      active = await getAtlasChunk(key);
     } catch {
       /* keep previous */
     }
@@ -714,7 +727,7 @@
           bind:value={
             () => crossFilter.colorBy,
             (v) => {
-              if (isColorBy(v)) crossFilter.colorBy = v;
+              if (colorValues.has(v)) crossFilter.colorBy = v;
             }
           }
           options={colorOptions}

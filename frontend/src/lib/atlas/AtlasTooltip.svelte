@@ -3,12 +3,14 @@
    * Hover/click ANALYSIS popover for the atlas — what turns the map from a
    * viewer into a cluster-discovery + data-inspection tool.
    *
-   * Cluster id, language, and namn come INSTANTLY from the point arrays; the
-   * text snippet is lazy-fetched via `getAtlasChunk` on a ~150ms hover-settle
-   * debounce and memoised in a tiny LRU keyed by point index. Absolutely
-   * positioned (bg-card/85 backdrop-blur) to match the toolbar/legend overlays.
+   * Cluster id and the declared categorical channel values come INSTANTLY from
+   * the point arrays; the title/body/caption (read through the dataset view) are
+   * lazy-fetched via `getAtlasChunk` on a ~150ms hover-settle debounce and
+   * memoised in a tiny LRU keyed by point index. Absolutely positioned
+   * (bg-card/85 backdrop-blur) to match the toolbar/legend overlays.
    */
   import { getAtlasChunk, type AtlasPoints } from '$lib/api';
+  import { activeView } from '$lib/descriptor';
 
   let {
     pts,
@@ -24,37 +26,46 @@
     y: number;
   } = $props();
 
+  const view = activeView();
+
   // ── instant fields from the arrays (no fetch) ─────────────────────────────
   const clusterId = $derived(index != null ? (pts.cluster?.[index] ?? null) : null);
-  const language = $derived.by(() => {
-    if (index == null) return null;
-    const code = pts.language?.[index];
-    return code != null ? (pts.languages?.[code] ?? null) : null;
-  });
-  const namn = $derived.by(() => {
-    if (index == null) return null;
-    const code = pts.namn?.[index];
-    return code != null ? (pts.namns?.[code] ?? null) : null;
-  });
-  const videoId = $derived.by(() => {
-    if (index == null) return null;
-    const dc = pts.doc[index];
-    if (dc === undefined) return null;
-    return pts.docFiles?.[dc] ?? pts.docs[dc] ?? null;
+
+  /** Each declared colour channel's value at the hovered point (empty dropped) —
+   *  the generic replacement for the old hardcoded language/name/video lines. */
+  const channelChips = $derived.by((): { name: string; value: string }[] => {
+    const i = index;
+    if (i == null) return [];
+    const out: { name: string; value: string }[] = [];
+    for (const [name, ch] of Object.entries(pts.channels)) {
+      const code = ch.codes[i];
+      const value = code != null ? (ch.labels[code] ?? '') : '';
+      if (value) out.push({ name, value });
+    }
+    return out;
   });
 
-  function keyAt(i: number): [string, number, number] | null {
-    const dc = pts.doc[i];
-    const doc = dc !== undefined ? pts.docs[dc] : undefined;
-    const s = pts.speech_id[i];
-    const c = pts.chunk_id[i];
-    if (doc === undefined || s === undefined || c === undefined) return null;
-    return [doc, s, c];
+  /** The point's identity key path (descriptor key order) for the lazy fetch. */
+  function keyAt(i: number): (string | number)[] | null {
+    const path: (string | number)[] = [];
+    for (const field of view.keyFields) {
+      if (field === view.docKeyField) {
+        const dc = pts.doc[i];
+        const doc = dc !== undefined ? pts.docs[dc] : undefined;
+        if (doc === undefined) return null;
+        path.push(doc);
+      } else {
+        const v = pts.keys[field]?.[i];
+        if (v === undefined) return null;
+        path.push(v);
+      }
+    }
+    return path;
   }
 
-  // ── lazy text snippet (debounced fetch + LRU) ─────────────────────────────
+  // ── lazy title/body/caption snippet (debounced fetch + LRU) ───────────────
   const LRU_MAX = 200;
-  type Snip = { text: string; caption: string };
+  type Snip = { title: string; body: string; caption: string };
   const cache = new Map<number, Snip>();
   let snip = $state<Snip | null>(null);
   let snipFor = $state<number | null>(null);
@@ -87,10 +98,11 @@
     if (!key) return;
     const timer = setTimeout(async () => {
       try {
-        const hit = await getAtlasChunk(key[0], key[1], key[2]);
+        const hit = await getAtlasChunk(key);
         const s: Snip = {
-          text: (hit.text ?? '').slice(0, 240),
-          caption: (hit.caption ?? '').slice(0, 200),
+          title: view.title(hit),
+          body: view.body(hit).slice(0, 240),
+          caption: (view.caption(hit) ?? '').slice(0, 200),
         };
         remember(i, s);
         // Only apply if still hovering the same point.
@@ -104,6 +116,14 @@
     }, 150);
     return () => clearTimeout(timer);
   });
+
+  // Once the title is known, drop the channel chip that merely repeats it (for
+  // this corpus the title IS a channel), so it shows once as the header.
+  const chips = $derived.by(() =>
+    snip && snipFor === index
+      ? channelChips.filter((c) => c.value !== snip!.title)
+      : channelChips,
+  );
 </script>
 
 {#if index != null}
@@ -112,29 +132,27 @@
     style:left="{x}px"
     style:top="{Math.max(8, y - 10)}px"
   >
-    <div class="mb-1 flex items-center gap-2">
+    <div class="mb-1 flex flex-wrap items-center gap-1.5">
       {#if clusterId != null}
         <span class="rounded bg-secondary/70 px-1.5 py-0.5 font-mono text-foreground">
           {clusterId < 0 ? 'noise' : `cluster #${clusterId}`}
         </span>
       {/if}
-      {#if language}
-        <span class="rounded bg-secondary/40 px-1.5 py-0.5 uppercase text-muted-foreground">
-          {language}
+      {#each chips as ch (ch.name)}
+        <span
+          class="truncate rounded bg-secondary/40 px-1.5 py-0.5 text-muted-foreground"
+          title={ch.value}
+        >
+          {ch.value}
         </span>
-      {/if}
+      {/each}
     </div>
-    {#if namn}
-      <div class="mb-1 truncate font-medium text-foreground" title={namn}>{namn}</div>
-    {/if}
-    {#if videoId}
-      <div class="mb-1 truncate font-mono text-[10px] text-muted-foreground/70" title={videoId}>
-        video {videoId}
-      </div>
-    {/if}
     {#if snip && snipFor === index}
-      {#if snip.text}
-        <div class="line-clamp-2 text-muted-foreground">{snip.text}</div>
+      {#if snip.title}
+        <div class="mb-1 truncate font-medium text-foreground" title={snip.title}>{snip.title}</div>
+      {/if}
+      {#if snip.body}
+        <div class="line-clamp-2 text-muted-foreground">{snip.body}</div>
       {/if}
       {#if snip.caption}
         <div class="mt-1 line-clamp-2 text-foreground/80 italic" title={snip.caption}>
@@ -142,7 +160,7 @@
           {snip.caption}
         </div>
       {/if}
-      {#if !snip.text && !snip.caption}
+      {#if !snip.body && !snip.caption}
         <div class="text-muted-foreground/60 italic">no text</div>
       {/if}
     {:else}

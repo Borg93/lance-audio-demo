@@ -13,7 +13,7 @@ import { hitKey } from '$lib/utils';
 export const MAX_SCOPE_DOCS = 80;
 
 /** Cap on the distinct chunks a chunk-level refine ANDs in: each becomes one
- *  `(doc_id=… AND speech_id=… AND chunk_id=…)` OR-term, so we keep the clause
+ *  one `(key1=… AND key2=… …)` OR-term over the descriptor identity fields, so we keep the clause
  *  count well under the datafusion limit that destabilises large key-OR filters. */
 export const MAX_SCOPE_CHUNKS = 300;
 

@@ -135,15 +135,19 @@ export function buildCategoryLegend(
     .sort((a, b) => b.count - a.count);
 }
 
-/** The legend panel's title for the active categorical colour mode. */
+/** Humanize a descriptor field/channel/space name for a menu or legend label
+ *  (`doc_topic` → `Doc Topic`) — derived from the descriptor string at runtime,
+ *  never a hardcoded corpus column. */
+export function channelLabel(name: string): string {
+  return name
+    .split(/[_\s]+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+/** The legend panel's title for the active categorical colour mode — the
+ *  humanized channel name (empty for the special `cluster`/`none` modes). */
 export function categoryTitle(colorBy: ColorBy): string {
-  return colorBy === 'language'
-    ? 'Languages'
-    : colorBy === 'topic'
-      ? 'Topics'
-      : colorBy === 'doc_topic'
-        ? 'Video topics'
-        : colorBy === 'doc'
-          ? 'Videos'
-          : '';
+  return colorBy === 'cluster' || colorBy === 'none' ? '' : channelLabel(colorBy);
 }

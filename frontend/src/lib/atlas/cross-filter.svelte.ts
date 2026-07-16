@@ -2,7 +2,7 @@
  * Shared bidirectional cross-filter state for the atlas ⇄ search workspace.
  *
  * One singleton store, two independent Sets over the SAME point universe (the
- * loaded atlas points), keyed by point INDEX (not the `doc|speech|chunk`
+ * loaded atlas points), keyed by point INDEX (not the descriptor-identity
  * string — index Sets avoid stringify churn on the hot recolour path):
  *
  *   • `filteredIds` — the SEARCH + facet result set projected to point indices
@@ -20,36 +20,48 @@
  * feeds `setFilteredFromHits` and reads `selectedIds`.
  */
 
-import type { Hit, AtlasSpace } from '$lib/api';
+import type { Hit, AtlasPoints, AtlasSpace } from '$lib/api';
+import { activeView } from '$lib/descriptor';
 import { hitKey } from '$lib/utils';
 
-/** Colour channel for the scatter (legend + per-point recolour). `topic` =
- *  chunk broad topic (topic_l2); `doc_topic` = per-video topic. */
-export type ColorBy = 'cluster' | 'language' | 'topic' | 'doc_topic' | 'doc' | 'none';
+/** Colour channel for the scatter (legend + per-point recolour). `cluster` and
+ *  `none` are special; any other value is a declared atlas-channel name read
+ *  from the descriptor (`activeView().atlasChannels(space)`). */
+export type ColorBy = 'cluster' | 'none' | (string & {});
 
-/** Build a `'doc|speech|chunk' → point index` map once per loaded space. `doc`
- *  is `ArrayLike<number>` so an `Int32Array` (from the points payload) satisfies
- *  it; the key columns are read by index only. */
-export function buildKeyIndex(
-  docs: readonly string[],
-  doc: ArrayLike<number>,
-  speech_id: readonly number[],
-  chunk_id: readonly number[],
-): Map<string, number> {
+/** Build a `descriptor-identity → point index` map once per loaded space. The
+ *  key is the joined identity key fields — the doc key resolved through the
+ *  point's `doc` dictionary, the remaining key fields read from `points.keys` —
+ *  so it matches {@link hitKey}/`rowKey` and a search hit shares its point's key. */
+export function buildKeyIndex(pts: AtlasPoints): Map<string, number> {
+  const view = activeView();
+  const keyFields = view.keyFields;
+  const docKeyField = view.docKeyField;
   const map = new Map<string, number>();
-  for (let i = 0; i < doc.length; i++) {
-    const dc = doc[i];
-    const d = dc !== undefined ? docs[dc] : undefined;
-    const s = speech_id[i];
-    const c = chunk_id[i];
-    if (d === undefined || s === undefined || c === undefined) continue;
-    map.set(`${d}|${s}|${c}`, i);
+  const n = pts.doc.length;
+  for (let i = 0; i < n; i++) {
+    const parts: string[] = [];
+    let ok = true;
+    for (const field of keyFields) {
+      if (field === docKeyField) {
+        const dc = pts.doc[i];
+        const d = dc !== undefined ? pts.docs[dc] : undefined;
+        if (d === undefined) {
+          ok = false;
+          break;
+        }
+        parts.push(d);
+      } else {
+        parts.push(String(pts.keys[field]?.[i] ?? ''));
+      }
+    }
+    if (ok) map.set(parts.join('|'), i);
   }
   return map;
 }
 
 // `hitKey` lives in `$lib/utils` (single source); re-exported here so atlas
-// consumers keep importing it alongside `buildKeyIndex`. Its `doc|speech|chunk`
+// consumers keep importing it alongside `buildKeyIndex`. Its descriptor-identity
 // shape must stay in lock-step with `buildKeyIndex` above.
 export { hitKey };
 
@@ -74,7 +86,7 @@ class CrossFilter {
    *  colour channel). Keyed by ColorBy; recoloured to background on the map. */
   hiddenByMode = $state.raw<Map<ColorBy, Set<number>>>(new Map());
 
-  /** `doc|speech|chunk → index` for the CURRENT space (rebuilt on space swap). */
+  /** Descriptor-identity → index for the CURRENT space (rebuilt on space swap). */
   keyToIndex = $state.raw<Map<string, number>>(new Map());
 
   get hasSelection(): boolean {

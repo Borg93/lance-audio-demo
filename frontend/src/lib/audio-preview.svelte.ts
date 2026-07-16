@@ -12,7 +12,7 @@
  * guard below. Mirrors the `voiceSearch` singleton pattern.
  */
 import { SvelteSet } from 'svelte/reactivity';
-import { mediaUrl } from '$lib/api';
+import { activeView } from '$lib/descriptor';
 
 /** Grace past the clip end before the manual stop kicks in — engines that DO
  *  honor the end fragment pause themselves first and never reach it. */
@@ -54,8 +54,10 @@ class AudioPreviewStore {
     this.#docId = docId;
     this.#end = end > start ? end : Infinity;
     // Media fragment: seek to start and (where the engine honors it) stop at
-    // end. Same URL helper as the player pane's <video src>.
-    el.src = `${mediaUrl(docId)}#t=${start}${end > start ? `,${end}` : ''}`;
+    // end. Build the doc's media URL through the descriptor's doc key.
+    const view = activeView();
+    const src = view.mediaUrl({ [view.docKeyField]: docId });
+    el.src = `${src}#t=${start}${end > start ? `,${end}` : ''}`;
     this.playing = key;
     void el.play().catch((err: unknown) => {
       // Quickly switching to another row aborts this play() — not a failure.

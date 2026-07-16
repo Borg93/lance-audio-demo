@@ -130,7 +130,7 @@
       label: 'A person on the timeline',
       desc: 'Every clip mentioning Carl Bildt, in order — click a result row to jump to that moment in the video.',
       query:
-        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk) WHERE a.name_lower = 'carl bildt' RETURN c.namn, c.start_s, c.text ORDER BY c.start_s LIMIT 20",
+        "MATCH (a:Entity)-[:MENTIONS]->(c:Chunk) WHERE a.name_lower = 'carl bildt' RETURN c.doc_id, c.start_s, c.text ORDER BY c.start_s LIMIT 20",
     },
     {
       label: 'Topics tied to a place',
@@ -655,7 +655,7 @@
               >
                 <div class="text-foreground flex items-center gap-1 text-xs">
                   <span class="text-primary font-mono">{fmtTime(c.start)}</span>
-                  <span class="text-muted-foreground truncate">{c.namn}</span>
+                  <span class="text-muted-foreground truncate">{c.title}</span>
                 </div>
                 {#if c.text}<p class="text-muted-foreground mt-0.5 line-clamp-2 text-xs">{c.text}</p>{/if}
               </button>

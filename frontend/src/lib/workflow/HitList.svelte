@@ -4,7 +4,7 @@
    *  or remove anywhere a hit appears (shared tag store → flows into Export).
    *  Shared by the Results node and the Inspector so both render identically. */
   import { Play, Plus, X } from 'lucide-svelte';
-  import { chunkFrameUrl, type Hit } from '$lib/api';
+  import { activeView, chunkFrameUrl, type Hit } from '$lib/api';
   import { graph } from '$lib/workflow/graph.svelte';
   import { hitKey } from '$lib/utils';
 
@@ -34,6 +34,8 @@
     {@const key = hitKey(h)}
     {@const isSel = selectedKey === key}
     {@const tags = graph.tags.forHit(h)}
+    {@const title = activeView().title(h)}
+    {@const body = activeView().body(h)}
     <div
       class="group rounded border bg-background transition-colors"
       class:border-primary={isSel}
@@ -51,7 +53,7 @@
       >
         <div class="relative shrink-0">
           <img
-            src={chunkFrameUrl(h.doc_id, h.speech_id, h.chunk_id)}
+            src={chunkFrameUrl(h)}
             alt=""
             loading="lazy"
             class="h-10 w-14 rounded bg-muted object-cover"
@@ -73,12 +75,12 @@
           </span>
         </div>
         <div class="min-w-0">
-          {#if h.namn}
-            <div class="truncate text-[10px] font-medium text-foreground" title={h.namn}>
-              {h.namn}
+          {#if title}
+            <div class="truncate text-[10px] font-medium text-foreground" {title}>
+              {title}
             </div>
           {/if}
-          <div class="line-clamp-2 text-[10px] text-muted-foreground">{h.text}</div>
+          <div class="line-clamp-2 text-[10px] text-muted-foreground">{body}</div>
         </div>
       </button>
 

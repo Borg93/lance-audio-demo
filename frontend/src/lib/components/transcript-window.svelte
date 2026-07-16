@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { DocTranscriptChunk } from '$lib/api';
-  import { fmtTime } from '$lib/utils';
+  import { activeView, type DocTranscriptChunk } from '$lib/api';
+  import { fmtTime, hitKey } from '$lib/utils';
   import { Play } from 'lucide-svelte';
   import TranscriptHighlighter from './transcript-highlighter.svelte';
 
@@ -47,18 +47,19 @@
 </script>
 
 <div class={variant === 'overlay' ? 'text-left' : ''}>
-  {#each chunks as c, j (c.speech_id + ':' + c.chunk_id)}
+  {#each chunks as c, j (hitKey(c))}
     {@const isCurrent = windowStartIdx + j === currentChunkIdx}
+    {@const start = activeView().time(c)?.start ?? null}
     <div class={blockClass(isCurrent)}>
       <div class="flex items-center gap-1.5 py-0.5 text-[11px] font-mono text-muted-foreground">
-        <span>{fmtTime(c.start)}</span>
+        {#if start != null}<span>{fmtTime(start)}</span>{/if}
         {#if isCurrent}
           <span class="inline-flex items-center gap-0.5 font-sans font-medium text-primary">
             <Play class="size-3 fill-current" />playing
           </span>
         {/if}
       </div>
-      <TranscriptHighlighter alignments={c.alignments} {media} {query} chrome={false} />
+      <TranscriptHighlighter alignments={c.alignments ?? []} {media} {query} chrome={false} />
     </div>
   {/each}
 </div>

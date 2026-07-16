@@ -2,6 +2,7 @@
   /** Persistent right panel. Click a node → see its inputs + intermediate
    *  results; click a result → play it here (reuses PlayerPane). */
   import { ArrowLeft, Copy, Download, Eye, EyeOff } from 'lucide-svelte';
+  import { activeView } from '$lib/api';
   import {
     graph,
     modeLabel,
@@ -9,7 +10,7 @@
     RERANK_TOP_N,
     STATUS_DOT,
   } from '$lib/workflow/graph.svelte';
-  import { exportHits, EXPORT_COLUMNS } from '$lib/workflow/export';
+  import { exportHits, exportColumns } from '$lib/workflow/export';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import HitList from '$lib/workflow/HitList.svelte';
 
@@ -21,10 +22,15 @@
 
   const EXPORT_FORMATS = ['csv', 'json'] as const;
 
+  // Every column the active dataset offers, and the current selection (a `null`
+  // config means "all"), both derived from the descriptor.
+  const allColumns = $derived(exportColumns());
+  const selectedColumns = $derived(cfg ? (cfg.exportColumns ?? allColumns) : []);
+
   /** Toggle one export column, keeping the selection in canonical column order. */
   function toggleExportColumn(nodeId: string, current: readonly string[], col: string): void {
     const has = current.includes(col);
-    const next = EXPORT_COLUMNS.filter((c) => (c === col ? !has : current.includes(c)));
+    const next = exportColumns().filter((c) => (c === col ? !has : current.includes(c)));
     graph.setConfig(nodeId, { exportColumns: next });
   }
 
@@ -48,8 +54,14 @@
     if (kind === 'image') r.push(['Image', cfg.imageName || '(none uploaded)']);
     if (kind === 'filter') {
       if (cfg.where) r.push(['Where', cfg.where]);
-      if (cfg.language) r.push(['Language', cfg.language]);
-      if (cfg.namn) r.push(['Name', cfg.namn]);
+      const view = activeView();
+      for (const field of view.filterFields) {
+        const value = cfg.filters[field];
+        if (value) {
+          const label = view.metadataFields.find((m) => m.field === field)?.label ?? field;
+          r.push([label, value]);
+        }
+      }
       if (!r.length) r.push(['Filter', '(empty)']);
     }
     if (kind === 'search') {
@@ -88,7 +100,7 @@
         <ArrowLeft class="size-4" />
       </button>
       <span class="truncate text-sm font-medium text-foreground">
-        {graph.selectedHit.namn || 'Now playing'}
+        {activeView().title(graph.selectedHit) || 'Now playing'}
       </span>
     {:else}
       <span class="text-sm font-medium text-foreground">Inspector</span>
@@ -169,13 +181,13 @@
             <div>
               <div class="mb-1 flex items-center justify-between">
                 <span class="text-[10px] tracking-wide text-muted-foreground uppercase">
-                  Columns ({cfg.exportColumns.length}/{EXPORT_COLUMNS.length})
+                  Columns ({selectedColumns.length}/{allColumns.length})
                 </span>
                 <div class="flex gap-2 text-[10px]">
                   <button
                     type="button"
                     class="text-primary hover:underline"
-                    onclick={() => graph.setConfig(id, { exportColumns: [...EXPORT_COLUMNS] })}
+                    onclick={() => graph.setConfig(id, { exportColumns: null })}
                   >
                     All
                   </button>
@@ -189,13 +201,13 @@
                 </div>
               </div>
               <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
-                {#each EXPORT_COLUMNS as col (col)}
+                {#each allColumns as col (col)}
                   <label class="flex items-center gap-1.5 text-[11px] text-foreground">
                     <input
                       type="checkbox"
                       class="size-3 accent-primary"
-                      checked={cfg.exportColumns.includes(col)}
-                      onchange={() => toggleExportColumn(id, cfg.exportColumns, col)}
+                      checked={selectedColumns.includes(col)}
+                      onchange={() => toggleExportColumn(id, selectedColumns, col)}
                     />
                     <span class="truncate" title={col}>{col}</span>
                   </label>
@@ -206,7 +218,7 @@
             <button
               type="button"
               class="inline-flex items-center justify-center gap-1.5 rounded border border-border bg-background px-2 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-              disabled={hits.length === 0 || cfg.exportColumns.length === 0}
+              disabled={hits.length === 0 || selectedColumns.length === 0}
               onclick={() =>
                 exportHits(
                   graph.tags.withTags(hits),
@@ -231,7 +243,7 @@
         {:else if kind === 'search' || kind === 'results' || kind === 'export' || kind === 'combine' || kind === 'tagger'}
           <p class="text-[11px] text-muted-foreground">
             {#if kind === 'export' && rt.status === 'idle'}
-              Press Run to feed results. Selected columns{cfg.exportColumns.includes('tags')
+              Press Run to feed results. Selected columns{selectedColumns.includes('tags')
                 ? ' (including tags)'
                 : ''} will export.
             {:else if rt.status === 'idle'}

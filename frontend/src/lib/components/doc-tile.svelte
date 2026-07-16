@@ -1,7 +1,7 @@
 <script lang="ts">
   import { thumbnailUrl, type Document } from '$lib/api';
-  import { fmtTime } from '$lib/utils';
-  import { cn } from '$lib/utils';
+  import { activeView } from '$lib/descriptor';
+  import { fmtTime, cn } from '$lib/utils';
 
   type Props = {
     doc: Document;
@@ -9,6 +9,21 @@
     onclick?: () => void;
   };
   let { doc, active = false, onclick }: Props = $props();
+
+  // The active dataset view — title/duration/metadata come from the descriptor,
+  // so this gallery tile renders any dataset's document schema.
+  const view = activeView();
+  const title = $derived(view.title(doc));
+  const duration = $derived(view.duration(doc));
+  // Declared metadata (label+value, empties dropped) minus any row that just
+  // repeats the title, joined into one compact identifier line.
+  const metaLine = $derived(
+    view
+      .metadata(doc)
+      .filter((m) => m.value !== title)
+      .map((m) => m.value)
+      .join('  ·  '),
+  );
 </script>
 
 <button
@@ -25,27 +40,27 @@
 >
   <div class="relative aspect-video w-full overflow-hidden bg-muted">
     <img
-      src={thumbnailUrl(doc.doc_id)}
+      src={thumbnailUrl(doc)}
       alt=""
       loading="lazy"
       class="h-full w-full object-cover transition-transform group-hover:scale-105"
       onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
     />
-    {#if doc.duration}
+    {#if duration != null}
       <span
         class="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-white backdrop-blur-sm"
       >
-        {fmtTime(doc.duration)}
+        {fmtTime(duration)}
       </span>
     {/if}
   </div>
   <div class="flex flex-1 flex-col gap-1 p-3">
     <div class="line-clamp-2 text-sm font-medium leading-snug">
-      {doc.namn ?? doc.audio_path}
+      {title}
     </div>
-    {#if doc.referenskod}
-      <div class="font-mono text-[10px] text-muted-foreground">
-        {doc.referenskod}
+    {#if metaLine}
+      <div class="truncate font-mono text-[10px] text-muted-foreground" title={metaLine}>
+        {metaLine}
       </div>
     {/if}
   </div>

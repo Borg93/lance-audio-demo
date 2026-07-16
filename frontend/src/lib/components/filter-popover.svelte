@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Input, Button, type SelectOption } from '$lib/components/ui';
   import { Popover } from 'bits-ui';
-  import { listColumns, type SearchSpec, type ColumnInfo } from '$lib/api';
+  import { activeView, listColumns, type SearchSpec, type ColumnInfo } from '$lib/api';
   import { Filter, X, Eye, EyeOff, Plus } from 'lucide-svelte';
   import { cn } from '$lib/utils';
 
@@ -11,36 +11,40 @@
   };
   let { spec = $bindable(), onchange }: Props = $props();
 
-  // Language is a tiny enum, kept as a one-click convenience. Everything else
-  // goes through the generic column builder below, which compiles to `where`.
-  let language = $state(spec.language ?? '');
+  // All filters go through the generic column builder below, which compiles to
+  // a `where` clause — no hardcoded per-corpus quick filters.
   let whereSql = $state(spec.where ?? '');
 
   // Re-sync from `spec` when it changes OUTSIDE this popover — an active-filter
-  // pill removed (active-filters.svelte), a topic seeded, or Clear-all. These were
+  // pill removed (active-filters.svelte), a topic seeded, or Clear-all. This was
   // captured once at mount, so a dropped filter stayed stale here: it still counted
   // toward the badge and got re-committed on the next edit, so it "came back" — the
   // not-dropped-when-popped bug. Typing in the raw-SQL box is NOT clobbered: it
   // mutates `whereSql` locally (not `spec.where`), so this effect only re-fires on an
   // external change, not mid-keystroke.
   $effect(() => {
-    language = spec.language ?? '';
     whereSql = spec.where ?? '';
   });
 
   function commit() {
     // Always prefilter (correct + uses the scalar index; never returns < n).
-    spec = { ...spec, language: language || undefined, where: whereSql || undefined };
+    spec = { ...spec, where: whereSql || undefined };
     onchange?.();
   }
 
   function clearAll() {
-    language = '';
     whereSql = '';
     commit();
   }
 
-  const activeCount = $derived([language, whereSql].filter(Boolean).length);
+  const activeCount = $derived(whereSql.trim() ? 1 : 0);
+
+  // Example WHERE for the raw-SQL box: a real filterable field where one is
+  // declared, else a generic numeric comparison — never a hardcoded corpus name.
+  const wherePlaceholder = $derived.by(() => {
+    const fields = activeView().filterFields;
+    return fields.length > 0 ? `${fields[0]} LIKE '%…%'` : 'duration > 60';
+  });
 
   // ── Filterable columns (from the backend) ──────────────────────────────
   let columns = $state<ColumnInfo[]>([]);
@@ -230,20 +234,6 @@
         {/if}
       </div>
 
-      <!-- Language quick filter -->
-      <label class="flex items-center justify-between gap-2">
-        <span class="text-muted-foreground">Language</span>
-        <select
-          bind:value={language}
-          onchange={commit}
-          class="h-8 w-32 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <option value="">Any</option>
-          <option value="sv">Swedish</option>
-          <option value="en">English</option>
-        </select>
-      </label>
-
       <!-- Manage which columns appear in the builder -->
       <div class="border-t border-border pt-2">
         <button
@@ -296,7 +286,7 @@
           onchange={commit}
           onblur={commit}
           rows={2}
-          placeholder="duration > 60 AND namn LIKE '%alkohol%'"
+          placeholder={wherePlaceholder}
           class="mt-1.5 min-h-[2rem] w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         ></textarea>
         <span class="text-[10px] text-muted-foreground/70">
