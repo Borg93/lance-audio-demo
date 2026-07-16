@@ -13,7 +13,7 @@
    */
   import { browser } from '$app/environment';
   import type { Component } from 'svelte';
-  import { getAtlasStatus } from '$lib/api';
+  import { activeView, getAtlasStatus } from '$lib/api';
 
   type Phase = 'loading' | 'ready' | 'unavailable' | 'error';
 
@@ -27,11 +27,18 @@
 
     (async () => {
       try {
-        // Report both spaces; the view is available if either text or visual
-        // is projected (the in-map toggle gates the absent one).
-        const status = await getAtlasStatus('text');
+        // A dataset that declares no atlas spaces has no map at all — show the
+        // empty state without ever hitting /api/atlas (which would 404).
+        const spaces = activeView().atlasSpaces;
+        if (spaces.length === 0) {
+          phase = 'unavailable';
+          return;
+        }
+        // Probe the first declared space; the view is available if any declared
+        // space is built (the in-map toggle gates the absent ones).
+        const status = await getAtlasStatus(spaces[0]!.name);
         if (cancelled) return;
-        const anyBuilt = status.projected || (status.spaces?.visual ?? false);
+        const anyBuilt = status.projected || Object.values(status.spaces ?? {}).some(Boolean);
         if (!anyBuilt) {
           phase = 'unavailable';
           return;

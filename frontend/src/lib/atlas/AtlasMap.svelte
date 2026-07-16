@@ -183,9 +183,15 @@
     }
   });
 
+  // Whether this dataset declares any atlas spaces at all. When it doesn't
+  // (e.g. a corpus with no projections), the whole view degrades to an empty
+  // state and NEVER fetches /api/atlas/* — no spurious 404s.
+  const hasAtlas = $derived(view.atlasSpaces.length > 0);
+
   // Probe which declared spaces are built (gates the space tabs), then load the
   // current one. /status reports every declared space's built-ness by name.
   $effect(() => {
+    if (!hasAtlas) return;
     let cancelled = false;
     (async () => {
       try {
@@ -203,6 +209,7 @@
   // Load whenever the chosen space changes (initial mount + Text/Visual toggle).
   $effect(() => {
     const space = crossFilter.space;
+    if (!hasAtlas) return;
     void load(space);
   });
 
@@ -627,7 +634,11 @@
   const legendMode = $derived(crossFilter.colorBy);
 </script>
 
-{#if error}
+{#if !hasAtlas}
+  <div class="grid h-full place-items-center p-6 text-center text-sm text-muted-foreground">
+    This dataset has no embedding map.
+  </div>
+{:else if error}
   <div class="grid h-full place-items-center p-6 text-center text-sm text-destructive">
     Failed to load the embedding map: {error}
   </div>
