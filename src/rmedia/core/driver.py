@@ -43,7 +43,10 @@ logger = logging.getLogger(__name__)
 
 
 def _table_uri(db_path: str | Path, table: str) -> str:
-    return str(Path(db_path) / f"{table}.lance")
+    # Resolved absolute path: a relative URI would be re-rooted inside Ray's
+    # runtime-env working-dir COPY on the workers (a stale snapshot), silently
+    # missing data files written after job submission.
+    return str((Path(db_path) / f"{table}.lance").resolve())
 
 
 class _ScanActor:
