@@ -1,6 +1,7 @@
 """Speaker-diarization pipeline commands: ``extract-speaker-turns`` →
-``embed-speaker-turns`` → ``build-speakers`` → ``cluster-speakers`` plus the
-two shard-fold merges (``merge-speaker-turns``, ``merge-speaker-embeddings``).
+``embed-speaker-turns`` → ``build-speakers`` → ``cluster-speakers``. (The Ray
+stages `diarize`/`voiceprint` — `rmedia pipeline run` — are the batch path;
+these single-process commands remain for small/ad-hoc runs.)
 
 Each handler parses its options, calls one library function (in
 :mod:`rmedia.modalities.av.diarize`, :mod:`rmedia.modalities.av.voiceprint`, or
@@ -68,27 +69,6 @@ def cmd_extract_speaker_turns(
             help="Debug: diarize only the first N videos (0 = no limit). DO use this.",
         ),
     ] = 0,
-    num_shards: Annotated[
-        int,
-        typer.Option(
-            "--num-shards",
-            help=(
-                "Split the corpus across N parallel workers (1 = no sharding). "
-                "Diarization is CPU/pipeline-bound and barely uses the GPU, so "
-                "running several workers on one GPU multiplies throughput. Launch "
-                "N processes, one per --shard-index, each writing a disjoint slice "
-                "to speaker_turns_shard{i}.lance; fold them back with "
-                "`raudio merge-speaker-turns`."
-            ),
-        ),
-    ] = 1,
-    shard_index: Annotated[
-        int,
-        typer.Option(
-            "--shard-index",
-            help="This worker's shard in [0, num-shards). Only used when --num-shards > 1.",
-        ),
-    ] = 0,
 ) -> None:
     """Diarize each video → ``speaker_turns.lance`` (NEW append-only table).
 
@@ -103,12 +83,7 @@ def cmd_extract_speaker_turns(
     import lancedb
     from tqdm import tqdm
 
-    from rmedia.modalities.av.diarize import (
-        Diarizer,
-        existing_doc_ids,
-        shard_of,
-        write_speaker_turns,
-    )
+    from rmedia.modalities.av.diarize import Diarizer, existing_doc_ids, write_speaker_turns
 
     from ..ingest.audio import resolve_source
 
@@ -117,18 +92,9 @@ def cmd_extract_speaker_turns(
     _require_table(db, cfg.table, cfg.db)
     chunks_tbl = db.open_table(cfg.table)
 
-    if num_shards < 1:
-        raise typer.BadParameter("--num-shards must be >= 1")
-    sharded = num_shards > 1
-    if sharded and not 0 <= shard_index < num_shards:
-        raise typer.BadParameter(f"--shard-index must be in [0, {num_shards})")
 
-    # Shards stage to their own table; `merge-speaker-turns` folds them into the
-    # canonical `speaker_turns` afterwards (separate tables avoid concurrent-write
-    # commit conflicts that N appenders to one table would hit).
-    table_name = f"speaker_turns_shard{shard_index}" if sharded else "speaker_turns"
+    table_name = "speaker_turns"
     turns_path = cfg.db / f"{table_name}.lance"
-    main_path = cfg.db / "speaker_turns.lance"
     existing_tables = db.list_tables().tables
     turns_exists = table_name in existing_tables
 
@@ -140,14 +106,10 @@ def cmd_extract_speaker_turns(
         db.drop_table(table_name)
         turns_exists = False
 
-    # Resume: skip videos this table already has and — in shard mode — anything
-    # already merged into the canonical table, so no worker ever re-diarizes a
-    # video another worker or an earlier single run already finished.
+    # Resume: skip videos this table already has.
     already: set[str] = set()
     if only_null and turns_exists:
         already |= existing_doc_ids(turns_path)
-    if sharded and "speaker_turns" in existing_tables:
-        already |= existing_doc_ids(main_path)
     if already:
         typer.echo(f"  {len(already):,} video(s) already diarized — skipping.", err=True)
 
@@ -162,8 +124,6 @@ def cmd_extract_speaker_turns(
     for r in rows:
         seen.setdefault(r["doc_id"], r["audio_path"])
     docs = [(d, ap) for d, ap in seen.items() if d not in already]
-    if sharded:
-        docs = [(d, ap) for d, ap in docs if shard_of(d, num_shards) == shard_index]
     docs.sort(key=lambda t: t[0])
     if limit > 0:
         docs = docs[:limit]
@@ -189,9 +149,8 @@ def cmd_extract_speaker_turns(
         typer.echo("Nothing diarizable.", err=True)
         return
 
-    shard_tag = f" [shard {shard_index}/{num_shards}]" if sharded else ""
     typer.echo(
-        f"Diarizing {len(resolved)} video(s) from {audio_root}{shard_tag} (model={model}).",
+        f"Diarizing {len(resolved)} video(s) from {audio_root} (model={model}).",
         err=True,
     )
     diarizer = Diarizer(model=model)
@@ -213,9 +172,7 @@ def cmd_extract_speaker_turns(
     # once after the batch loop (not per-append), idempotent via replace=True,
     # and only when the table actually has rows. Mirrors build_topics.py: the
     # index is an optimization, never required, so a failure just logs a skip.
-    # Shards skip the index — it is (re)built once on the canonical table by
-    # `merge-speaker-turns`. A single (non-shard) run builds it inline as before.
-    if not sharded and turns_path.exists():
+    if turns_path.exists():
         turns_tbl = db.open_table(table_name)
         if turns_tbl.count_rows() > 0:
             try:
@@ -223,63 +180,6 @@ def cmd_extract_speaker_turns(
                 logger.info("built BTREE scalar index on speaker_turns.doc_id")
             except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
                 logger.debug("scalar index (speaker_turns.doc_id) skipped: %s", e)
-
-
-@app.command("merge-speaker-turns")
-def cmd_merge_speaker_turns(
-    ctx: typer.Context,
-    drop_shards: Annotated[
-        bool,
-        typer.Option(
-            "--drop-shards/--keep-shards",
-            help="Delete the speaker_turns_shard* staging tables after a successful merge.",
-        ),
-    ] = True,
-) -> None:
-    """Fold ``speaker_turns_shard*.lance`` staging tables into ``speaker_turns.lance``.
-
-    The sharded ``extract-speaker-turns`` workers each write a disjoint slice to
-    their own staging table; this concatenates them (plus any existing canonical
-    rows, which win on a ``doc_id`` collision so re-running is safe), overwrites
-    ``speaker_turns``, rebuilds the ``doc_id`` BTREE index the backend's
-    ``GET /api/diarization/{doc_id}`` relies on, and drops the staging tables.
-    """
-    import lancedb
-
-    from rmedia.modalities.av.voiceprint import fold_shards
-
-    from ..model.schema import SPEAKER_TURNS_SCHEMA, SPEAKER_TURNS_STORAGE_VERSION
-
-    cfg: CliContext = ctx.obj
-    db = lancedb.connect(str(cfg.db))
-
-    def _rebuild(turns_tbl: lancedb.table.Table) -> None:
-        try:
-            turns_tbl.create_scalar_index("doc_id", index_type="BTREE", replace=True)
-            logger.info("rebuilt BTREE scalar index on speaker_turns.doc_id")
-        except Exception as e:  # noqa: BLE001 — the index is an optimization, never required
-            logger.debug("scalar index (speaker_turns.doc_id) skipped: %s", e)
-
-    result = fold_shards(
-        db,
-        cfg.db,
-        "speaker_turns",
-        schema=SPEAKER_TURNS_SCHEMA,
-        storage_version=SPEAKER_TURNS_STORAGE_VERSION,
-        drop_shards=drop_shards,
-        rebuild_indexes=_rebuild,
-    )
-    if result is None:
-        typer.echo("No speaker_turns_shard* staging tables found — nothing to merge.", err=True)
-        return
-
-    n_videos, n_rows = result
-    typer.echo(
-        f"  merged → speaker_turns.lance: {n_videos:,} video(s), {n_rows:,} turn(s).",
-        err=True,
-    )
-    if drop_shards:
-        typer.echo("  dropped staging table(s).", err=True)
 
 
 @app.command("embed-speaker-turns")
@@ -331,25 +231,6 @@ def cmd_embed_speaker_turns(
             help="Debug: embed only the first N videos (0 = no limit). DO use this.",
         ),
     ] = 0,
-    num_shards: Annotated[
-        int,
-        typer.Option(
-            "--num-shards",
-            help=(
-                "Split the corpus across N parallel workers (1 = no sharding). "
-                "Launch N processes, one per --shard-index, each writing a disjoint "
-                "slice to speaker_embeddings_shard{i}.lance; fold them back with "
-                "`raudio merge-speaker-embeddings`."
-            ),
-        ),
-    ] = 1,
-    shard_index: Annotated[
-        int,
-        typer.Option(
-            "--shard-index",
-            help="This worker's shard in [0, num-shards). Only used when --num-shards > 1.",
-        ),
-    ] = 0,
 ) -> None:
     """Embed each diarized turn's voice → ``speaker_embeddings.lance`` (NEW append-only table).
 
@@ -363,7 +244,7 @@ def cmd_embed_speaker_turns(
     import lancedb
     from tqdm import tqdm
 
-    from rmedia.modalities.av.diarize import existing_doc_ids, shard_of
+    from rmedia.modalities.av.diarize import existing_doc_ids
     from rmedia.modalities.av.voiceprint import (
         TurnSpan,
         VoiceEncoder,
@@ -379,11 +260,6 @@ def cmd_embed_speaker_turns(
     _require_table(db, cfg.table, cfg.db)
     chunks_tbl = db.open_table(cfg.table)
 
-    if num_shards < 1:
-        raise typer.BadParameter("--num-shards must be >= 1")
-    sharded = num_shards > 1
-    if sharded and not 0 <= shard_index < num_shards:
-        raise typer.BadParameter(f"--shard-index must be in [0, {num_shards})")
     if batch_size < 1:
         raise typer.BadParameter("--batch-size must be >= 1")
 
@@ -391,16 +267,13 @@ def cmd_embed_speaker_turns(
     if "speaker_turns" not in existing_tables:
         _die(
             f"Table 'speaker_turns' not found in {cfg.db} — run `raudio extract-speaker-turns` "
-            "first (and `raudio merge-speaker-turns` to fold its shards into the canonical "
-            "table; this command only reads the canonical speaker_turns)."
+            "or `rmedia pipeline run diarize` first."
         )
 
-    # Shards stage to their own table; `merge-speaker-embeddings` folds them into
     # the canonical `speaker_embeddings` afterwards (separate tables avoid
     # concurrent-write commit conflicts that N appenders to one table would hit).
-    table_name = f"speaker_embeddings_shard{shard_index}" if sharded else "speaker_embeddings"
+    table_name = "speaker_embeddings"
     emb_path = cfg.db / f"{table_name}.lance"
-    main_path = cfg.db / "speaker_embeddings.lance"
     emb_exists = table_name in existing_tables
 
     if emb_exists and not only_null:
@@ -408,13 +281,10 @@ def cmd_embed_speaker_turns(
         db.drop_table(table_name)
         emb_exists = False
 
-    # Resume: skip videos this table already has and — in shard mode — anything
-    # already merged into the canonical table.
+    # Resume: skip videos this table already has.
     already: set[str] = set()
     if only_null and emb_exists:
         already |= existing_doc_ids(emb_path)
-    if sharded and "speaker_embeddings" in existing_tables:
-        already |= existing_doc_ids(main_path)
     if already:
         typer.echo(f"  {len(already):,} video(s) already embedded — skipping.", err=True)
 
@@ -451,8 +321,6 @@ def cmd_embed_speaker_turns(
         audio_path_of.setdefault(r["doc_id"], r["audio_path"])
 
     docs = [d for d in turns_by_doc if d not in already and d in audio_path_of]
-    if sharded:
-        docs = [d for d in docs if shard_of(d, num_shards) == shard_index]
     docs.sort()
     if limit > 0:
         docs = docs[:limit]
@@ -478,9 +346,8 @@ def cmd_embed_speaker_turns(
         typer.echo("Nothing embeddable.", err=True)
         return
 
-    shard_tag = f" [shard {shard_index}/{num_shards}]" if sharded else ""
     typer.echo(
-        f"Embedding turns for {len(resolved)} video(s) from {audio_root}{shard_tag} "
+        f"Embedding turns for {len(resolved)} video(s) from {audio_root} "
         f"(model={model}, min_turn_duration={min_turn_duration}s).",
         err=True,
     )
@@ -501,65 +368,10 @@ def cmd_embed_speaker_turns(
     n_embeddings = write_speaker_embeddings(emb_path, rows, create=not emb_exists)
     typer.echo(f"  wrote {n_embeddings} embedding(s) across {len(resolved)} video(s).", err=True)
 
-    # Indexes on the canonical table only — shards defer to
-    # `merge-speaker-embeddings`, which rebuilds them after the fold.
-    if not sharded and emb_path.exists():
+    if emb_path.exists():
         emb_tbl = db.open_table(table_name)
         if emb_tbl.count_rows() > 0:
             speaker_embeddings_indexes(emb_tbl)
-
-
-@app.command("merge-speaker-embeddings")
-def cmd_merge_speaker_embeddings(
-    ctx: typer.Context,
-    drop_shards: Annotated[
-        bool,
-        typer.Option(
-            "--drop-shards/--keep-shards",
-            help="Delete the speaker_embeddings_shard* staging tables after a successful merge.",
-        ),
-    ] = True,
-) -> None:
-    """Fold ``speaker_embeddings_shard*.lance`` staging tables into ``speaker_embeddings.lance``.
-
-    The sharded ``embed-speaker-turns`` workers each write a disjoint slice to
-    their own staging table; this concatenates them (plus any existing canonical
-    rows, which win on a ``doc_id`` collision so re-running is safe), overwrites
-    ``speaker_embeddings``, rebuilds the ``doc_id`` BTREE + vector indexes, and
-    drops the staging tables. Mirrors ``merge-speaker-turns`` (see its NOTE on
-    the fragment-commit alternative if this table ever gets large).
-    """
-    import lancedb
-
-    from rmedia.modalities.av.voiceprint import fold_shards, speaker_embeddings_indexes
-
-    from ..model.schema import SPEAKER_EMBEDDINGS_SCHEMA, SPEAKER_EMBEDDINGS_STORAGE_VERSION
-
-    cfg: CliContext = ctx.obj
-    db = lancedb.connect(str(cfg.db))
-
-    result = fold_shards(
-        db,
-        cfg.db,
-        "speaker_embeddings",
-        schema=SPEAKER_EMBEDDINGS_SCHEMA,
-        storage_version=SPEAKER_EMBEDDINGS_STORAGE_VERSION,
-        drop_shards=drop_shards,
-        rebuild_indexes=speaker_embeddings_indexes,
-    )
-    if result is None:
-        typer.echo(
-            "No speaker_embeddings_shard* staging tables found — nothing to merge.", err=True
-        )
-        return
-
-    n_videos, n_rows = result
-    typer.echo(
-        f"  merged → speaker_embeddings.lance: {n_videos:,} video(s), {n_rows:,} embedding(s).",
-        err=True,
-    )
-    if drop_shards:
-        typer.echo("  dropped staging table(s).", err=True)
 
 
 @app.command("build-speakers")

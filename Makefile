@@ -27,7 +27,7 @@ GPU             ?= 2
 	ingest ingest-with-media ingest-full reindex-fts \
 	pipeline pipeline-sharded pipeline-multimodal \
 	embed-server rerank-server embed-server-docker rerank-server-docker vllm-stop kernels-prepare embed-chunks extract-chunk-frames embed-chunk-frames speaker-turns \
-	merge-speaker-turns embed-speaker-turns merge-speaker-embeddings build-speakers cluster-speakers \
+	embed-speaker-turns build-speakers cluster-speakers \
 	caption-chunk-frames embed-captions captions topics \
 	atlas atlas-visual atlas-caption atlas-all features-all stack-up stack-down \
 	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
@@ -371,9 +371,8 @@ caption-server:       ## Start a local caption VLM (port 8003) on GPU $(CAPTION_
 embed-chunks:         ## Embed chunks.text → text_embedding column + IVF_PQ index.
 	uv run --extra multimodal raudio --db $(DB) feature text_embedding --url $(EMBED_URL)
 
-EXTRACT_JOBS    ?= 16
-extract-chunk-frames: ## ffmpeg → one JPEG per chunk.start into the chunk_frames table.
-	uv run raudio --db $(DB) extract-chunk-frames --audio-root $(AUDIO_DIR) --jobs $(EXTRACT_JOBS)
+extract-chunk-frames: ## One JPEG per chunk.start into chunk_frames (Ray actor pool).
+	uv run rmedia --db $(DB) extract-chunk-frames --audio-root $(AUDIO_DIR)
 
 embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ index.
 	uv run --extra multimodal raudio --db $(DB) feature frame_embedding --url $(EMBED_URL)
@@ -381,14 +380,8 @@ embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ i
 speaker-turns:        ## Diarize each video → speaker_turns.lance (who-spoke-when; needs pyannote + cached HF token).
 	uv run raudio --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
 
-merge-speaker-turns:  ## Fold sharded speaker_turns staging tables into the canonical table.
-	uv run raudio --db $(DB) merge-speaker-turns
-
 embed-speaker-turns:  ## Per-turn WeSpeaker 256-d voiceprints → speaker_embeddings.lance (GPU; shardable).
 	uv run raudio --db $(DB) embed-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
-
-merge-speaker-embeddings: ## Fold speaker_embeddings shards into the canonical table + rebuild indexes.
-	uv run raudio --db $(DB) merge-speaker-embeddings
 
 build-speakers:       ## Duration-weighted centroid per (doc, label) → speakers.lance.
 	uv run raudio --db $(DB) build-speakers

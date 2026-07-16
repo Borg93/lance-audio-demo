@@ -14,22 +14,22 @@ keyframe forward, then drops frames) but plenty for press-conf footage
 where the speaker barely moves between keyframes. Output is piped to
 stdout as MJPEG so we never touch disk.
 
-CPU-bound ffmpeg startup is the bottleneck (~80–120ms/chunk). For ~145k
-chunks that's ~3–5 hours single-threaded; the worker-pool helper below
-parallelizes 4–8 ways for ~30–60 minutes wall-clock.
+CPU-bound ffmpeg startup is the bottleneck (~80–120ms/chunk); the Ray
+``extract_frames`` stage (rmedia pipeline run) parallelizes it across actors.
 """
 
 from __future__ import annotations
 
 import logging
-import shutil
 import struct
 import subprocess
-from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -39,21 +39,6 @@ logger = logging.getLogger(__name__)
 # Inline 64 KB threshold most of the time, spilling to sidecar otherwise.
 DEFAULT_FRAME_WIDTH: int = 448
 DEFAULT_JPEG_QUALITY: int = 4   # ffmpeg `-q:v` (1=best, 31=worst); 4 ~= JPEG q≈85
-
-
-class FrameJob(BaseModel):
-    """One frame to extract: a chunk key plus where/when to grab it.
-
-    ``frame_idx`` is 0 for a chunk's single representative frame, or 0..K-1
-    when a chunk is sampled at several timestamps.
-    """
-
-    doc_id: str
-    speech_id: int
-    chunk_id: int
-    frame_idx: int = 0
-    time_sec: float
-    source: Path
 
 
 class ExtractedFrame(BaseModel):
@@ -158,80 +143,6 @@ def extract_chunk_frame(
     return jpeg, w, h
 
 
-# ─────────────────────────────────────────────────────────────────────
-# Batch / worker-pool helper
-# ─────────────────────────────────────────────────────────────────────
-
-
-def _extract_one(job: FrameJob, *, width: int, jpeg_quality: int, timeout: float) -> ExtractedFrame:
-    """Worker-pool task: extract one frame, capturing failure as an error field."""
-    try:
-        jpeg, w, h = extract_chunk_frame(
-            source=job.source,
-            time_sec=job.time_sec,
-            width=width,
-            jpeg_quality=jpeg_quality,
-            timeout=timeout,
-        )
-        return ExtractedFrame(
-            doc_id=job.doc_id,
-            speech_id=job.speech_id,
-            chunk_id=job.chunk_id,
-            frame_idx=job.frame_idx,
-            time_sec=job.time_sec,
-            jpeg_bytes=jpeg,
-            width=w,
-            height=h,
-        )
-    except Exception as e:  # noqa: BLE001 — one bad video must not kill the batch
-        return ExtractedFrame(
-            doc_id=job.doc_id,
-            speech_id=job.speech_id,
-            chunk_id=job.chunk_id,
-            frame_idx=job.frame_idx,
-            time_sec=job.time_sec,
-            jpeg_bytes=b"",
-            width=0,
-            height=0,
-            error=str(e),
-        )
-
-
-def extract_chunk_frames_parallel(
-    jobs: Iterable[FrameJob],
-    *,
-    width: int = DEFAULT_FRAME_WIDTH,
-    jpeg_quality: int = DEFAULT_JPEG_QUALITY,
-    timeout: float = 30.0,
-    workers: int = 4,
-) -> Iterator[ExtractedFrame]:
-    """Extract frames for ``jobs`` across a thread pool, yielding in completion order.
-
-    Failures surface as ``ExtractedFrame(jpeg_bytes=b"", error=…)`` so one broken
-    video doesn't kill the run; callers buffer/batch the results (see
-    :func:`write_chunk_frames`).
-    """
-    if shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg not on PATH — install ffmpeg before running extract-chunk-frames")
-
-    jobs = list(jobs)
-    if not jobs:
-        return
-
-    if workers <= 1:
-        for job in jobs:
-            yield _extract_one(job, width=width, jpeg_quality=jpeg_quality, timeout=timeout)
-        return
-
-    # ffmpeg runs as a subprocess (GIL released during wait), so threads parallelize
-    # well. ThreadPool also dodges the `lance is not fork-safe` warning that
-    # ProcessPoolExecutor triggers via Linux's default fork start method.
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(_extract_one, job, width=width, jpeg_quality=jpeg_quality, timeout=timeout) for job in jobs]
-        for fut in as_completed(futures):
-            yield fut.result()
-
-
 def sample_times(start: float, end: float, every_seconds: float) -> list[float]:
     """Frame timestamps for one chunk.
 
@@ -246,32 +157,6 @@ def sample_times(start: float, end: float, every_seconds: float) -> list[float]:
         times.append(round(t, 3))
         t += every_seconds
     return times or [start]
-
-
-def existing_frame_keys(frames_path: Path) -> set[tuple[str, int, int, int]]:
-    """The ``(doc_id, speech_id, chunk_id, frame_idx)`` keys already in the table.
-
-    Returns an empty set when the table is absent or empty. Used to make
-    extraction resumable without ``IS NULL`` on a non-nullable blob column.
-    """
-    import lance
-
-    if not frames_path.exists():
-        return set()
-    ds = lance.dataset(str(frames_path))
-    if ds.count_rows() == 0:
-        return set()
-    keys = ds.to_table(columns=["doc_id", "speech_id", "chunk_id", "frame_idx"])
-    return {
-        (d, int(s), int(c), int(f))
-        for d, s, c, f in zip(
-            keys["doc_id"].to_pylist(),
-            keys["speech_id"].to_pylist(),
-            keys["chunk_id"].to_pylist(),
-            keys["frame_idx"].to_pylist(),
-            strict=True,
-        )
-    }
 
 
 def write_chunk_frames(

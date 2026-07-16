@@ -30,6 +30,7 @@ import lance
 import lance_ray
 import pyarrow as pa
 
+from rmedia.core.blobs import schema_has_blob
 from rmedia.core.engine import _ValueCheckpoint, attach_values_by_rowid
 
 if TYPE_CHECKING:
@@ -60,6 +61,13 @@ class _ScanActor:
         return batch.append_column(self._out, self._fn(batch))
 
 
+def _empty_rowid_table(out_name: str, output_type: pa.DataType) -> pa.Table:
+    return pa.table(
+        {"_rowid": pa.array([], pa.uint64()), out_name: pa.array([], output_type)},
+        schema=pa.schema([("_rowid", pa.uint64()), (out_name, output_type)]),
+    )
+
+
 class _BlobActor:
     """Generic blob-stage actor: reads its own payloads lazily by ``_rowid``.
 
@@ -74,26 +82,55 @@ class _BlobActor:
         dataset_uri: str,
         blob_column: str,
         out_name: str,
+        output_type: pa.DataType,
         done_ids: frozenset[int],
     ) -> None:
         self._fn = factory()
         self._ds = lance.dataset(dataset_uri)
         self._blob_column = blob_column
         self._out = out_name
+        self._type = output_type
         self._done = done_ids
 
     def __call__(self, batch: pa.Table) -> pa.Table:
         row_ids = [r for r in batch.column("_rowid").to_pylist() if r not in self._done]
         if not row_ids:
-            return pa.table({"_rowid": pa.array([], pa.uint64()), self._out: pa.array([], pa.string())}).cast(
-                pa.schema([("_rowid", pa.uint64()), (self._out, pa.string())])
-            )
+            return _empty_rowid_table(self._out, self._type)
         payloads: list[bytes] = []
         for blob in self._ds.take_blobs(self._blob_column, ids=row_ids):
             with blob as handle:
                 payloads.append(handle.read())
         values = self._fn(payloads)
         return pa.table({"_rowid": pa.array(row_ids, pa.uint64()), self._out: values})
+
+
+class _ScanByRowidActor:
+    """Scan-stage actor for BLOB-BEARING tables: results keyed by ``_rowid``.
+
+    ``merge_insert`` crashes Lance's blob decoder on blob-bearing tables
+    (invariant §7.1), so scan stages there return ``(_rowid, value)`` pairs for
+    a driver-side ``add_columns`` attach instead.
+    """
+
+    def __init__(
+        self,
+        factory: Callable[[], Callable[[pa.Table], pa.Array]],
+        out_name: str,
+        output_type: pa.DataType,
+        done_ids: frozenset[int],
+    ) -> None:
+        self._fn = factory()
+        self._out = out_name
+        self._type = output_type
+        self._done = done_ids
+
+    def __call__(self, batch: pa.Table) -> pa.Table:
+        mask = pa.array([r not in self._done for r in batch.column("_rowid").to_pylist()], pa.bool_())
+        pending = batch.filter(mask)
+        if pending.num_rows == 0:
+            return _empty_rowid_table(self._out, self._type)
+        values = self._fn(pending)
+        return pa.table({"_rowid": pending.column("_rowid"), self._out: values})
 
 
 class _RowsActor:
@@ -146,18 +183,48 @@ def run_scan_column_stage(
     *,
     factory: Callable[[], Callable[[pa.Table], pa.Array]],
     output_type: pa.DataType,
+    checkpoint_file: str | Path | None = None,
 ) -> int:
-    """Backfill ``stage.output_columns[0]`` for every NULL row. Returns rows written.
+    """Backfill ``stage.output_columns[0]``. Returns rows written.
 
-    The column is null-added first (metadata-only) when absent, which makes the
-    whole stage one idempotent fill: read ``WHERE col IS NULL`` via lance-ray,
-    compute on the actor pool, and ``merge_insert`` per result batch —
-    serialized here on the driver (Merge conflicts with nearly everything).
+    Two write shapes, chosen by whether the table carries blob-v2 columns:
+
+    * **non-blob table** — the column is null-added (metadata-only) when
+      absent, then one idempotent fill: read ``WHERE col IS NULL`` via
+      lance-ray, compute on the actor pool, ``merge_insert`` per result batch
+      (serialized here — Merge conflicts with nearly everything).
+    * **blob-bearing table** — ``merge_insert`` crashes Lance's blob decoder
+      (invariant §7.1), so the column is built all-or-nothing via ``_rowid``
+      pairs + a driver-side ``add_columns`` attach; an all-NULL leftover column
+      (e.g. from an aborted earlier run) is dropped and rebuilt.
     """
     [name] = stage.output_columns
     uri = _table_uri(db_path, stage.table)
     ds = lance.dataset(uri)
+    blob_table = schema_has_blob(ds.schema)
+
+    if name in ds.schema.names and blob_table:
+        total = ds.count_rows()
+        if ds.count_rows(filter=f"{name} IS NULL") == total:
+            logger.info("stage %s: dropping all-NULL %s for a clean attach", stage.name, name)
+            ds.drop_columns([name])
+            ds = lance.dataset(uri)
+        else:
+            pending = ds.count_rows(filter=f"{name} IS NULL")
+            if pending:
+                raise RuntimeError(
+                    f"stage {stage.name}: {pending} NULL row(s) on blob table {stage.table} — "
+                    "NULL-fill needs merge_insert, which crashes the blob decoder (§7.1); "
+                    "rebuild the column instead"
+                )
+            logger.info("stage %s: nothing to fill", stage.name)
+            return 0
+
     if name not in ds.schema.names:
+        if blob_table:
+            return _build_scan_column_by_rowid(
+                uri, stage, factory=factory, output_type=output_type, checkpoint_file=checkpoint_file
+            )
         ds.add_columns(pa.field(name, output_type, nullable=True))
         ds = lance.dataset(uri)
 
@@ -187,6 +254,49 @@ def run_scan_column_stage(
         written += batch.num_rows
         logger.info("stage %s: %s/%s row(s) committed", stage.name, written, pending)
     return written
+
+
+def _build_scan_column_by_rowid(
+    uri: str,
+    stage: Stage,
+    *,
+    factory: Callable[[], Callable[[pa.Table], pa.Array]],
+    output_type: pa.DataType,
+    checkpoint_file: str | Path | None,
+) -> int:
+    """All-or-nothing scan-column build for blob-bearing tables (attach by ``_rowid``)."""
+    [name] = stage.output_columns
+    ckpt = _ValueCheckpoint(checkpoint_file)
+    value_by_row_id: dict[int, Any] = ckpt.load()
+
+    source = lance_ray.read_lance(
+        uri, columns=list(stage.read_columns), scanner_options={"with_row_id": True}
+    )
+    results = _map_batches(
+        source,
+        _ScanByRowidActor,
+        stage,
+        factory=factory,
+        out_name=name,
+        output_type=output_type,
+        done_ids=frozenset(value_by_row_id),
+    )
+    for batch in (cast("pa.Table", b) for b in results.iter_batches(batch_format="pyarrow")):
+        pairs = list(zip(batch.column("_rowid").to_pylist(), batch.column(name).to_pylist(), strict=True))
+        ckpt.extend(pairs)
+        value_by_row_id.update(pairs)
+        logger.info("stage %s: %s value(s) computed", stage.name, len(value_by_row_id))
+
+    attach_values_by_rowid(
+        uri,
+        name=name,
+        output_type=output_type,
+        value_by_row_id=value_by_row_id,
+        batch_rows=stage.actor.batch_rows,
+        checkpoint_file=checkpoint_file,
+    )
+    ckpt.cleanup()
+    return len(value_by_row_id)
 
 
 def run_blob_column_stage(
@@ -234,6 +344,7 @@ def run_blob_column_stage(
         dataset_uri=uri,
         blob_column=stage.blob_column,
         out_name=name,
+        output_type=output_type,
         done_ids=frozenset(value_by_row_id),
     )
     for batch in (cast("pa.Table", b) for b in results.iter_batches(batch_format="pyarrow")):

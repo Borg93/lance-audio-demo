@@ -9,7 +9,8 @@ from typing import Annotated
 import typer
 
 from rmedia.cli._app import CliContext, app
-from rmedia.core.registry import STAGES, StageShape
+from rmedia.core.registry import StageShape
+from rmedia.features.stages import STAGES
 
 logger = logging.getLogger(__name__)
 

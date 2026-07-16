@@ -87,146 +87,23 @@ def cmd_extract_chunk_frames(
             "--audio-root",
             exists=True,
             file_okay=False,
-            help="Root directory holding the source MP4s.",
+            help="Root directory holding the source media files.",
         ),
     ] = Path("input/sv"),
-    width: Annotated[int, typer.Option("--width")] = 448,
-    jpeg_quality: Annotated[int, typer.Option("--quality")] = 4,
-    jobs: Annotated[int, typer.Option("--jobs", help="Parallel ffmpeg workers.")] = 4,
-    timeout: Annotated[float, typer.Option("--timeout", help="Per-frame timeout (s).")] = 30.0,
-    every_seconds: Annotated[
-        float,
-        typer.Option(
-            "--every-seconds",
-            help="Sample a frame every N seconds across each chunk (0 = one frame at chunk.start).",
-        ),
-    ] = 0.0,
-    only_null: Annotated[
-        bool,
-        typer.Option("--only-null/--all", help="Resumable: skip chunks that already have frames."),
-    ] = True,
-    batch_size: Annotated[
-        int,
-        typer.Option(
-            "--batch-size",
-            help=(
-                "Frames per append flush. Default 0 = flush every 2000 frames "
-                "during extraction. Appends are cheap (~100 ms/call) and never "
-                "rewrite existing fragments, so frequent flushes just limit how "
-                "much work a crash can lose."
-            ),
-        ),
-    ] = 0,
-    limit: Annotated[
-        int,
-        typer.Option(
-            "--limit",
-            help="Debug: extract only the first N chunks (0 = no limit).",
-        ),
-    ] = 0,
 ) -> None:
-    """Extract JPEG frame(s) per chunk → `chunk_frames.lance` (NEW table).
+    """Extract one JPEG per chunk → `chunk_frames.lance`, on the Ray actor pool.
 
-    By default grabs one frame at `chunk.start`; with `--every-seconds N` it
-    samples a frame every N seconds across each chunk's [start, end], numbered
-    `frame_idx` 0..K-1. Writes a separate append-only `chunk_frames` table keyed
-    by (doc_id, speech_id, chunk_id, frame_idx) — no `merge_insert` against the
-    wide `chunks` schema (which crashes the Lance 4.0 decoder). Resumable: skips
-    chunks that already have any frame.
+    Delegates to the `extract_frames` registry stage (`rmedia pipeline run
+    extract_frames`): ffmpeg runs inside Ray actors, resume is the key diff
+    against existing (doc_id, speech_id, chunk_id) frames, and appends go
+    through the single create/append path.
     """
-    import lancedb
-    from tqdm import tqdm
-
-    from rmedia.modalities.av.frames import (
-        FrameJob,
-        existing_frame_keys,
-        extract_chunk_frames_parallel,
-        sample_times,
-        write_chunk_frames,
-    )
-
-    from ..ingest.audio import resolve_source
+    from rmedia.features.ray_av import run_append_stage
+    from rmedia.features.stages import STAGES
 
     cfg: CliContext = ctx.obj
-    db = lancedb.connect(str(cfg.db))
-    _require_table(db, cfg.table, cfg.db)
-    chunks_tbl = db.open_table(cfg.table)
-    frames_path = cfg.db / "chunk_frames.lance"
-    frames_exists = "chunk_frames" in db.list_tables().tables
-
-    if frames_exists and not only_null:
-        # `--all` → drop up front so the rebuild is clean even if extraction
-        # yields nothing (append-mode would otherwise duplicate every frame).
-        typer.echo("  --all: dropping existing chunk_frames for a clean rebuild.", err=True)
-        db.drop_table("chunk_frames")
-        frames_exists = False
-
-    # Resume at chunk granularity: skip any chunk that already has ≥1 frame.
-    frame_keys = existing_frame_keys(frames_path) if (frames_exists and only_null) else set()
-    already = {(d, s, c) for d, s, c, _ in frame_keys}
-    if already:
-        typer.echo(f"  {len(already):,} chunk(s) already have frames.", err=True)
-
-    rows = (
-        chunks_tbl.search()
-        .select(["doc_id", "speech_id", "chunk_id", "audio_path", "start", "end"])
-        .limit(chunks_tbl.count_rows())
-        .to_list()
-    )
-    rows = [
-        r for r in rows if (r["doc_id"], int(r["speech_id"]), int(r["chunk_id"])) not in already
-    ]
-    if limit > 0:
-        rows = rows[:limit]
-        typer.echo(f"  --limit {limit} → restricting to first {len(rows)} chunk(s).", err=True)
-    if not rows:
-        typer.echo("Nothing to extract.", err=True)
-        return
-
-    # Resolve each chunk's source MP4 (cached per audio_path) into frame job(s).
-    src_cache: dict[str, Path | None] = {}
-    frame_jobs: list[FrameJob] = []
-    missing = 0
-    for r in rows:
-        ap = r["audio_path"]
-        if ap not in src_cache:
-            src_cache[ap] = resolve_source(ap, audio_root)
-        src = src_cache[ap]
-        if src is None:
-            missing += 1
-            continue
-        for frame_idx, time_sec in enumerate(sample_times(r["start"], r["end"], every_seconds)):
-            frame_jobs.append(
-                FrameJob(
-                    doc_id=r["doc_id"],
-                    speech_id=r["speech_id"],
-                    chunk_id=r["chunk_id"],
-                    frame_idx=frame_idx,
-                    time_sec=time_sec,
-                    source=src,
-                )
-            )
-    if missing:
-        typer.echo(
-            f"  warning: {missing} chunk(s) had no resolvable source MP4 — skipped.", err=True
-        )
-    if not frame_jobs:
-        typer.echo("Nothing extractable.", err=True)
-        return
-
-    typer.echo(f"Extracting {len(frame_jobs)} frame(s) from {audio_root} (jobs={jobs}).", err=True)
-    frames = extract_chunk_frames_parallel(
-        frame_jobs, width=width, jpeg_quality=jpeg_quality, timeout=timeout, workers=jobs
-    )
-    with tqdm(total=len(frame_jobs), unit="frame", smoothing=0.05) as pbar:
-        n_ok, n_fail = write_chunk_frames(
-            frames_path,
-            frames,
-            create=not frames_exists,
-            batch=batch_size if batch_size > 0 else 2000,
-            progress=pbar.update,
-        )
-    typer.echo(f"  ok={n_ok}  failed={n_fail}", err=True)
+    appended = run_append_stage(cfg.db, STAGES["extract_frames"], audio_root=str(audio_root))
+    typer.echo(f"  {appended} frame row(s) appended")
 
 
 @app.command("compact")

@@ -11,13 +11,13 @@ import pytest
 from rmedia.core.driver import _gate_filter
 from rmedia.core.registry import (
     AUDIO_VIDEO,
-    STAGES,
     VIDEO_ONLY,
     ActorConfig,
     MediaGate,
     Stage,
     StageShape,
 )
+from rmedia.features.stages import STAGES
 
 
 class TestMediaGate:

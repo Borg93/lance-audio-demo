@@ -22,19 +22,25 @@ logger = logging.getLogger(__name__)
 FTS_LANGUAGE = "Swedish"
 
 
+#: lance-ray's distributed IVF trainer needs ``num_partitions * sample_rate``
+#: rows (hard error below); the local trainer only needs ``rows >= partitions``.
+DISTRIBUTED_SAMPLE_RATE = 256
+
+
 class IndexPlan(BaseModel):
     table: str
     column: str
     kind: Literal["IVF_PQ", "FTS", "BTREE"]
     num_partitions: int = 0
     num_sub_vectors: int = 0
+    distributed: bool = True
     blocked: str | None = None
 
     def __str__(self) -> str:
         params = (
             f" cosine {self.num_partitions}/{self.num_sub_vectors}" if self.kind == "IVF_PQ" else ""
         )
-        state = f"BLOCKED: {self.blocked}" if self.blocked else "ready"
+        state = f"BLOCKED: {self.blocked}" if self.blocked else ("ready" if self.distributed else "ready (local build)")
         return f"{self.table}.{self.column}  {self.kind}{params}  [{state}]"
 
 
@@ -79,6 +85,8 @@ def plan_indexes(db_path: str | Path) -> list[IndexPlan]:
                 plan = plan.model_copy(
                     update={"blocked": f"{rows} row(s) < num_partitions={partitions} (flat search until then)"}
                 )
+            elif rows < partitions * DISTRIBUTED_SAMPLE_RATE:
+                plan = plan.model_copy(update={"distributed": False})
         plans.append(plan)
     return plans
 
@@ -92,18 +100,34 @@ def run_indexes(db_path: str | Path, plans: list[IndexPlan], *, num_workers: int
         if plan.blocked:
             logger.info("skipping %s", plan)
             continue
-        uri = str(Path(db_path) / f"{plan.table}.lance")
+        # Resolved: Ray index workers can't see driver-relative paths.
+        uri = str((Path(db_path) / f"{plan.table}.lance").resolve())
         logger.info("building %s", plan)
         if plan.kind == "IVF_PQ":
-            lance_ray.create_index(
-                uri,
-                column=plan.column,
-                index_type="IVF_PQ",
-                metric="cosine",
-                num_partitions=plan.num_partitions,
-                num_sub_vectors=plan.num_sub_vectors,
-                num_workers=num_workers,
-            )
+            if plan.distributed:
+                lance_ray.create_index(
+                    uri,
+                    column=plan.column,
+                    index_type="IVF_PQ",
+                    metric="cosine",
+                    num_partitions=plan.num_partitions,
+                    num_sub_vectors=plan.num_sub_vectors,
+                    num_workers=num_workers,
+                )
+            else:
+                # Below the distributed trainer's rows >= partitions*sample_rate
+                # floor — the local trainer handles small tables fine.
+                import lancedb
+
+                from rmedia.core.engine import ensure_vector_index
+
+                table = lancedb.connect(str(Path(uri).parent)).open_table(plan.table)
+                ensure_vector_index(
+                    table,
+                    plan.column,
+                    num_partitions=plan.num_partitions,
+                    num_sub_vectors=plan.num_sub_vectors,
+                )
         elif plan.kind == "FTS":
             lance_ray.create_scalar_index(
                 uri,

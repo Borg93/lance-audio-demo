@@ -28,7 +28,7 @@ import tempfile
 import wave
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import numpy as np
 from pydantic import BaseModel
@@ -37,7 +37,6 @@ from .diarize import TARGET_SAMPLE_RATE, extract_wav_16k_mono
 
 if TYPE_CHECKING:
     import lancedb
-    import pyarrow as pa
 
 logger = logging.getLogger(__name__)
 
@@ -467,80 +466,3 @@ def speaker_embeddings_indexes(emb_tbl: lancedb.table.Table) -> None:
     # 256-d voice vectors → 16 sub-vectors (16 dims each); skips itself while
     # the table is smaller than num_partitions (flat search is fine until then).
     ensure_vector_index(emb_tbl, "embedding", num_partitions=256, num_sub_vectors=16)
-
-
-def fold_shards(
-    db: lancedb.DBConnection,
-    db_path: Path,
-    base_name: str,
-    *,
-    schema: pa.Schema,
-    storage_version: Literal["stable", "2.0", "2.1", "2.2", "2.3", "next", "legacy", "0.1"],
-    drop_shards: bool,
-    rebuild_indexes: Callable[[lancedb.table.Table], None],
-) -> tuple[int, int] | None:
-    """Fold ``{base_name}_shard*.lance`` staging tables into ``{base_name}.lance``.
-
-    The sharded workers each write a disjoint slice to their own staging table;
-    this concatenates them (plus any existing canonical rows, which win on a
-    ``doc_id`` collision so re-running is safe), overwrites the canonical table,
-    rebuilds its indexes via ``rebuild_indexes``, and — when ``drop_shards`` —
-    drops the staging tables. Returns ``(video_count, row_count)`` on success, or
-    ``None`` when there were no shards / nothing to merge (the caller echoes a
-    skip message).
-
-    NOTE (future / scale): this is a read-all + overwrite merge — correct and
-    effectively instant at our size (these tables are ~10^5 rows of small
-    columns), but it rewrites the whole canonical table each call. The native
-    Lance distributed-write path — each worker ``lance.fragment.write_fragments``
-    into the canonical dataset, collect the ``FragmentMetadata``, then one
-    ``LanceOperation.Append`` commit — avoids the rewrite and is the cleaner,
-    safer pattern to adopt if these tables grow large or merges get frequent. We
-    keep staging-table + overwrite for now because per-table per-video appends
-    give crash durability (a dead worker resumes mid-shard), which the
-    commit-once-at-the-end fragment path would sacrifice.
-    """
-    import lance
-    import pyarrow as pa
-
-    existing_tables = db.list_tables().tables
-    shard_names = sorted(t for t in existing_tables if t.startswith(f"{base_name}_shard"))
-    if not shard_names:
-        return None
-
-    main_path = db_path / f"{base_name}.lance"
-    # Canonical rows first so an already-merged doc_id wins over a shard's copy.
-    sources = ([base_name] if base_name in existing_tables else []) + shard_names
-
-    seen: set[str] = set()
-    parts: list[pa.Table] = []
-    for name in sources:
-        ds = lance.dataset(str(db_path / f"{name}.lance"))
-        if ds.count_rows() == 0:
-            continue
-        tbl = ds.to_table().cast(schema)
-        doc_col = tbl["doc_id"].to_pylist()
-        keep = pa.array([d not in seen for d in doc_col], pa.bool_())
-        parts.append(tbl.filter(keep))
-        seen.update(doc_col)
-
-    if not parts:
-        return None
-
-    merged = pa.concat_tables(parts)
-    lance.write_dataset(
-        merged,
-        str(main_path),
-        mode="overwrite",
-        data_storage_version=storage_version,
-    )
-
-    main_tbl = db.open_table(base_name)
-    if main_tbl.count_rows() > 0:
-        rebuild_indexes(main_tbl)
-
-    if drop_shards:
-        for name in shard_names:
-            db.drop_table(name)
-
-    return len(seen), merged.num_rows

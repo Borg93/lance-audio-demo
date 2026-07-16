@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import lance
+import pyarrow as pa
 
 CHILD = """
 from functools import partial
@@ -74,8 +75,19 @@ def main() -> None:
     scratch.mkdir()
     source = lance.dataset(str(Path(args.source) / "chunks.lance"))
     stripped = source.to_table(columns=["doc_id", "speech_id", "chunk_id", "text"])
-    lance.write_dataset(stripped, str(scratch / "chunks.lance"))
-    total = stripped.num_rows
+    # Tile to ~1800 rows with UNIQUE keys so the fill spans many 8-row commits —
+    # a wide-open window for a genuinely mid-stage SIGKILL.
+    tiles = []
+    for i in range(20):
+        tile = stripped.set_column(
+            2,
+            "chunk_id",
+            pa.array([c + 10_000 * i for c in stripped["chunk_id"].to_pylist()], pa.int32()),
+        )
+        tiles.append(tile)
+    tiled = pa.concat_tables(tiles)
+    lance.write_dataset(tiled, str(scratch / "chunks.lance"))
+    total = tiled.num_rows
 
     print(f"  NULL-residual before: {total}/{total} (column not yet added)")
 
@@ -85,21 +97,22 @@ def main() -> None:
         stderr=subprocess.DEVNULL,
     )
     killed_at = None
-    for _ in range(600):
-        time.sleep(0.5)
+    for _ in range(6000):
+        time.sleep(0.05)
         if child.poll() is not None:
             break
         try:
             remaining = nulls(scratch)
         except Exception:  # noqa: BLE001 — column not added yet
             continue
-        if remaining < total - 8:  # at least two 8-row commits landed
+        # Kill ONLY in a provably partial state: some commits landed, some pending.
+        if 8 < remaining < total - 8:
             child.send_signal(signal.SIGKILL)
             child.wait()
-            killed_at = remaining
+            killed_at = nulls(scratch)
             break
     if killed_at is None:
-        raise SystemExit("child finished before it could be killed — shrink batch_rows")
+        raise SystemExit("child never observed in a partial state — enlarge the scratch table")
     print(f"  SIGKILLed mid-stage: NULL-residual after kill = {killed_at}/{total} (partial fill persisted)")
 
     subprocess.run(
