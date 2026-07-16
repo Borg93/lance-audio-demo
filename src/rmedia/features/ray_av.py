@@ -193,6 +193,10 @@ def run_append_stage(db_path: str | Path, stage: Stage, *, audio_root: str = "in
         SPEAKER_TURNS_SCHEMA,
     )
 
+    # Absolute: a relative root would resolve against the Ray workers'
+    # runtime-env working-dir copy, failing every per-item extraction.
+    audio_root = str(Path(audio_root).resolve())
+
     def _doc_paths() -> dict[str, str]:
         import lance
 
