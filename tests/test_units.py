@@ -59,7 +59,7 @@ class TestParseRange:
 
 
 class TestBuildWhereClause:
-    FILTERABLE = ["language", "speaker_name"]
+    FILTERABLE = ("language", "speaker_name")
 
     def test_no_filters_is_none(self) -> None:
         assert build_where_clause(filters={}, filterable=self.FILTERABLE) is None
