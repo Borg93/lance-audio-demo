@@ -15,7 +15,7 @@ from pathlib import Path
 import lancedb
 from pydantic import BaseModel
 
-PARITY_QUERIES = ["regeringen", "minister", "Sverige"]
+PARITY_QUERIES = ["regeringen", "myndighet", "Sverige"]
 TOP_K = 10
 
 

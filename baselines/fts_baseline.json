@@ -1,0 +1,38 @@
+{
+  "db": "baselines/old_pipeline.lance",
+  "queries": {
+    "regeringen": [
+      "018f41ad28a1bc1b|0|9",
+      "4c0693b492d7e7aa|0|5",
+      "eacf9f2d9127f507|0|4",
+      "5133af9f2d977d8a|0|9",
+      "eacf9f2d9127f507|0|13",
+      "5133af9f2d977d8a|0|7",
+      "5133af9f2d977d8a|0|1",
+      "5133af9f2d977d8a|0|16",
+      "5133af9f2d977d8a|0|15"
+    ],
+    "myndighet": [
+      "eacf9f2d9127f507|0|15",
+      "eacf9f2d9127f507|0|5",
+      "eacf9f2d9127f507|0|8",
+      "eacf9f2d9127f507|0|12",
+      "eacf9f2d9127f507|0|2",
+      "eacf9f2d9127f507|0|10",
+      "eacf9f2d9127f507|0|3",
+      "eacf9f2d9127f507|0|16",
+      "eacf9f2d9127f507|0|14",
+      "eacf9f2d9127f507|0|11"
+    ],
+    "Sverige": [
+      "eacf9f2d9127f507|0|5",
+      "018f41ad28a1bc1b|0|1",
+      "018f41ad28a1bc1b|0|7",
+      "eacf9f2d9127f507|0|3",
+      "018f41ad28a1bc1b|0|9",
+      "eacf9f2d9127f507|0|8",
+      "9b07c15d88d17480|0|10",
+      "9b07c15d88d17480|0|9"
+    ]
+  }
+}
