@@ -1,0 +1,28 @@
+{
+  "identity": {
+    "key_fields": ["doc_id"],
+    "doc_key": "doc_id",
+    "doc_key_pattern": "^[a-f0-9]{16}$"
+  },
+  "document": {
+    "table": "documents",
+    "media_blob": "media_blob",
+    "mime": "media_mime"
+  },
+  "display": {
+    "title": ["doc_id"],
+    "body": "text",
+    "metadata": []
+  },
+  "search": {
+    "row_table": "chunks",
+    "fts": { "table": "chunks", "column": "text", "language": "English" },
+    "vectors": {
+      "semantic": { "table": "chunks", "column": "text_embedding", "dim": 2048, "query_encoder": "text" }
+    },
+    "filterable": [],
+    "rerank": false
+  },
+  "atlas": [],
+  "capabilities": {}
+}
