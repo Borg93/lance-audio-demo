@@ -18,8 +18,8 @@ from backend import create_app
 from fastapi.testclient import TestClient
 
 from fakes import make_doc
-from raudio.ingest.ingest import ingest_many
-from raudio.model.schema import SPEAKER_TURNS_SCHEMA, SPEAKER_TURNS_STORAGE_VERSION
+from rmedia.ingest.ingest import ingest_many
+from rmedia.model.schema import SPEAKER_TURNS_SCHEMA, SPEAKER_TURNS_STORAGE_VERSION
 
 DOC_ID = "0123456789abcdef"
 # (turn_id, speaker_label, start, end) — deliberately NOT pre-sorted by start.

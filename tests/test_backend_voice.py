@@ -24,8 +24,8 @@ from backend.voice import service as voice_service
 from fastapi.testclient import TestClient
 
 from fakes import make_doc
-from raudio.ingest.ingest import ingest_many
-from raudio.model.schema import SPEAKER_EMBEDDINGS_SCHEMA, SPEAKERS_SCHEMA, VOICE_EMBED_DIM
+from rmedia.ingest.ingest import ingest_many
+from rmedia.model.schema import SPEAKER_EMBEDDINGS_SCHEMA, SPEAKERS_SCHEMA, VOICE_EMBED_DIM
 
 
 def _unit(axis: int, leak_axis: int | None = None, leak: float = 0.0) -> np.ndarray:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from raudio.ingest.audio import compose_media_uri, guess_mime
+from rmedia.ingest.audio import compose_media_uri, guess_mime
 
 
 class TestComposeMediaUri:

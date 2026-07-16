@@ -1,41 +1,6 @@
-"""Lance table for easytranscriber AudioMetadata JSON — FTS-ready."""
+"""Compatibility shim — ``raudio`` moved to :mod:`rmedia` (lance-media).
 
-from .ingest.ingest import flatten_chunks, ingest_document, ingest_many, load_transcript
-from .model.datamodel import (
-    AlignmentSegment,
-    AudioChunk,
-    AudioMetadata,
-    SpeechSegment,
-    WordSegment,
-)
-from .model.schema import (
-    CHUNK_SCHEMA,
-    DOC_SCHEMA,
-    DOC_STORAGE_VERSION,
-    alignment_struct,
-    word_struct,
-)
-from .retrieval.search import nearest_chunks, timecode
-
-__all__ = [  # noqa: RUF022 — grouped by layer (more readable than alphabetical)
-    # Data model (mirrors easytranscriber)
-    "AlignmentSegment",
-    "AudioChunk",
-    "AudioMetadata",
-    "SpeechSegment",
-    "WordSegment",
-    # Schema
-    "CHUNK_SCHEMA",
-    "DOC_SCHEMA",
-    "DOC_STORAGE_VERSION",
-    "alignment_struct",
-    "word_struct",
-    # Ingest
-    "flatten_chunks",
-    "ingest_document",
-    "ingest_many",
-    "load_transcript",
-    # Search
-    "nearest_chunks",
-    "timecode",
-]
+Kept only so the pre-split backend keeps importing until Phase 2 of
+``docs/LANCE_MEDIA_MERGE.md`` severs its pipeline dependency (P2.8). New code
+imports :mod:`rmedia`; each submodule here re-exports its successor verbatim.
+"""

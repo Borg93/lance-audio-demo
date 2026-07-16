@@ -3,7 +3,7 @@
 
 The speaker-diarization pipeline commands (``extract-speaker-turns`` →
 ``embed-speaker-turns`` → ``build-speakers`` → ``cluster-speakers`` plus their
-shard merges) live in :mod:`raudio.cli.speaker`.
+shard merges) live in :mod:`rmedia.cli.speaker`.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def cmd_thumbnail(
     ] = False,
 ) -> None:
     """Extract a JPEG thumbnail per media file (via ffmpeg) into <output-dir>/{stem}.jpg."""
-    from ..media.thumbnails import generate_thumbnails
+    from rmedia.modalities.av.thumbnails import generate_thumbnails
 
     generate_thumbnails(
         input_dir=input_dir,
@@ -67,7 +67,7 @@ def cmd_download(
     ] = 600.0,
 ) -> None:
     """Bulk-download Riksarkivet media from a ``video_batcher`` CSV into <output-dir>/{bildid}.mp4."""
-    from ..media.download import download_manifest
+    from rmedia.modalities.av.download import download_manifest
 
     download_manifest(
         csv_path=csv_path,
@@ -137,14 +137,15 @@ def cmd_extract_chunk_frames(
     import lancedb
     from tqdm import tqdm
 
-    from ..ingest.audio import resolve_source
-    from ..media.frames import (
+    from rmedia.modalities.av.frames import (
         FrameJob,
         existing_frame_keys,
         extract_chunk_frames_parallel,
         sample_times,
         write_chunk_frames,
     )
+
+    from ..ingest.audio import resolve_source
 
     cfg: CliContext = ctx.obj
     db = lancedb.connect(str(cfg.db))
@@ -260,7 +261,7 @@ def cmd_compact(
     import lance
     import lancedb
 
-    from ..features.engine import ensure_vector_index
+    from rmedia.core.engine import ensure_vector_index
 
     cfg: CliContext = ctx.obj
     db = lancedb.connect(str(cfg.db))

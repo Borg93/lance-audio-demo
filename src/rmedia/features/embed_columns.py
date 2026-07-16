@@ -1,10 +1,10 @@
 """Client-injectable column **builders** — the seam tests drive with a fake.
 
-Each function here wraps the type-agnostic engine (:mod:`raudio.features.engine`)
+Each function here wraps the type-agnostic engine (:mod:`rmedia.core.engine`)
 with exactly one model client and writes one derived column (a vector or a
 string) to a Lance table. They take an already-constructed client so an offline
 fake can stand in; the production client is built from a server URL by the thin
-``_run_*`` dispatchers in :mod:`raudio.features.columns`.
+``_run_*`` dispatchers in :mod:`rmedia.features.columns`.
 
 These are split out of ``columns.py`` so that module stays a registry + dispatch
 layer and the heavy per-column compute lives here.
@@ -20,13 +20,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyarrow as pa
 
+from rmedia.core.engine import upsert_blob_column, upsert_scan_column
+
 from ..model.schema import EMBED_DIM
-from .engine import upsert_blob_column, upsert_scan_column
 
 if TYPE_CHECKING:
-    from ..vllm.caption import CaptionClient
-    from ..vllm.embedding import EmbeddingClient
-    from ..vllm.summarize import SummarizeClient
+    from rmedia.clients.caption import CaptionClient
+    from rmedia.clients.embedding import EmbeddingClient
+    from rmedia.clients.summarize import SummarizeClient
 
 logger = logging.getLogger(__name__)
 

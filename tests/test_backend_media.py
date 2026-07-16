@@ -18,9 +18,9 @@ from fastapi.testclient import TestClient
 from lance import blob_array
 
 from fakes import make_doc
-from raudio.ingest.ingest import ingest_many
-from raudio.media.frames import ExtractedFrame, write_chunk_frames
-from raudio.model.schema import DOC_SCHEMA, DOC_STORAGE_VERSION
+from rmedia.ingest.ingest import ingest_many
+from rmedia.modalities.av.frames import ExtractedFrame, write_chunk_frames
+from rmedia.model.schema import DOC_SCHEMA, DOC_STORAGE_VERSION
 
 DOC_ID = "0123456789abcdef"
 MEDIA_BYTES = bytes(range(256)) * 16  # 4096 deterministic bytes

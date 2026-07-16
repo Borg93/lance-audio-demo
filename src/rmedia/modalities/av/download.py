@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 from tqdm import tqdm
 
-from raudio.errors import RaudioError
+from rmedia.errors import RaudioError
 
 logger = logging.getLogger(__name__)
 

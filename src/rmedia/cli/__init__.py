@@ -6,9 +6,9 @@ Exposes the full pipeline as subcommands: ``transcribe``, ``detect-language``,
 the authoritative list.
 
 The Typer ``app`` lives in :mod:`._app` (underscored: a plain ``app.py`` would
-make ``raudio.cli.app`` ambiguously both that module and this re-exported Typer
+make ``rmedia.cli.app`` ambiguously both that module and this re-exported Typer
 object). Each command group module registers against it; importing those modules
-here is what wires them onto ``app`` so the entry point (``raudio.__main__``)
+here is what wires them onto ``app`` so the entry point (``rmedia.__main__``)
 sees the full command set.
 """
 

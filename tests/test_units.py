@@ -15,8 +15,8 @@ from backend.media.blobs import parse_range, valid_doc_id
 from backend.search.service import _build_where_clause, _rrf_fuse
 from fastapi import HTTPException
 
-from raudio.media.frames import sample_times
-from raudio.retrieval.search import extract_query_terms, parse_alignments_json, timecode
+from rmedia.modalities.av.frames import sample_times
+from rmedia.retrieval.search import extract_query_terms, parse_alignments_json, timecode
 
 
 class TestTimecode:

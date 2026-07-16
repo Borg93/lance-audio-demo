@@ -18,7 +18,7 @@ with the correct wav2vec2 emissions model.
 **Never** pass a language-fine-tuned Whisper (``KBLab/kb-whisper-large``) —
 those over-predict their training language (every file comes back as `sv`).
 
-Exposed as ``raudio detect-language …`` via :mod:`raudio.cli`.
+Exposed as ``raudio detect-language …`` via :mod:`rmedia.cli`.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from easytranscriber.audio import read_audio_segment
 
-from raudio.errors import RaudioError
+from rmedia.errors import RaudioError
 
 from .transcribe import DEFAULT_EMISSIONS_MODEL
 

@@ -23,7 +23,8 @@ from fakes import (
     make_doc,
     write_synthetic_frames,
 )
-from raudio.features.columns import (
+from rmedia.core.engine import upsert_scan_column
+from rmedia.features.columns import (
     CAPTION_COLUMN,
     CAPTION_EMBED_COLUMN,
     CHUNK_KEYS,
@@ -33,8 +34,7 @@ from raudio.features.columns import (
     embed_caption_column,
     summary_column,
 )
-from raudio.features.engine import upsert_scan_column
-from raudio.ingest.ingest import ingest_many
+from rmedia.ingest.ingest import ingest_many
 
 
 def _chunks(tmp_path: Path) -> Path:

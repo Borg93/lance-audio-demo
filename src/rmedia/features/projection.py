@@ -15,7 +15,7 @@ and ``'atlas_img_'`` (visual, from a chunk-level ``frame_embedding``) write
 ``atlas_x/y/cluster`` vs ``atlas_img_x/y/cluster`` respectively. The two cluster
 id spaces are independent EVōC fits and never comparable.
 
-Unlike the per-batch features in :mod:`raudio.features.columns`, every row's
+Unlike the per-batch features in :mod:`rmedia.features.columns`, every row's
 value depends on *all* rows (a single global fit), so this can't run as an
 ``add_columns`` UDF. It mirrors :func:`upsert_blob_column`'s two-pass shape:
 one ``with_row_id=True`` scan loads the whole embedding matrix, EVōC fits once,
@@ -229,7 +229,7 @@ def _attach_column_by_row_id(
 ) -> None:
     """Attach a precomputed column keyed by ``_rowid`` via ``add_columns``.
 
-    Mirrors :func:`raudio.features.engine.upsert_blob_column`'s attach pass: a
+    Mirrors :func:`rmedia.core.engine.upsert_blob_column`'s attach pass: a
     ``batch_udf`` reads ``_rowid`` and places each precomputed value. A missing
     id raises (loud) rather than misaligning. Drops an existing column first so
     ``--all`` rebuilds cleanly.

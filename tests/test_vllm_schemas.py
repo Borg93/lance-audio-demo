@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from raudio.vllm.schemas import (
+from rmedia.clients.schemas import (
     ChatCompletionResponse,
     ChatMessage,
     EmbeddingResponse,

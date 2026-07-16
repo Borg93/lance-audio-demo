@@ -2,10 +2,10 @@
 
 Each :class:`Feature` maps a name to a ``run`` that builds the production model
 client from a server URL and calls the matching client-injectable column builder
-in :mod:`raudio.features.embed_columns` (the seam tests drive with an offline
+in :mod:`rmedia.features.embed_columns` (the seam tests drive with an offline
 fake). The ``raudio feature <name>`` CLI is a thin loop over this dict, so adding
 a column is one entry here. The column constants and builder functions are
-re-exported below so existing ``raudio.features.columns`` imports keep working.
+re-exported below so existing ``rmedia.features.columns`` imports keep working.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
+
+from rmedia.core.engine import ensure_fts_index, ensure_vector_index
 
 from .embed_columns import (
     CAPTION_COLUMN,
@@ -36,14 +38,13 @@ from .embed_columns import (
     embed_text_column,
     summary_column,
 )
-from .engine import ensure_fts_index, ensure_vector_index
 
 if TYPE_CHECKING:
     import lancedb
 
 logger = logging.getLogger(__name__)
 
-# Re-exported so ``from raudio.features.columns import ...`` keeps resolving the
+# Re-exported so ``from rmedia.features.columns import ...`` keeps resolving the
 # builders/constants that now live in ``embed_columns``.
 __all__ = [
     "CAPTION_COLUMN",
@@ -127,7 +128,7 @@ def _run_embedding_feature(
     vector index. The index/overwrite/``--only-null``/checkpoint wiring is
     single-sourced here so the text/frame/caption runners can't drift apart.
     """
-    from ..vllm.embedding import DEFAULT_EMBED_URL, VLLMEmbeddingClient
+    from rmedia.clients.embedding import DEFAULT_EMBED_URL, VLLMEmbeddingClient
 
     client = VLLMEmbeddingClient(opts.url or DEFAULT_EMBED_URL)
     n = build(
@@ -190,7 +191,7 @@ def _run_caption_embedding(
 def _run_summary(
     db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
 ) -> int:
-    from ..vllm.summarize import DEFAULT_SUMMARIZE_URL, VLLMSummarizeClient
+    from rmedia.clients.summarize import DEFAULT_SUMMARIZE_URL, VLLMSummarizeClient
 
     client = VLLMSummarizeClient(opts.url or DEFAULT_SUMMARIZE_URL)
     return summary_column(
@@ -206,7 +207,7 @@ def _run_summary(
 def _run_caption(
     db_path: Path, opts: FeatureRunOptions, progress: Callable[[int], None] | None
 ) -> int:
-    from ..vllm.caption import (
+    from rmedia.clients.caption import (
         CAPTION_INSTRUCTION,
         CAPTION_MODEL,
         DEFAULT_CAPTION_URL,

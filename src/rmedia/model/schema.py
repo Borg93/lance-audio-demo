@@ -102,7 +102,7 @@ CHUNK_SCHEMA: pa.Schema = pa.schema(
 # `text_embedding` (FixedSizeList<float32, EMBED_DIM>) is intentionally absent:
 # `embed-chunks` adds it after ingest via `dataset.add_columns(...)`, which
 # writes one new column file alongside the existing data instead of rewriting
-# fragments. See `raudio.features.columns.embed_text_column`.
+# fragments. See `rmedia.features.columns.embed_text_column`.
 #
 # Per-chunk video frames (blob + frame_embedding) are NOT here either — they
 # live in CHUNK_FRAMES_SCHEMA, a separate table keyed by the same (doc_id,
@@ -229,7 +229,7 @@ SPEAKER_TURNS_STORAGE_VERSION: Final = "2.2"
 # `--min-turn-duration` gate, keyed logically by (doc_id, turn_id) — the same
 # key as the matching speaker_turns row. `embedding` is the L2-normalized 256-d
 # output of pyannote community-1's internal WeSpeaker-ResNet34 encoder (see
-# `raudio.media.voiceprint`; the raw model outputs are NOT unit-norm, the writer
+# `rmedia.modalities.av.voiceprint`; the raw model outputs are NOT unit-norm, the writer
 # normalizes before storing so cosine kNN is well-defined). `speaker_label` /
 # `start` / `end` / `duration` are denormalised from speaker_turns so a voice
 # kNN hit resolves to its turn without a join. Built offline by

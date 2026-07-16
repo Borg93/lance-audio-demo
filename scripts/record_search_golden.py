@@ -11,7 +11,6 @@ Run while the old backend is up:  uv run python scripts/record_search_golden.py
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import httpx

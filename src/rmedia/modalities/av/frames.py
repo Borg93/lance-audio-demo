@@ -4,7 +4,7 @@ Used by ``raudio extract-chunk-frames`` to grab one representative JPEG per
 transcript chunk at ``chunk.start``. This module only *produces* the JPEG
 bytes (piped from ffmpeg over stdout — no temp files, no manifest CSV); the
 CLI then writes them into the separate append-only ``chunk_frames`` Lance
-table (Blob V2 Inline — see :data:`raudio.model.schema.CHUNK_FRAMES_SCHEMA`). That
+table (Blob V2 Inline — see :data:`rmedia.model.schema.CHUNK_FRAMES_SCHEMA`). That
 table is kept separate from ``chunks`` because Lance 4.0's ``merge_insert``
 crashes on the wide ``chunks`` schema when backfilling blob columns.
 
@@ -294,7 +294,7 @@ def write_chunk_frames(
     import pyarrow as pa
     from lance import blob_array
 
-    from ..model.schema import CHUNK_FRAMES_SCHEMA, CHUNK_FRAMES_STORAGE_VERSION
+    from rmedia.model.schema import CHUNK_FRAMES_SCHEMA, CHUNK_FRAMES_STORAGE_VERSION
 
     n_ok = n_fail = 0
     first_write = create

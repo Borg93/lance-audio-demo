@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from raudio.asr.detect_language import _plan_sample_starts
+from rmedia.modalities.av.asr.detect_language import _plan_sample_starts
 
 
 class TestPlanSampleStarts:

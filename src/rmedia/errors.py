@@ -2,7 +2,7 @@
 
 Library code raises :class:`RaudioError` (never ``SystemExit`` — exiting the
 process is the CLI's decision, and a raised exit kills embedding callers and
-tests). The CLI entry point (``raudio.__main__.main``) maps it to a clean
+tests). The CLI entry point (``rmedia.__main__.main``) maps it to a clean
 stderr message + exit code 1.
 """
 

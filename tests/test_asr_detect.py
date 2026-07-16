@@ -11,7 +11,7 @@ pin the parts that would *silently mislabel a batch*: vote aggregation, the
 move/dry-run side effects.
 
 Everything that touches a model or ffmpeg is patched at the seam (the symbol as
-imported into ``raudio.asr.detect_language``), so the suite is fast + offline:
+imported into ``rmedia.modalities.av.asr.detect_language``), so the suite is fast + offline:
 
 - ``_mms_probe`` / ``_whisper_probe`` → a fake probe ``clip -> (lang_raw, prob)``
   we control, so no model is ever loaded.
@@ -28,9 +28,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from raudio.asr import detect_language as dl
-from raudio.asr.detect_language import detect_and_sort
-from raudio.errors import RaudioError
+from rmedia.errors import RaudioError
+from rmedia.modalities.av.asr import detect_language as dl
+from rmedia.modalities.av.asr.detect_language import detect_and_sort
 
 # Default model id routes to the *whisper* probe branch; an mms-lid id routes to
 # the *mms* branch. We patch both so either branch yields our fake probe.

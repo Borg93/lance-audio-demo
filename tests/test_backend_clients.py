@@ -1,6 +1,6 @@
 """Lazy vLLM client accessors + the DI seam that binds them to a request.
 
-No GPU/network: the deferred ``raudio.vllm.*`` imports inside the accessors
+No GPU/network: the deferred ``rmedia.clients.*`` imports inside the accessors
 are the documented monkeypatch seam, so we swap the client classes for fakes (or
 a raiser) and assert the cache-then-construct behaviour and the 503 mapping.
 """
@@ -16,8 +16,8 @@ from backend import clients, deps
 from backend.core.exceptions import ServiceUnavailableError
 from backend.state import AppState
 
-import raudio.vllm.embedding as embeddings_mod
-import raudio.vllm.reranker as reranker_mod
+import raudio.vllm.embedding as embeddings_mod  # backend's deferred-import seam (shim) until P2.8
+import raudio.vllm.reranker as reranker_mod  # backend's deferred-import seam (shim) until P2.8
 
 
 def _state() -> AppState:

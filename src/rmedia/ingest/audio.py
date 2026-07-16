@@ -3,7 +3,7 @@
 Videos are **referenced** (not copied) from the Lance ``documents`` table:
 the ``media_blob`` column is a Lance Blob V2 *External* column whose values
 are URI strings, written via ``blob_array([uri, …])`` (see
-:mod:`raudio.ingest`). On read, ``ds.take_blobs("media_blob", …)`` returns
+:mod:`rmedia.ingest`). On read, ``ds.take_blobs("media_blob", …)`` returns
 lazy, range-readable ``BlobFile`` handles. The table stays a small portable
 catalog; the actual MP4 bytes live wherever the URI points:
 
@@ -12,7 +12,7 @@ catalog; the actual MP4 bytes live wherever the URI points:
 - S3:        ``s3://bucket/videos/T0001417_00001.mp4``
 
 This module only builds those URI strings and guesses MIME types; the Blob
-V2 write wiring lives in :mod:`raudio.ingest`, the Range-read path in the
+V2 write wiring lives in :mod:`rmedia.ingest`, the Range-read path in the
 backend (``backend/app.py`` ``/api/media``).
 """
 

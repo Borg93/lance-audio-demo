@@ -29,7 +29,7 @@ AUDIO_ROOT = Path("input/sv-test")
 
 def _run(*args: str) -> None:
     """Invoke the raudio CLI in-process-venv; abort the smoke on non-zero exit."""
-    cmd = [sys.executable, "-m", "raudio.cli", *args]
+    cmd = [sys.executable, "-m", "rmedia.cli", *args]
     print(f"\n$ raudio {' '.join(args)}")
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:

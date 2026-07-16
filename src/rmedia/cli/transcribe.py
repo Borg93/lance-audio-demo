@@ -58,7 +58,7 @@ def cmd_transcribe(
 ) -> None:
     """Run easytranscriber on a directory of audio/video files → alignment JSONs."""
     # Lazy import — the `[transcribe]` extra is optional.
-    from ..asr.transcribe import run_transcribe
+    from rmedia.modalities.av.asr.transcribe import run_transcribe
 
     if vad not in {"pyannote", "silero"}:
         raise typer.BadParameter("--vad must be 'pyannote' or 'silero'")
@@ -124,7 +124,7 @@ def cmd_detect_language(
     ] = False,
 ) -> None:
     """Detect language per file via Whisper and sort into <audio-dir>/<lang>/ subfolders."""
-    from ..asr.detect_language import detect_and_sort
+    from rmedia.modalities.av.asr.detect_language import detect_and_sort
 
     detect_and_sort(
         audio_dir=audio_dir,

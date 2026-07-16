@@ -1,7 +1,7 @@
 """Thin wrapper around ``easytranscriber.pipelines.pipeline`` that produces the
 JSON files ``raudio ingest`` reads.
 
-Exposed as ``raudio transcribe …`` via :mod:`raudio.cli`. ``easytranscriber``
+Exposed as ``raudio transcribe …`` via :mod:`rmedia.cli`. ``easytranscriber``
 (and ``easyaligner``) are core dependencies but heavy (torch + pyannote), so we
 import them lazily — keeping ``raudio --help`` and FTS-only use light — and
 surface a clear error if the environment is somehow missing them.
@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from raudio.errors import RaudioError
+from rmedia.errors import RaudioError
 
 logger = logging.getLogger(__name__)
 

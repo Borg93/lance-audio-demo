@@ -30,10 +30,10 @@ from fakes import (
     make_doc,
     write_frames_aligned_to_chunks,
 )
-from raudio.features.columns import caption_column, embed_caption_column
-from raudio.features.engine import ensure_fts_index
-from raudio.ingest.ingest import ingest_many
-from raudio.vllm.embedding import VLLMEmbeddingClient
+from rmedia.clients.embedding import VLLMEmbeddingClient
+from rmedia.core.engine import ensure_fts_index
+from rmedia.features.columns import caption_column, embed_caption_column
+from rmedia.ingest.ingest import ingest_many
 
 
 @pytest.fixture

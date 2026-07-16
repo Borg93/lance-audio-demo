@@ -3,8 +3,8 @@
 two shard-fold merges (``merge-speaker-turns``, ``merge-speaker-embeddings``).
 
 Each handler parses its options, calls one library function (in
-:mod:`raudio.media.diarize`, :mod:`raudio.media.voiceprint`, or
-:mod:`raudio.media.cluster`), and echoes a summary.
+:mod:`rmedia.modalities.av.diarize`, :mod:`rmedia.modalities.av.voiceprint`, or
+:mod:`rmedia.modalities.av.cluster`), and echoes a summary.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 
 if TYPE_CHECKING:
-    from ..media.diarize import SpeakerTurn
+    from rmedia.modalities.av.diarize import SpeakerTurn
 
 from ._app import CliContext, _die, _require_table, app
 
@@ -103,8 +103,14 @@ def cmd_extract_speaker_turns(
     import lancedb
     from tqdm import tqdm
 
+    from rmedia.modalities.av.diarize import (
+        Diarizer,
+        existing_doc_ids,
+        shard_of,
+        write_speaker_turns,
+    )
+
     from ..ingest.audio import resolve_source
-    from ..media.diarize import Diarizer, existing_doc_ids, shard_of, write_speaker_turns
 
     cfg: CliContext = ctx.obj
     db = lancedb.connect(str(cfg.db))
@@ -240,7 +246,8 @@ def cmd_merge_speaker_turns(
     """
     import lancedb
 
-    from ..media.voiceprint import fold_shards
+    from rmedia.modalities.av.voiceprint import fold_shards
+
     from ..model.schema import SPEAKER_TURNS_SCHEMA, SPEAKER_TURNS_STORAGE_VERSION
 
     cfg: CliContext = ctx.obj
@@ -356,15 +363,16 @@ def cmd_embed_speaker_turns(
     import lancedb
     from tqdm import tqdm
 
-    from ..ingest.audio import resolve_source
-    from ..media.diarize import existing_doc_ids, shard_of
-    from ..media.voiceprint import (
+    from rmedia.modalities.av.diarize import existing_doc_ids, shard_of
+    from rmedia.modalities.av.voiceprint import (
         TurnSpan,
         VoiceEncoder,
         embed_videos,
         speaker_embeddings_indexes,
         write_speaker_embeddings,
     )
+
+    from ..ingest.audio import resolve_source
 
     cfg: CliContext = ctx.obj
     db = lancedb.connect(str(cfg.db))
@@ -523,7 +531,8 @@ def cmd_merge_speaker_embeddings(
     """
     import lancedb
 
-    from ..media.voiceprint import fold_shards, speaker_embeddings_indexes
+    from rmedia.modalities.av.voiceprint import fold_shards, speaker_embeddings_indexes
+
     from ..model.schema import SPEAKER_EMBEDDINGS_SCHEMA, SPEAKER_EMBEDDINGS_STORAGE_VERSION
 
     cfg: CliContext = ctx.obj
@@ -566,7 +575,7 @@ def cmd_build_speakers(ctx: typer.Context) -> None:
     """
     import lancedb
 
-    from ..media.voiceprint import build_speakers
+    from rmedia.modalities.av.voiceprint import build_speakers
 
     cfg: CliContext = ctx.obj
     db = lancedb.connect(str(cfg.db))
@@ -617,7 +626,7 @@ def cmd_cluster_speakers(
     import lancedb
     import numpy as np
 
-    from ..media.cluster import (
+    from rmedia.modalities.av.cluster import (
         MAX_SAME_DOC_MERGE_RATE,
         cluster_speakers,
         validate_known_identities,

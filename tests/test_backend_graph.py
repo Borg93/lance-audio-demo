@@ -24,7 +24,7 @@ from backend.graph.router import _enforce_limit
 from fastapi.testclient import TestClient
 
 from fakes import make_doc
-from raudio.ingest.ingest import ingest_many
+from rmedia.ingest.ingest import ingest_many
 
 # A 4-entity star: Sverige is mentioned in every chunk, so it co-occurs with
 # everyone — enough structure to exercise MATCH / MENTIONS / RELATIONSHIP.

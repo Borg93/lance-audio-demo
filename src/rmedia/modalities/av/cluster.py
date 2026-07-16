@@ -222,7 +222,7 @@ def cluster_speakers(
     Returns a :class:`ClusterResult` carrying the table, the written labels, and the
     summary the CLI echoes.
     """
-    from ..features.projection import _ATLAS_INSTALL_HINT
+    from rmedia.features.projection import _ATLAS_INSTALL_HINT
 
     try:
         import evoc
@@ -232,7 +232,7 @@ def cluster_speakers(
     import numpy as np
     import pyarrow as pa
 
-    from ..model.schema import SPEAKERS_SCHEMA, SPEAKERS_STORAGE_VERSION, VOICE_EMBED_DIM
+    from rmedia.model.schema import SPEAKERS_SCHEMA, SPEAKERS_STORAGE_VERSION, VOICE_EMBED_DIM
 
     if "speakers" not in db.list_tables().tables:
         raise ValueError(

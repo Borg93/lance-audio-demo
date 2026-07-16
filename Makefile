@@ -304,7 +304,7 @@ rerank-server-docker: ## Run vLLM reranker server in Docker (no driver pin).
 		--device=nvidia.com/gpu=$(RERANK_GPU) --ipc=host \
 		-p 8002:8002 \
 		-v $(HF_CACHE):/root/.cache/huggingface \
-		-v $(PWD)/src/raudio/retrieval/qwen3_vl_reranker.jinja:/templates/qwen3_vl_reranker.jinja:ro \
+		-v $(PWD)/src/rmedia/retrieval/qwen3_vl_reranker.jinja:/templates/qwen3_vl_reranker.jinja:ro \
 		--name raudio-rerank \
 		$(VLLM_IMAGE) \
 		--model Qwen/Qwen3-VL-Reranker-2B \
@@ -347,7 +347,7 @@ rerank-server:        ## Start vLLM Qwen3-VL-Reranker-2B (port 8002) on GPU $(RE
 		--max-model-len 4096 \
 		--limit-mm-per-prompt '{"image": 0, "video": 0}' \
 		--hf_overrides '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}' \
-		--chat-template ./src/raudio/retrieval/qwen3_vl_reranker.jinja
+		--chat-template ./src/rmedia/retrieval/qwen3_vl_reranker.jinja
 
 # Caption VLM — the live corpus was captioned by an external Gemma-4-31B on
 # :8003 (never started by this repo; no local weights). For local/baseline runs

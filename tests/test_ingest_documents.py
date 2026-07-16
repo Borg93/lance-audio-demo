@@ -15,7 +15,7 @@ import lance
 import pytest
 
 from fakes import make_doc
-from raudio.ingest.ingest import ingest_many
+from rmedia.ingest.ingest import ingest_many
 
 THUMB_BYTES = b"\xff\xd8\xffINGEST-THUMB"
 

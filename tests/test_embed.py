@@ -19,14 +19,14 @@ import numpy as np
 import pytest
 
 from fakes import FakeEmbedClient, det_vector, make_doc, write_synthetic_frames
-from raudio.features.columns import (
+from rmedia.features.columns import (
     FRAME_EMBED_COLUMN,
     TEXT_EMBED_COLUMN,
     embed_frame_column,
     embed_text_column,
 )
-from raudio.ingest.ingest import ingest_many
-from raudio.model.schema import EMBED_DIM
+from rmedia.ingest.ingest import ingest_many
+from rmedia.model.schema import EMBED_DIM
 
 
 class TestEmbedTextColumn:

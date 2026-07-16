@@ -16,7 +16,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from raudio.errors import RaudioError
+from rmedia.errors import RaudioError
 
 logger = logging.getLogger(__name__)
 

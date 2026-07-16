@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from raudio.ingest.ingest import (
+from rmedia.ingest.ingest import (
     _doc_id,
     _metadata_for,
     _pick_alignments,
@@ -20,14 +20,14 @@ from raudio.ingest.ingest import (
     ingest_many,
     load_metadata_csv,
 )
-from raudio.model.datamodel import (
+from rmedia.model.datamodel import (
     AlignmentSegment,
     AudioChunk,
     AudioMetadata,
     SpeechSegment,
     WordSegment,
 )
-from raudio.retrieval.search import nearest_chunks
+from rmedia.retrieval.search import nearest_chunks
 
 
 def _doc(

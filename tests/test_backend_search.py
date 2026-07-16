@@ -14,8 +14,8 @@ from __future__ import annotations
 import pytest
 
 from fakes import TOPICS, FakeEmbedClient, FakeReranker, make_doc, write_frames_aligned_to_chunks
-from raudio.features.columns import embed_frame_column, embed_text_column
-from raudio.ingest.ingest import ingest_many
+from rmedia.features.columns import embed_frame_column, embed_text_column
+from rmedia.ingest.ingest import ingest_many
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def client(tmp_path, monkeypatch):
 
     # The backend lazily constructs VLLMEmbeddingClient() with no args — swap in
     # the offline fake so the search query builder actually runs.
-    import raudio.vllm.embedding as embeddings
+    import raudio.vllm.embedding as embeddings  # backend seam (shim) until P2.8
 
     monkeypatch.setattr(embeddings, "VLLMEmbeddingClient", FakeEmbedClient)
 
@@ -91,7 +91,7 @@ def test_post_empty_query_returns_empty(client):
 
 def test_all_mode_with_rerank_runs(client, monkeypatch):
     # rerank=true on 'all' fuses, then cross-encoder re-orders the top-K.
-    import raudio.vllm.reranker as reranker
+    import raudio.vllm.reranker as reranker  # backend seam (shim) until P2.8
 
     monkeypatch.setattr(reranker, "VLLMReranker", FakeReranker)
     hits = _hits(client, q=TOPICS["economy"], mode="all", rerank="true", n=3)

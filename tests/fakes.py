@@ -3,7 +3,7 @@
 A deterministic stand-in for the vLLM embedding client plus helpers that build
 real on-disk Lance tables, so the no-GPU tests exercise the genuine
 ``LanceTable.search()`` / ``add_columns`` paths. Frame tables go through the
-production :func:`raudio.media.frames.write_chunk_frames`, so the tests dogfood
+production :func:`rmedia.modalities.av.frames.write_chunk_frames`, so the tests dogfood
 that helper instead of hand-rolling the Arrow table.
 """
 
@@ -15,9 +15,9 @@ from pathlib import Path
 import lance
 import numpy as np
 
-from raudio.media.frames import ExtractedFrame, write_chunk_frames
-from raudio.model.datamodel import AudioChunk, AudioMetadata, SpeechSegment
-from raudio.model.schema import EMBED_DIM
+from rmedia.modalities.av.frames import ExtractedFrame, write_chunk_frames
+from rmedia.model.datamodel import AudioChunk, AudioMetadata, SpeechSegment
+from rmedia.model.schema import EMBED_DIM
 
 # Three topically-distinct chunks for the search tests. The deterministic
 # embedder maps each exact string to its own unit vector, so an exact-text query

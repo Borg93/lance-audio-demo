@@ -17,7 +17,7 @@ from pathlib import Path
 
 import lance
 
-from raudio.vllm.caption import (
+from rmedia.clients.caption import (
     CAPTION_INSTRUCTION,
     CAPTION_MODEL,
     DEFAULT_CAPTION_URL,

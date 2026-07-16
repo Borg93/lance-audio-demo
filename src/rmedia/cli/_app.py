@@ -19,8 +19,8 @@ if TYPE_CHECKING:
     import lancedb
 
 app = typer.Typer(
-    name="raudio",
-    help="Audio transcription → Lance ingestion → full-text search.",
+    name="rmedia",
+    help="Media transcription/enrichment → Lance ingestion → search (media-agnostic).",
     no_args_is_help=True,
     add_completion=False,
 )
