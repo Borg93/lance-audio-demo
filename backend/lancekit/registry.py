@@ -54,12 +54,18 @@ class DatasetRegistry:
         return sorted(p.stem for p in self._root.glob("*.lance") if p.is_dir())
 
     def get(self, dataset_id: str) -> DatasetHandle:
+        # A dataset id is a single flat directory stem: reject anything with a
+        # path separator or dot segment so `..`/`/`/`.` can't escape the root,
+        # alias the default, or mint duplicate caches (audit: path traversal via
+        # the `dataset` query param). Ids must match what list_ids() advertises.
+        if dataset_id in {"", ".", ".."} or "/" in dataset_id or "\\" in dataset_id:
+            raise UnknownDatasetError(f"invalid dataset id {dataset_id!r}")
         with self._lock:
             handle = self._handles.get(dataset_id)
             if handle is not None:
                 return handle
             path = self._root / f"{dataset_id}.lance"
-            if not path.is_dir():
+            if path.parent != self._root or not path.is_dir():
                 raise UnknownDatasetError(f"dataset {dataset_id!r} not found under {self._root}")
             descriptor = load_dataset_descriptor(path, dataset_id, self._descriptor_dir)
             handle = DatasetHandle(

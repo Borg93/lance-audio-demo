@@ -145,7 +145,10 @@ def _payload_columns(handle: DatasetHandle, declared: Declared) -> list[str]:
         return []
     wanted = [*declared.identity.key_fields]
     if declared.time is not None:
-        wanted += [declared.time.start, declared.time.end]
+        # ``duration`` is a reserved convenience column (like the search group's
+        # hit projection) — carried when the row table has it so voice hits keep
+        # the field the frontend has always shown; never a declared corpus name.
+        wanted += [declared.time.start, declared.time.end, "duration"]
     wanted += declared.display.title
     if declared.display.body:
         wanted.append(declared.display.body)
@@ -231,7 +234,9 @@ def _anchor_rows(table: Any, filter_expr: str) -> list[dict[str, Any]]:
     return table.to_lance().to_table(filter=filter_expr).to_pylist()
 
 
-def _turn_row_to_anchor(row: dict[str, Any], doc_id: str) -> tuple[list[float], VoiceAnchor]:
+def _turn_row_to_anchor(
+    row: dict[str, Any], doc_id: str, embedding_column: str
+) -> tuple[list[float], VoiceAnchor]:
     anchor = VoiceAnchor(
         doc_id=doc_id,
         speaker_label=row[_TURN_SPEAKER],
@@ -239,19 +244,21 @@ def _turn_row_to_anchor(row: dict[str, Any], doc_id: str) -> tuple[list[float], 
         turn_start=float(row[_TURN_START]),
         turn_end=float(row[_TURN_END]),
     )
-    return row[_DEFAULT_EMBEDDING_COLUMN], anchor
+    return row[embedding_column], anchor
 
 
 def _resolve_turn_anchor(
-    emb_tbl: Any, doc_id: str, turn_id: int
+    emb_tbl: Any, doc_id: str, turn_id: int, embedding_column: str
 ) -> tuple[list[float], VoiceAnchor]:
     rows = _anchor_rows(emb_tbl, f"{_TURN_DOC} = '{doc_id}' AND {_TURN_ID} = {int(turn_id)}")
     if not rows:
         raise NotFoundError("anchor turn not found")
-    return _turn_row_to_anchor(rows[0], doc_id)
+    return _turn_row_to_anchor(rows[0], doc_id, embedding_column)
 
 
-def _resolve_time_anchor(emb_tbl: Any, doc_id: str, t: float) -> tuple[list[float], VoiceAnchor]:
+def _resolve_time_anchor(
+    emb_tbl: Any, doc_id: str, t: float, embedding_column: str
+) -> tuple[list[float], VoiceAnchor]:
     rows = _anchor_rows(
         emb_tbl,
         f"{_TURN_DOC} = '{doc_id}' AND {_TURN_START} <= {float(t)} AND {_TURN_END} >= {float(t)}",
@@ -260,11 +267,13 @@ def _resolve_time_anchor(emb_tbl: Any, doc_id: str, t: float) -> tuple[list[floa
         raise NotFoundError("no speaker turn at that time")
     # Overlapped speech can stack several turns over one instant; the most
     # recently started one is the active speaker — and a deterministic pick.
-    return _turn_row_to_anchor(max(rows, key=lambda r: float(r[_TURN_START])), doc_id)
+    return _turn_row_to_anchor(
+        max(rows, key=lambda r: float(r[_TURN_START])), doc_id, embedding_column
+    )
 
 
 def _resolve_speaker_anchor(
-    speakers_tbl: Any | None, doc_id: str, speaker: str
+    speakers_tbl: Any | None, doc_id: str, speaker: str, embedding_column: str
 ) -> tuple[list[float], VoiceAnchor]:
     if speakers_tbl is None:
         raise ServiceUnavailableError("speakers table not built yet — run `raudio build-speakers`")
@@ -274,7 +283,7 @@ def _resolve_speaker_anchor(
     if not rows:
         raise NotFoundError("anchor speaker not found")
     row = rows[0]
-    return row[_DEFAULT_EMBEDDING_COLUMN], VoiceAnchor(doc_id=doc_id, speaker_label=row[_TURN_SPEAKER])
+    return row[embedding_column], VoiceAnchor(doc_id=doc_id, speaker_label=row[_TURN_SPEAKER])
 
 
 def _search_turns(
@@ -492,11 +501,11 @@ def similar_voices(
         handle.db.open_table(bindings.speakers_table) if bindings.speakers_table else None
     )
     if turn_id is not None:
-        vec, anchor = _resolve_turn_anchor(emb_tbl, doc_id, turn_id)
+        vec, anchor = _resolve_turn_anchor(emb_tbl, doc_id, turn_id, bindings.embedding_column)
     elif speaker is not None:
-        vec, anchor = _resolve_speaker_anchor(speakers_tbl, doc_id, speaker)
+        vec, anchor = _resolve_speaker_anchor(speakers_tbl, doc_id, speaker, bindings.embedding_column)
     elif t is not None:
-        vec, anchor = _resolve_time_anchor(emb_tbl, doc_id, t)
+        vec, anchor = _resolve_time_anchor(emb_tbl, doc_id, t, bindings.embedding_column)
     else:
         # Unreachable — the exactly-one check above guarantees a branch.
         raise AssertionError("unhandled anchor form")

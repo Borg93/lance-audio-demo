@@ -104,14 +104,29 @@ def stream_blob_range(
             yield chunk
 
 
-def parse_range(header: str, total: int) -> tuple[int, int] | None:
-    """Parse a single ``bytes=start-end`` range header, clamped to ``total``."""
+#: A Range header the server does not honor as a single byte range: the
+#: caller should IGNORE it and serve the full 200 body (RFC 9110 §14.2 — an
+#: unrecognized unit or a form we don't support must not become a 416).
+IGNORE_RANGE = "ignore"
+
+
+def parse_range(header: str, total: int) -> tuple[int, int] | str | None:
+    """Classify a Range header.
+
+    Returns ``(start, end)`` for a satisfiable single ``bytes=`` range,
+    :data:`IGNORE_RANGE` for a header to ignore (unknown unit, malformed, or a
+    valid-but-unsupported multi-range → serve 200 per RFC 9110 §14.2), or
+    ``None`` only for a well-formed single ``bytes=`` range that is
+    *unsatisfiable* (→ 416).
+    """
     m = re.match(r"^\s*bytes=(\d*)-(\d*)\s*$", header)
     if not m:
-        return None
+        # Not a single bytes= range: unknown unit, junk, or multipart. The RFC
+        # requires ignoring it (200), never answering 416.
+        return IGNORE_RANGE
     s, e = m.group(1), m.group(2)
     if s == "" and e == "":
-        return None
+        return IGNORE_RANGE
     if s == "":
         length = int(e)
         start = max(0, total - length)
@@ -120,7 +135,7 @@ def parse_range(header: str, total: int) -> tuple[int, int] | None:
         start = int(s)
         end = int(e) if e else total - 1
     if start > end or start >= total:
-        return None
+        return None  # well-formed but unsatisfiable → 416
     return start, min(end, total - 1)
 
 
@@ -301,9 +316,9 @@ def media_clip(
     ds = table_dataset(handle, binding.table)
     if rowid_for_doc(ds, declared.identity.doc_key, doc_id) is None:
         raise NotFoundError("doc_id not found")
-    # The clip container is always MP4; the stored mime is the declared default
-    # for corpora whose docs already are MP4 (the archive case).
-    mime = _cell_value(ds, declared.identity.doc_key, doc_id, binding.mime, "video/mp4")
+    # build_clip always emits an MP4 container (libx264 + mp3), so the response
+    # mime is video/mp4 regardless of the source doc's stored mime.
+    mime = "video/mp4"
     source = f"http://127.0.0.1:{state.settings.port}/api/media/{doc_id}"
     if dataset:
         source += f"?dataset={quote(dataset, safe='')}"
@@ -326,12 +341,21 @@ def media(doc_id: str, request: Request, state: StateDep, dataset: DatasetParam 
         raise NotFoundError("doc_id not found")
 
     mime = _cell_value(ds, doc_key, doc_id, binding.mime, "application/octet-stream")
-    total = blob_size(ds, binding.media_blob, rowid)
+    try:
+        total = blob_size(ds, binding.media_blob, rowid)
+    except OSError as exc:
+        # External-URI media blob that doesn't resolve (dangling file://…): a
+        # 404 through the problem+json contract, not a bare 500 (the sibling
+        # chunk-frame path guards the identical take_blobs the same way).
+        raise NotFoundError("media not available") from exc
     range_hdr = request.headers.get("range")
     if range_hdr:
         rng = parse_range(range_hdr, total)
         if rng is None:
             return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+        if rng == IGNORE_RANGE:
+            range_hdr = None  # fall through to the full 200 body
+    if range_hdr and isinstance(rng, tuple):
         start, end = rng
         return StreamingResponse(
             stream_blob_range(ds, binding.media_blob, rowid, start=start, end=end),

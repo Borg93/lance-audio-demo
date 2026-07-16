@@ -46,6 +46,8 @@ router = APIRouter(prefix="/api/atlas", tags=["atlas"])
 
 #: Media type for the /points Arrow IPC stream response.
 _ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
+#: Max memoized /points payloads before oldest-first eviction (each is multi-MB).
+_POINTS_CACHE_MAX = 12
 
 #: Rows per caption-attach scan when decorating a selection with frame captions.
 _FRAME_CAPTION_BATCH_SIZE = 500
@@ -118,14 +120,16 @@ def atlas_points(
 
     # Memoize on (dataset, space, table version): the scan+encode is identical
     # until the table is rewritten (version bump) or the backend restarts. The
-    # cache lives on AppState (per app instance), never module-global. The cast
-    # widens state.points_cache's pre-multi-dataset key annotation; retyping the
-    # field is an integration-time cleanup.
+    # cache lives on AppState (per app instance), never module-global.
     cache = state.points_cache
     key = (handle.id, requested.name, ds.version)
     body = cache.get(key)
     if body is None:
         body = build_points(declared, requested, ds)
+        # Bound the cache: each entry is multi-MB and a superseded table version
+        # would otherwise strand its payload forever. Evict oldest-first.
+        while len(cache) >= _POINTS_CACHE_MAX:
+            cache.pop(next(iter(cache)))
         cache[key] = body
 
     return Response(

@@ -43,9 +43,27 @@
     "rerank": true
   },
   "atlas": [
-    { "name": "text", "x": "atlas_x", "y": "atlas_y", "cluster": "atlas_cluster", "source_column": "text_embedding", "table": "chunks" },
-    { "name": "visual", "x": "atlas_img_x", "y": "atlas_img_y", "cluster": "atlas_img_cluster", "source_column": "frame_embedding", "table": "chunks" },
-    { "name": "caption", "x": "atlas_cap_x", "y": "atlas_cap_y", "cluster": "atlas_cap_cluster", "source_column": "caption_embedding", "table": "chunks" }
+    { "name": "text", "x": "atlas_x", "y": "atlas_y", "cluster": "atlas_cluster", "source_column": "text_embedding", "table": "chunks",
+      "channels": [
+        { "name": "language", "column": "language" },
+        { "name": "namn", "column": "namn" },
+        { "name": "topic", "broadest_prefix": "topic_l" },
+        { "name": "doc_topic", "column": "doc_topic" }
+      ] },
+    { "name": "visual", "x": "atlas_img_x", "y": "atlas_img_y", "cluster": "atlas_img_cluster", "source_column": "frame_embedding", "table": "chunks",
+      "channels": [
+        { "name": "language", "column": "language" },
+        { "name": "namn", "column": "namn" },
+        { "name": "topic", "broadest_prefix": "topic_l" },
+        { "name": "doc_topic", "column": "doc_topic" }
+      ] },
+    { "name": "caption", "x": "atlas_cap_x", "y": "atlas_cap_y", "cluster": "atlas_cap_cluster", "source_column": "caption_embedding", "table": "chunks",
+      "channels": [
+        { "name": "language", "column": "language" },
+        { "name": "namn", "column": "namn" },
+        { "name": "topic", "broadest_prefix": "topic_l" },
+        { "name": "doc_topic", "column": "doc_topic" }
+      ] }
   ],
   "graph_presets": { "clip_title_column": "namn" },
   "capabilities": {

@@ -52,8 +52,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.shutting_down = False
     yield
     app.state.shutting_down = True
-    if state.http is not None:
-        state.http.close()
+    for resource in (state.http, state.embedder, state.reranker):
+        close = getattr(resource, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                logger.warning("error closing %s on shutdown", type(resource).__name__)
 
 
 def _include_groups(app: FastAPI) -> None:
@@ -102,6 +107,13 @@ def run(db_path: str | None = None, *, host: str | None = None, port: int | None
 
     if db_path is not None:
         os.environ["RAUDIO_DB"] = str(db_path)
+    if host is not None:
+        os.environ["RAUDIO_HOST"] = str(host)
+    if port is not None:
+        # Write it back so settings.port (which media-clip's loopback source URL
+        # reads) matches the actual bind port, not just uvicorn's argument.
+        os.environ["RAUDIO_PORT"] = str(port)
+    if db_path is not None or host is not None or port is not None:
         get_settings.cache_clear()
     settings = get_settings()
-    uvicorn.run(app, host=host or settings.host, port=port or settings.port)
+    uvicorn.run(app, host=settings.host, port=settings.port)

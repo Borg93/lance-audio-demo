@@ -22,6 +22,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from backend.core.exceptions import ValidationError
 from backend.lancekit.registry import DatasetHandle
 from backend.search_api.deps import EmbedderFactoryDep, RerankerFactoryDep, StateDep
 from backend.search_api.filters import TOPIC_FILTER, extract_filters
@@ -30,6 +31,9 @@ from backend.search_api.spec import PostSearchSpec, SearchMode, SearchSpec
 from backend.state import dataset_handle
 
 router = APIRouter(prefix="/api", tags=["search"])
+
+#: Cap on an uploaded query image, matching the voice upload's 25 MB bound.
+_MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
 
 def _filterable(handle: DatasetHandle) -> list[str]:
@@ -114,7 +118,13 @@ async def search_post(
     image: Annotated[UploadFile | None, File()] = None,
     dataset: Annotated[str | None, Query(description="Dataset id (default DB when omitted)")] = None,
 ) -> list[dict[str, Any]]:
-    image_bytes = await image.read() if image is not None else None
+    image_bytes = None
+    if image is not None:
+        # Bound the read so a large multipart part can't be buffered whole
+        # before validation (mirrors the voice upload's cap).
+        image_bytes = await image.read(_MAX_IMAGE_BYTES + 1)
+        if len(image_bytes) > _MAX_IMAGE_BYTES:
+            raise ValidationError(f"image upload exceeds {_MAX_IMAGE_BYTES // (1024 * 1024)} MB")
     # First resolution opens the Lance DB (blocking IO) — keep the loop free.
     handle = await run_in_threadpool(dataset_handle, state, dataset)
     form = await request.form()  # already parsed by FastAPI; cached by Starlette

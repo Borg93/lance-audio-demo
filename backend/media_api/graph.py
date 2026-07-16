@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import TYPE_CHECKING, Any
 
 import lance
@@ -186,6 +187,10 @@ class _GraphResources(BaseModel):
 # version-keyed cache: (db path, entities-table version) -> resources. The
 # version bump on a rebuild changes the key, so a stale engine is never served.
 _CACHE: dict[tuple[str, int], _GraphResources] = {}
+_CACHE_LOCK = threading.Lock()
+#: Bound the KG engine cache — each built engine is ~hundreds of MB, so a
+#: superseded version must not linger. Small: KGs rebuild rarely.
+_CACHE_MAX = 2
 
 
 def _clip_title_column(declared: Declared) -> str | None:
@@ -267,11 +272,16 @@ def _resources(handle: DatasetHandle) -> _GraphResources | None:
         return None
     version = lance.dataset(str(entities_path)).version
     key = (str(handle.path), version)
-    cached = _CACHE.get(key)
-    if cached is None:
-        cached = _build_resources(handle, names)
-        _CACHE[key] = cached
-    return cached
+    # Single-flight + bounded: the ~20s/~370MB build must not run N times under a
+    # cold-start thundering herd, and superseded versions must not accumulate.
+    with _CACHE_LOCK:
+        cached = _CACHE.get(key)
+        if cached is None:
+            cached = _build_resources(handle, names)
+            while len(_CACHE) >= _CACHE_MAX:
+                _CACHE.pop(next(iter(_CACHE)))
+            _CACHE[key] = cached
+        return cached
 
 
 def _node(res: _GraphResources, entity_id: str) -> GraphNode | None:

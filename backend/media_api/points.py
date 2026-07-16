@@ -66,6 +66,30 @@ def _doc_labels(
     return [first.get(d, d) for d in labels]
 
 
+def _resolve_channels(space: AtlasSpace, present: set[str]) -> list[tuple[str, str]]:
+    """Declared atlas channels resolved to ``(output_name, source_column)`` pairs.
+
+    A ``broadest_prefix`` channel maps to the highest-numbered ``<prefix>N``
+    column present (the broadest topic layer — index is data-dependent, so no
+    layer literal lives in code). Channels whose source column is absent are
+    dropped.
+    """
+    resolved: list[tuple[str, str]] = []
+    for channel in space.channels:
+        if channel.column is not None:
+            if channel.column in present:
+                resolved.append((channel.name, channel.column))
+        elif channel.broadest_prefix is not None:
+            prefix = channel.broadest_prefix
+            layers = sorted(
+                (c for c in present if c.startswith(prefix) and c[len(prefix):].isdigit()),
+                key=lambda c: int(c[len(prefix):]),
+            )
+            if layers:
+                resolved.append((channel.name, layers[-1]))
+    return resolved
+
+
 def build_points(declared: Declared, space: AtlasSpace, ds: lance.LanceDataset) -> bytes:
     """The expensive part of /points: full-table scan → one Arrow IPC stream.
 
@@ -84,10 +108,17 @@ def build_points(declared: Declared, space: AtlasSpace, ds: lance.LanceDataset) 
     other_keys = [k for k in identity.key_fields if k != identity.doc_key and k in present]
     label_field = _label_field(declared, present)
     cluster = space.cluster if space.cluster in present else None
-    filterable = declared.search.filterable if declared.search is not None else []
-    channels = [f for f in filterable if f in present and f != identity.doc_key]
+    # Declared atlas channels (output name → source column) resolved against the
+    # live schema; a broadest-prefix channel picks the highest-numbered layer
+    # column present. Falls back to the declared filterable fields (legacy
+    # behavior) when a space declares no channels.
+    resolved = _resolve_channels(space, present)
+    if not resolved:
+        filterable = declared.search.filterable if declared.search is not None else []
+        resolved = [(f, f) for f in filterable if f in present and f != identity.doc_key]
 
-    wanted = [identity.doc_key, label_field, *other_keys, space.x, space.y, cluster, *channels]
+    source_cols = [src for _, src in resolved]
+    wanted = [identity.doc_key, label_field, *other_keys, space.x, space.y, cluster, *source_cols]
     columns = [c for c in dict.fromkeys(wanted) if c is not None]
 
     # `with_row_id` ships each point's stable Lance row address (`_rowid`) so the
@@ -130,14 +161,14 @@ def build_points(declared: Declared, space: AtlasSpace, ds: lance.LanceDataset) 
     if cluster is not None:
         arrays.append(ints(cluster, pa.int32()))
         names.append("cluster")
-    for channel in channels:
-        if channel in names:
+    for out_name, source_col in resolved:
+        if out_name in names:
             continue
-        # Declared filterable field — low-cardinality metadata for legend/hover.
-        # A small label list + a per-point int32; high-cardinality text stays
-        # out and is lazy-fetched per chunk via /atlas/chunk.
-        arrays.append(_dictionary(tbl.column(channel)))
-        names.append(channel)
+        # Declared categorical channel — low-cardinality metadata for
+        # legend/hover. A small label list + a per-point int32; high-cardinality
+        # text stays out and is lazy-fetched per chunk via /atlas/chunk.
+        arrays.append(_dictionary(tbl.column(source_col)))
+        names.append(out_name)
 
     # count + space + docFiles ride along in the schema metadata. `docFiles` has
     # one entry per distinct doc (not one per point), so it can't be a column in

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from backend.lancekit.descriptor import Declared
-from backend.media_api.media import parse_range, validate_doc_key
+from backend.media_api.media import IGNORE_RANGE, parse_range, validate_doc_key
 from backend.search_api.filters import build_where_clause
 from backend.search_api.postprocess import rrf_fuse
 from fastapi import HTTPException
@@ -51,8 +51,13 @@ class TestParseRange:
         assert parse_range("bytes=0-5000", total=1000) == (0, 999)
 
     @pytest.mark.parametrize("header", ["", "bytes=", "kbytes=0-1", "bytes=abc-def"])
-    def test_malformed_returns_none(self, header: str) -> None:
-        assert parse_range(header, total=1000) is None
+    def test_unhonored_range_is_ignored_not_416(self, header: str) -> None:
+        # RFC 9110 §14.2: an unknown unit / malformed / unsupported form must be
+        # ignored (serve 200), never answered with 416.
+        assert parse_range(header, total=1000) == IGNORE_RANGE
+
+    def test_multi_range_is_ignored(self) -> None:
+        assert parse_range("bytes=0-10,20-30", total=1000) == IGNORE_RANGE
 
     def test_start_beyond_total_returns_none(self) -> None:
         assert parse_range("bytes=2000-3000", total=1000) is None

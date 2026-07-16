@@ -88,6 +88,20 @@ class Search(BaseModel):
     rerank: bool = False
 
 
+class AtlasChannel(BaseModel):
+    """One categorical colour channel on the atlas: output name ← source column.
+
+    ``column`` names the source column directly; ``broadest_prefix`` instead
+    selects the highest-numbered ``<prefix>N`` column present (the broadest
+    topic layer, whose index is data-dependent) — so no ``topic_l`` literal
+    lives in code. Exactly one of the two is set.
+    """
+
+    name: str
+    column: str | None = None
+    broadest_prefix: str | None = None
+
+
 class AtlasSpace(BaseModel):
     name: str
     x: str
@@ -95,6 +109,7 @@ class AtlasSpace(BaseModel):
     cluster: str
     source_column: str
     table: str
+    channels: list[AtlasChannel] = Field(default_factory=list)
 
 
 class Declared(BaseModel):

@@ -14,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AnyHttpUrl, Field, field_validator
+from pydantic import AliasChoices, AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,8 +26,17 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    embed_url: str = Field(default="http://127.0.0.1:8001", alias="RAUDIO_EMBED_URL")
-    rerank_url: str = Field(default="http://127.0.0.1:8002", alias="RAUDIO_RERANK_URL")
+    # §4.4 names the encoder URLs MEDIA_EMBED_URL / MEDIA_RERANK_URL; the legacy
+    # RAUDIO_* aliases stay accepted (AliasChoices) so existing .env/launch
+    # scripts keep working through the transition.
+    embed_url: str = Field(
+        default="http://127.0.0.1:8001",
+        validation_alias=AliasChoices("MEDIA_EMBED_URL", "RAUDIO_EMBED_URL"),
+    )
+    rerank_url: str = Field(
+        default="http://127.0.0.1:8002",
+        validation_alias=AliasChoices("MEDIA_RERANK_URL", "RAUDIO_RERANK_URL"),
+    )
     host: str = Field(default="127.0.0.1", alias="RAUDIO_HOST")
     port: int = Field(default=8000, ge=1, le=65535, alias="RAUDIO_PORT")
     db_path: Path = Field(default=Path("transcripts_v2.lance"), alias="RAUDIO_DB")

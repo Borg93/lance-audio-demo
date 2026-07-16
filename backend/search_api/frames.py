@@ -25,6 +25,10 @@ from backend.search_api.constants import (
 from backend.search_api.filters import sql_literal
 from backend.search_api.postprocess import RowKey, row_key
 
+#: Cap on OR-of-ANDs composite-key clauses in the frame→row join — Lance's
+#: planner errors well past this (the known ~500-800 key-OR ceiling).
+_MAX_JOIN_KEYS = 300
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -158,6 +162,13 @@ def frames_to_row_hits(
             score_by_key[key] = {k: r[k] for k in ("_distance", "_score") if k in r}
     if not keys:
         return []
+    # The composite-key OR join builds one clause per distinct key; Lance's
+    # planner degrades / errors on very large OR-of-ANDs filters (crashes past
+    # ~500-800 clauses — the known key-OR ceiling). Cap the join to the
+    # best-ranked keys so a legal high-n mode=all search returns its top hits
+    # instead of 400ing.
+    if len(keys) > _MAX_JOIN_KEYS:
+        keys = keys[:_MAX_JOIN_KEYS]
     # Composite-key OR join back to the row table. A pure metadata filter (no
     # vector/FTS query) must go through the Lance dataset's filter scan — a
     # no-query `table.search().where(...)` returns nothing.
