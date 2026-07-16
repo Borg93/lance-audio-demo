@@ -66,6 +66,33 @@ class AppState(BaseModel):
     # module-global, so two app instances (e.g. tests) can't cross-contaminate.
     # Writes are idempotent (same input → same bytes), so a plain dict suffices.
     points_cache: dict[tuple[str, int], bytes] = Field(default_factory=dict)
+    # Multi-dataset registry (LANCE_MEDIA_MERGE §4.4) — the schema-agnostic
+    # resolution path. The legacy per-table fields above stay during the
+    # media_api/search_api port and are stripped at integration.
+    registry: Any | None = None  # backend.lancekit.registry.DatasetRegistry
+
+
+def dataset_handle(state: AppState, dataset_id: str | None = None):
+    """Resolve a dataset by id through the registry (``None`` → the default).
+
+    The one resolution path both router groups share; raises
+    ``backend.core.exceptions.NotFoundError`` for unknown ids so the RFC 9457
+    handler renders a clean 404.
+    """
+    from backend.core.exceptions import NotFoundError
+    from backend.lancekit.registry import DatasetRegistry, UnknownDatasetError
+
+    if state.registry is None:
+        state.registry = DatasetRegistry(
+            state.settings.db_root, state.settings.descriptor_dir, state.settings.default_dataset_id
+        )
+    registry: DatasetRegistry = state.registry
+    try:
+        return registry.get(dataset_id) if dataset_id else registry.default()
+    except UnknownDatasetError as exc:
+        raise NotFoundError(str(exc)) from exc
+    except ValueError as exc:  # invalid/missing descriptor — a config problem, not a 500
+        raise NotFoundError(str(exc)) from exc
 
 
 def open_resources(db_path: str | Path) -> AppState:

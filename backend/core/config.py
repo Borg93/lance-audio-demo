@@ -31,7 +31,16 @@ class Settings(BaseSettings):
     host: str = Field(default="127.0.0.1", alias="RAUDIO_HOST")
     port: int = Field(default=8000, ge=1, le=65535, alias="RAUDIO_PORT")
     db_path: Path = Field(default=Path("transcripts_v2.lance"), alias="RAUDIO_DB")
+    # Multi-dataset serving (LANCE_MEDIA_MERGE §4.4): the registry root holds
+    # one `<id>.lance` dir per dataset; `db_path`'s stem stays the default
+    # dataset so the legacy single-DB routes keep their behavior.
+    db_root: Path = Field(default=Path("."), alias="MEDIA_DB_ROOT")
+    descriptor_dir: Path = Field(default=Path("config/descriptors"), alias="MEDIA_DESCRIPTOR_DIR")
     cors_origins: list[str] = Field(default_factory=lambda: ["*"], alias="RAUDIO_CORS_ORIGINS")
+
+    @property
+    def default_dataset_id(self) -> str:
+        return self.db_path.stem
     # Externally-reachable origin for media URLs in MCP clip apps (LAN IP,
     # tunnel, reverse proxy). Unset = derive http://{host}:{port} locally.
     # AnyHttpUrl: this value lands verbatim in the clip app's CSP allow-list
