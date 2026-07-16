@@ -23,6 +23,8 @@ dependencies = [
     "pydantic-settings>=2.14.1",
     "fastmcp[apps]>=3.4.2",
     "lance-graph>=0.5.4",
+    "ray[data]>=2.56.0",
+    "lance-ray>=0.4.2",
 ]
 
 [project.optional-dependencies]

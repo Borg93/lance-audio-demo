@@ -215,6 +215,35 @@ def upsert_blob_column(
         if progress is not None:
             progress(len(row_ids))
 
+    attach_values_by_rowid(
+        dataset_path,
+        name=name,
+        output_type=output_type,
+        value_by_row_id=value_by_row_id,
+        batch_rows=batch_rows,
+        checkpoint_file=checkpoint_file,
+    )
+    ckpt.cleanup()  # column is durably attached — the sidecar is no longer needed
+    return total
+
+
+def attach_values_by_rowid(
+    dataset_path: str | Path,
+    *,
+    name: str,
+    output_type: pa.DataType,
+    value_by_row_id: dict[int, Any],
+    batch_rows: int = 256,
+    checkpoint_file: str | Path | None = None,
+) -> None:
+    """Attach a fully-computed ``{_rowid: value}`` map as a new column.
+
+    The second pass of the blob shape, shared with the Ray driver
+    (:mod:`rmedia.core.driver`), which distributes the compute pass and hands
+    the collected map here. A row id missing from the map raises (loud failure)
+    rather than misaligning.
+    """
+    ds = lance.dataset(str(dataset_path))
     schema = pa.schema([pa.field(name, output_type, nullable=True)])
 
     @lance.batch_udf(output_schema=schema, checkpoint_file=_as_str(checkpoint_file))
@@ -225,8 +254,6 @@ def upsert_blob_column(
 
     logger.info("attaching column %s (%s) for %s row(s)", name, output_type, len(value_by_row_id))
     ds.add_columns(attach, read_columns=["_rowid"], batch_size=batch_rows)
-    ckpt.cleanup()  # column is durably attached — the sidecar is no longer needed
-    return total
 
 
 def _read_blobs(ds: lance.LanceDataset, column: str, row_ids: list[int]) -> list[bytes]:

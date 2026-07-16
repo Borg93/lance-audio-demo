@@ -12,7 +12,15 @@ here is what wires them onto ``app`` so the entry point (``rmedia.__main__``)
 sees the full command set.
 """
 
-from . import features, ingest, media, search, speaker, transcribe  # noqa: F401 — register commands
+from . import (  # noqa: F401 — register commands
+    features,
+    ingest,
+    media,
+    pipeline,
+    search,
+    speaker,
+    transcribe,
+)
 from ._app import app
 
 __all__ = ["app"]
