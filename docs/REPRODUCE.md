@@ -117,6 +117,26 @@ The full DAG, in dependency order. Each stage is **resumable** (skips already-
 populated rows / files), so a crash is safe to re-run. Run every command with
 `DB=transcripts_v2.lance`.
 
+> [!NOTE]
+> **Two equivalent execution paths for the derived columns.** The per-column
+> `make embed-chunks` / `feature …` targets below are the original in-process
+> path. The **Ray Data pipeline** (`rmedia pipeline`, added in Phase 1 of
+> [LANCE_MEDIA_MERGE.md](LANCE_MEDIA_MERGE.md)) runs the *same* stages as
+> `read_lance → map_batches(actor pool) → driver-side commit` — the form that
+> submits unchanged to KubeRay in production (see
+> [RASK_LANDING.md](RASK_LANDING.md)). Inspect the stage DAG and run it with:
+>
+> ```bash
+> make pipeline-plan  DB=$DB                       # print the stage DAG (shape/table/gate/client/actors×GPU)
+> make pipeline-run   DB=$DB STAGE=text_embedding  # one stage, distributed over a Ray actor pool
+> make pipeline-index DB=$DB                        # IVF_PQ cosine + FTS/BTREE via lance-ray
+> make features-all-ray DB=$DB                      # every per-row stage → index → EVōC atlas + topics → compact
+> ```
+>
+> The two paths write byte-for-byte-equivalent columns (Phase-1 parity gate,
+> `scripts/parity_check.py`); pick either. The global fits (EVōC atlas layout,
+> Toponymy topics) are single-driver in both — they cannot be row-parallel.
+
 ```mermaid
 flowchart TD
     CSV["video_batcher.csv (local, gitignored seed)"] --> DL[download videos]

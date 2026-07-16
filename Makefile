@@ -427,6 +427,37 @@ features-all: embed-chunks extract-chunk-frames embed-chunk-frames speaker-turns
 # new stage skips already-populated rows via `WHERE … IS NULL`.
 pipeline-multimodal: pipeline embed-chunks extract-chunk-frames embed-chunk-frames compact
 
+# ─── Ray Data pipeline (the distributed driver — Phase 1 of LANCE_MEDIA_MERGE) ─
+# `rmedia pipeline` runs registry stages as `read_lance → map_batches(actor pool)
+# → driver-side commit`, replacing the ThreadPoolExecutor/`_shard` mechanisms.
+# `plan` prints the stage DAG (shape/table/gate/client/actor·GPU); `run` executes
+# one stage distributed; `index` builds IVF_PQ + FTS/BTREE via lance-ray. In prod
+# (rask) the same entrypoint is submitted to KubeRay — see docs/RASK_LANDING.md.
+STAGE ?= text_embedding
+pipeline-plan:        ## Print the Ray stage DAG (shape, table, gate, client, actors×GPU).
+	uv run rmedia --db $(DB) pipeline plan
+pipeline-run:         ## Run ONE Ray stage distributed. Usage: make pipeline-run STAGE=frame_embedding
+	uv run --extra multimodal rmedia --db $(DB) pipeline run $(STAGE) \
+		--embed-url $(EMBED_URL) --caption-url $(CAPTION_URL) --audio-root $(AUDIO_DIR)
+pipeline-index:       ## Build the standard indexes (IVF_PQ cosine + FTS/BTREE) distributed via lance-ray.
+	uv run rmedia --db $(DB) pipeline index
+
+# Ray-native equivalent of `features-all`: every per-row column stage through the
+# actor-pool driver (dependency order), then distributed indexing, then the two
+# global fits (EVōC atlas + Toponymy topics stay single-driver — they can't be
+# row-parallel), then compaction. Needs embed :8001/$(EMBED_URL) + Gemma :8003.
+features-all-ray:     ## features-all via the Ray Data pipeline (rmedia pipeline run per stage).
+	$(MAKE) pipeline-run STAGE=text_embedding
+	$(MAKE) pipeline-run STAGE=extract_frames
+	$(MAKE) pipeline-run STAGE=frame_embedding
+	$(MAKE) pipeline-run STAGE=caption
+	$(MAKE) pipeline-run STAGE=caption_embedding
+	$(MAKE) pipeline-run STAGE=diarize
+	$(MAKE) pipeline-index
+	$(MAKE) atlas-all
+	$(MAKE) topics
+	$(MAKE) compact
+
 compact:               ## Compact $(TABLE)'s fragments + rebuild its indexes (run after bulk writes; TABLE=chunk_frames for frames).
 	uv run raudio --db $(DB) --table $(TABLE) compact
 	@echo "── multimodal indexing complete ────────────────────────────────"
