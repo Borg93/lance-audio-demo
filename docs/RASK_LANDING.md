@@ -408,3 +408,19 @@ Everything else in §9 held up: `:8805`/`:8806` are free, service-kit is
 genuinely dependency-light (no lancedb), `SlashToleranceMiddleware` is real, the
 `RASK_API_PREFIX` `/api`-vs-`/api/v1` gotcha is real, and the studio MFE is
 `:5177`.
+
+> **Verified against rask HEAD (2026-07-16).** The six load-bearing claims were
+> re-checked directly against source (not just recon): the `search-api`/`:8802`
+> collision — and that a `viewer` brick *also* already exists, so the "never
+> named viewer" rule is a hard collision too — (`chart/values.yaml:59`,
+> `scripts/dev-micro.sh:34`, `components/services/{search_api,viewer}/`); the
+> keyword-only `make_service_app(*, title, routers, proxy_router=None,
+> lifespan=None)` (`packages/service-kit/src/service_kit/__init__.py:89`);
+> `:8805`/`:8806` unused (0 hits); gateway `_routes()` with the two core
+> catch-alls `(prefix,*core)` + `("/api",*core)` pinned last and matched by list
+> order in `_pick_route` (`components/services/gateway/src/gateway/__init__.py:46-71`);
+> `viewer_input`/`viewer_output` as defaultless required `str` fields
+> (`service-kit/config.py:49-50`); and `api_prefix` default `/api/v1`
+> (`config.py:52`) vs `RASK_API_PREFIX=/api` in dev-micro (`dev-micro.sh:24`,
+> whose comment documents the exact `/api/*`→catch-all 404). New-brick upstreams
+> follow the `RASK_<NAME>_API_URL` convention (`RASK_MEDIA_API_URL`).
