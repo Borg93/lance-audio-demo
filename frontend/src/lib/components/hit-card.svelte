@@ -164,7 +164,7 @@
 {#if layout === 'tile'}
   <!-- Relative wrapper: the card root is a <button>, so the voice action must
        be a SIBLING overlay (nested buttons are invalid HTML). -->
-  <div class="group relative h-full">
+  <div class="group relative h-full" data-hit-key={hitKey(hit)}>
     <button
       type="button"
       {onclick}
@@ -238,7 +238,7 @@
     </div>
   </div>
 {:else}
-  <div class="group relative">
+  <div class="group relative" data-hit-key={hitKey(hit)}>
     <button
       type="button"
       {onclick}

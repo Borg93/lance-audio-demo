@@ -423,6 +423,7 @@ fn fs(@location(0) rgb : vec3f, @location(1) quad : vec2f,
         },
       ],
     });
+    let drawn = 0;
     if (count > 0 && posBuffer && colorBuffer && stateBuffer) {
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, uniformBindGroup);
@@ -430,9 +431,17 @@ fn fs(@location(0) rgb : vec3f, @location(1) quad : vec2f,
       pass.setVertexBuffer(1, colorBuffer);
       pass.setVertexBuffer(2, stateBuffer);
       pass.draw(6, count);
+      drawn = count;
     }
     pass.end();
     dev.queue.submit([enc.finish()]);
+    // Test hook: expose how many instanced points the last frame drew, so an
+    // e2e check can assert the WebGPU scatter actually rendered (pointsDrawn > 0).
+    if (typeof window !== 'undefined') {
+      (window as unknown as { __atlasStats?: { pointsDrawn: number } }).__atlasStats = {
+        pointsDrawn: drawn,
+      };
+    }
   }
 
   // ── coord helpers ─────────────────────────────────────────────────────────

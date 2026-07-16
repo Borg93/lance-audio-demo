@@ -38,6 +38,15 @@ class DescriptorStore {
       const view = await getDatasetView(id, isDefault);
       setActiveView(view);
       this.view = view;
+      // Test hook: expose the active dataset id + identity so an e2e check can
+      // prove which dataset the same build is currently rendering.
+      if (typeof window !== 'undefined') {
+        (window as unknown as { __activeDataset?: unknown }).__activeDataset = {
+          id: view.id,
+          keyFields: view.keyFields,
+          hasTime: view.hasTime,
+        };
+      }
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e);
     }
