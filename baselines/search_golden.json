@@ -1,0 +1,186 @@
+{
+  "db": "transcripts_v2.lance",
+  "backend": "http://127.0.0.1:8000",
+  "queries": [
+    {
+      "params": {
+        "q": "statsministern",
+        "mode": "fts"
+      },
+      "top_keys": [
+        "3d57963e94dc7cd4|0|98",
+        "7107c61ea4f72c0d|0|12",
+        "9f13b0b4972492dc|0|49",
+        "035907e511826231|0|8",
+        "96c6fdafb085dd02|0|6",
+        "681432adca6363e1|0|266",
+        "035907e511826231|0|15",
+        "7107c61ea4f72c0d|0|42",
+        "afdcd73a6a1589e4|0|196",
+        "035907e511826231|0|13"
+      ]
+    },
+    {
+      "params": {
+        "q": "klimatförhandlingarna",
+        "mode": "fts"
+      },
+      "top_keys": [
+        "d8f010deda122a20|0|83",
+        "d8f010deda122a20|0|7",
+        "d8f010deda122a20|0|6",
+        "d8f010deda122a20|0|119",
+        "cae2831ca68a6929|0|68",
+        "ac3c42fda97e4723|0|51",
+        "ff3b8c0af3ba9433|0|49",
+        "ac3c42fda97e4723|0|68"
+      ]
+    },
+    {
+      "params": {
+        "q": "polisen",
+        "mode": "fts"
+      },
+      "top_keys": [
+        "81663155e88fe628|0|14",
+        "23740d7d98e4ed7f|0|22",
+        "5d64070bfa60a484|0|46",
+        "3b37174f1bf72616|0|88",
+        "08f39a3d48260565|0|40",
+        "be9aa97ab443871d|0|74",
+        "593b9f4878ab0d60|0|122",
+        "bc87b8e6b49b09a9|0|140",
+        "470caadf9bace753|0|68",
+        "6b50e84a28da1f14|0|15"
+      ]
+    },
+    {
+      "params": {
+        "q": "diskussion om klimatpolitik",
+        "mode": "semantic"
+      },
+      "top_keys": [
+        "1b5c8a785bd587d8|0|111",
+        "91a613185de92e23|0|143",
+        "cae2831ca68a6929|0|15",
+        "e811e7485e0debf5|0|28",
+        "3090ce7888e6d712|0|28",
+        "8cfe46a56c6fa400|0|114",
+        "33f498ebe84875e3|0|31",
+        "694c2b2145553d5b|0|61",
+        "0814941b85bfaea3|0|80",
+        "5fa7fc59e50e7f37|0|306"
+      ]
+    },
+    {
+      "params": {
+        "q": "presskonferens om terrorism",
+        "mode": "semantic"
+      },
+      "top_keys": [
+        "59d1d6e9ef3a8ede|0|6",
+        "0a331914aacd50db|0|3",
+        "42b8ad4dfd3779ba|0|2",
+        "de69ce8c6c41a023|0|4",
+        "c5466bd9c9849c0a|0|0",
+        "8623d277e4777837|0|0",
+        "1b5c8a785bd587d8|0|0",
+        "bfe4b1284fd8ec3d|0|7",
+        "dac276c4723a54a9|0|2",
+        "542a3fa726818e60|0|0"
+      ]
+    },
+    {
+      "params": {
+        "q": "ny generaldirektör utses",
+        "mode": "semantic"
+      },
+      "top_keys": [
+        "e83e0e78f7a150bf|0|13",
+        "2b6d30929fd69aa4|0|49",
+        "5133af9f2d977d8a|0|0",
+        "ac2672e5be1edc22|0|72",
+        "de69ce8c6c41a023|0|5",
+        "29c0c879611a5ca5|0|7",
+        "2fe56581451c85d9|0|6",
+        "2b6d30929fd69aa4|0|4",
+        "a018ccfbf9ccf011|0|6",
+        "f90ecefec978efe8|0|425"
+      ]
+    },
+    {
+      "params": {
+        "q": "regeringens budget",
+        "mode": "hybrid"
+      },
+      "top_keys": [
+        "ed56fedfb376058d|0|143",
+        "45fa0ab9bf6a47c8|0|215",
+        "e7266f49005d8e21|0|14",
+        "8b20224d74392055|0|78",
+        "9681b0b524f7d0fc|0|93",
+        "02e811f56fc493f7|0|69",
+        "f47e5c71db37becf|0|56",
+        "49cd25045a9abd0e|0|170",
+        "2391643f2a6f21eb|0|67",
+        "2a28388ceb30455d|0|24"
+      ]
+    },
+    {
+      "params": {
+        "q": "utrikespolitik",
+        "mode": "hybrid"
+      },
+      "top_keys": [
+        "ae7f334533ddc37f|0|92",
+        "768b5fdd71e68fe8|0|5",
+        "3b37174f1bf72616|0|29",
+        "964ce81214310ce2|0|63",
+        "538d5af8f559b3eb|0|97",
+        "c9e33a68486f679c|0|126",
+        "537904fa44c95ca8|0|65",
+        "b845d63dae88c7c5|0|242",
+        "ff9ad6f0eb914fe8|0|3",
+        "e6949679cdd1210c|0|85"
+      ]
+    },
+    {
+      "params": {
+        "q": "regeringen",
+        "mode": "fts",
+        "language": "sv"
+      },
+      "top_keys": [
+        "4a8305cb80a34d04|0|54",
+        "19cdf3a50ddb5b96|0|90",
+        "77b70ec92165e1fe|0|101",
+        "f65c7b2d361e3238|0|62",
+        "78ac7b3ead2c8337|0|164",
+        "2dc80ce2a3f01016|0|23",
+        "a0c38a6f3b759442|0|29",
+        "3b37174f1bf72616|0|97",
+        "6b7d4a93e5d7bc22|0|55",
+        "8d7f2775944fe0a7|0|142"
+      ]
+    },
+    {
+      "params": {
+        "q": "minister",
+        "mode": "hybrid",
+        "language": "sv"
+      },
+      "top_keys": [
+        "1dcfb7675b52df59|0|26",
+        "b4851ffe4d6cdea1|0|14",
+        "2cd8bb20b637a93b|0|31",
+        "33f498ebe84875e3|0|29",
+        "d34a4db032827c63|0|368",
+        "96c6fdafb085dd02|0|6",
+        "7a65022707eb5708|0|66",
+        "bf33e51a1b39f4a7|0|7",
+        "90aaf710dea402c8|0|154",
+        "328ff92326c69cf3|0|45"
+      ]
+    }
+  ]
+}

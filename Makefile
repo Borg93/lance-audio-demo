@@ -213,9 +213,15 @@ labeler:              ## Run the manual language relabeler on $(AUDIO_DIR) (port
 # Long-running vLLM HTTP servers serve Qwen3-VL-Embedding-2B + Reranker-2B.
 # CLI commands and the FastAPI backend are clients of these servers.
 # Online inference: model loads once, stays warm across all uses.
+# Ports are parameterized (EMBED_PORT/RERANK_PORT) because :8001 is commonly
+# squatted by other dev stacks (e.g. the lance-ns lineage-api container maps
+# host 8001) — override with `make embed-server EMBED_PORT=8011` and the URLs
+# follow automatically.
 EMBED_BACKEND   ?= vllm
-EMBED_URL       ?= http://127.0.0.1:8001
-RERANK_URL      ?= http://127.0.0.1:8002
+EMBED_PORT      ?= 8001
+RERANK_PORT     ?= 8002
+EMBED_URL       ?= http://127.0.0.1:$(EMBED_PORT)
+RERANK_URL      ?= http://127.0.0.1:$(RERANK_PORT)
 # Both vLLM servers run on the SAME GPU by default (override the card with
 # `make embed-server VLLM_GPU=N`). Two 2B models co-locate fine at ~0.45
 # mem-frac each (~88 GB on a 96 GB card).
@@ -324,8 +330,8 @@ kernels-prepare:      ## Pre-download FA3 kernels from HF hub (one-time, ~200 MB
 
 embed-server:         ## Start vLLM Qwen3-VL-Embedding-2B (port 8001) on GPU $(EMBED_GPU).
 	CUDA_VISIBLE_DEVICES=$(EMBED_GPU) $(VLLM_ENV) \
-	uvx --python 3.12 --with "kernels" $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve Qwen/Qwen3-VL-Embedding-2B \
-		--runner pooling --port 8001 --enable-prefix-caching \
+	uvx --python 3.12 $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve Qwen/Qwen3-VL-Embedding-2B \
+		--runner pooling --port $(EMBED_PORT) --enable-prefix-caching \
 		--dtype bfloat16 --gpu-memory-utilization $(EMBED_MEM_FRAC) \
 		--max-model-len 8192 \
 		--limit-mm-per-prompt '{"image": 1}' \
@@ -335,13 +341,32 @@ embed-server:         ## Start vLLM Qwen3-VL-Embedding-2B (port 8001) on GPU $(E
 # card to wire up the no/yes classification head and /v1/rerank endpoint.
 rerank-server:        ## Start vLLM Qwen3-VL-Reranker-2B (port 8002) on GPU $(RERANK_GPU).
 	CUDA_VISIBLE_DEVICES=$(RERANK_GPU) $(VLLM_ENV) \
-	uvx --python 3.12 --with "kernels" $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve Qwen/Qwen3-VL-Reranker-2B \
-		--runner pooling --port 8002 \
+	uvx --python 3.12 $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve Qwen/Qwen3-VL-Reranker-2B \
+		--runner pooling --port $(RERANK_PORT) \
 		--dtype bfloat16 --gpu-memory-utilization $(RERANK_MEM_FRAC) \
 		--max-model-len 4096 \
 		--limit-mm-per-prompt '{"image": 0, "video": 0}' \
 		--hf_overrides '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}' \
 		--chat-template ./src/raudio/retrieval/qwen3_vl_reranker.jinja
+
+# Caption VLM — the live corpus was captioned by an external Gemma-4-31B on
+# :8003 (never started by this repo; no local weights). For local/baseline runs
+# serve a small Qwen3-VL instruct there instead and point the caption feature at
+# it via RAUDIO_CAPTION_MODEL=$(CAPTION_SERVE_MODEL). Parity (LANCE_MEDIA_MERGE
+# P1.7) only needs the old and new pipeline runs to share the SAME captioner.
+CAPTION_SERVE_MODEL ?= Qwen/Qwen3-VL-2B-Instruct
+CAPTION_GPU         ?= 1
+CAPTION_SERVE_MEM_FRAC ?= 0.45
+caption-server:       ## Start a local caption VLM (port 8003) on GPU $(CAPTION_GPU).
+	# VLLM_USE_FLASHINFER_SAMPLER=0: the generative sampler JIT-compiles via
+	# flashinfer, which needs nvcc/CUDA_HOME — absent on this box. Torch-native
+	# sampling is the supported fallback (pooling servers never hit this path).
+	CUDA_VISIBLE_DEVICES=$(CAPTION_GPU) VLLM_USE_FLASHINFER_SAMPLER=0 $(VLLM_ENV) \
+	uvx --python 3.12 $(VLLM_INDEX) --from "$(VLLM_PIN)" vllm serve $(CAPTION_SERVE_MODEL) \
+		--port 8003 --enable-prefix-caching \
+		--dtype bfloat16 --gpu-memory-utilization $(CAPTION_SERVE_MEM_FRAC) \
+		--max-model-len 8192 \
+		--limit-mm-per-prompt '{"image": 1}'
 
 embed-chunks:         ## Embed chunks.text → text_embedding column + IVF_PQ index.
 	uv run --extra multimodal raudio --db $(DB) feature text_embedding --url $(EMBED_URL)

@@ -1,0 +1,9 @@
+# Fixed 5-doc parity sample (P1.0 / P1.7 of docs/LANCE_MEDIA_MERGE.md).
+# The 5 shortest videos in transcripts_v2.lance documents; source .mp4s restored
+# from the HCP bucket film-raudio (rahcp --config ra-hcp/.rahcp/config.yaml s3 download)
+# into input/sv/. Columns: doc_id  audio_path  duration_s
+018f41ad28a1bc1b  T0001843_00001.mp4  480.048
+9b07c15d88d17480  T0001119_00001.mp4  480.048
+4c0693b492d7e7aa  T0001017_00001.mp4  720.048
+5133af9f2d977d8a  T0000294_00001.mp4  724.944
+eacf9f2d9127f507  T0001266_00001.mp4  780.048

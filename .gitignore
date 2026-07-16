@@ -60,3 +60,6 @@ images_per.jpg
 trocr-test/results/
 nohup.out
 kg_work/
+
+# Baseline capture (LANCE_MEDIA_MERGE §5.3): JSONs are committed, the Lance DB is local-only
+baselines/*.lance/

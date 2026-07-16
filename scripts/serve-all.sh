@@ -16,10 +16,10 @@ cd "$(dirname "$0")/.."
 
 DB=${DB:-transcripts_v2.lance}
 VLLM_GPU=${VLLM_GPU:-0}
-# vLLM ports are PINNED to the `make embed-server`/`rerank-server` targets (which
-# hardcode --port 8001/8002) — not env-overridable without editing the Makefile.
-EMBED_PORT=8001
-RERANK_PORT=8002
+# vLLM ports — overridable (e.g. EMBED_PORT=8011 when :8001 is squatted by
+# another dev stack); forwarded to the make targets and the backend env below.
+EMBED_PORT=${EMBED_PORT:-8001}
+RERANK_PORT=${RERANK_PORT:-8002}
 BACKEND_PORT=${BACKEND_PORT:-8000}
 FRONTEND_PORT=${FRONTEND_PORT:-5274}
 LOG_DIR=${LOG_DIR:-/tmp}
@@ -57,21 +57,21 @@ up() {
   if healthy "$EMBED_PORT" health; then
     log "• vLLM embed already up (:$EMBED_PORT)"
   else
-    start_detached "vLLM embed" "$LOG_DIR/raudio-embed.log" "VLLM_GPU=$VLLM_GPU make embed-server"
+    start_detached "vLLM embed" "$LOG_DIR/raudio-embed.log" "VLLM_GPU=$VLLM_GPU EMBED_PORT=$EMBED_PORT make embed-server"
     wait_healthy "$EMBED_PORT" health "vLLM embed" 300 || exit 1
   fi
 
   if healthy "$RERANK_PORT" health; then
     log "• vLLM rerank already up (:$RERANK_PORT)"
   else
-    start_detached "vLLM rerank" "$LOG_DIR/raudio-rerank.log" "VLLM_GPU=$VLLM_GPU make rerank-server"
+    start_detached "vLLM rerank" "$LOG_DIR/raudio-rerank.log" "VLLM_GPU=$VLLM_GPU RERANK_PORT=$RERANK_PORT make rerank-server"
     wait_healthy "$RERANK_PORT" health "vLLM rerank" 300 || exit 1
   fi
 
   if healthy "$BACKEND_PORT" api/health; then
     log "• backend already up (:$BACKEND_PORT)"
   else
-    start_detached "backend" "$LOG_DIR/raudio-backend.log" "DB=$DB BACKEND_PORT=$BACKEND_PORT make backend"
+    start_detached "backend" "$LOG_DIR/raudio-backend.log" "DB=$DB BACKEND_PORT=$BACKEND_PORT RAUDIO_EMBED_URL=http://127.0.0.1:$EMBED_PORT RAUDIO_RERANK_URL=http://127.0.0.1:$RERANK_PORT make backend"
     wait_healthy "$BACKEND_PORT" api/health "backend" 120 || exit 1
   fi
 
