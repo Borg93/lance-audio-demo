@@ -181,7 +181,7 @@ MUST = phase-gating; SHOULD = do when reached, may slip. Every criterion's Check
   **Check**: `curl` per endpoint on transcripts_v2; one probe on the smoke DB returns the empty-state contract.
 - **P2.8 (MUST)** Standalone backend: zero `raudio`/`rmedia` imports in `backend/` (shim no longer needed by backend); backend tests pass without the pipeline package importable.
   **Check**: `grep -rn "import raudio\|from raudio\|import rmedia\|from rmedia" backend/ && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'`; `uv run pytest tests/backend` (exact path per repo layout) surfaced `N passed`.
-- **P2.9 (SHOULD)** MCP tools re-pointed at the descriptor-driven services; ported voice endpoint validated against `evals/voice_labels_*.json` (genuine pair ranks 1–2, AP ≈ 0.74). State where the WeSpeaker upload-encoder lives (optional heavy dep of search group vs media group).
+- **P2.9 (SHOULD)** ~~MCP tools re-pointed at the descriptor-driven services~~ — **MCP dropped from Phase 2 scope by user decision (2026-07-16)**: the legacy `backend/mcp` mount is removed at integration and not replaced; re-mounting against the descriptor-driven services is deferred to a later goal. Ported voice endpoint SHOULD still be validated against `evals/voice_labels_*.json` (genuine pair ranks 1–2, AP ≈ 0.74). State where the WeSpeaker upload-encoder lives (optional heavy dep of search group vs media group).
 
 ### Phase 3 — Schema-agnostic frontend (in place)
 
