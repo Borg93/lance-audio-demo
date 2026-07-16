@@ -11,8 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from backend.media.blobs import parse_range, valid_doc_id
-from backend.search.service import _build_where_clause, _rrf_fuse
+from backend.lancekit.descriptor import Declared
+from backend.media_api.media import parse_range, validate_doc_key
+from backend.search_api.filters import build_where_clause
+from backend.search_api.postprocess import rrf_fuse
 from fastapi import HTTPException
 
 from rmedia.modalities.av.frames import sample_times
@@ -57,23 +59,25 @@ class TestParseRange:
 
 
 class TestBuildWhereClause:
+    FILTERABLE = ["language", "speaker_name"]
+
     def test_no_filters_is_none(self) -> None:
-        assert _build_where_clause(language=None, namn=None, referenskod=None, extraid=None) is None
+        assert build_where_clause(filters={}, filterable=self.FILTERABLE) is None
 
     def test_single_equality(self) -> None:
-        assert (
-            _build_where_clause(language="sv", namn=None, referenskod=None, extraid=None)
-            == "language = 'sv'"
-        )
+        clause = build_where_clause(filters={"language": "sv"}, filterable=self.FILTERABLE)
+        assert clause == "language = 'sv'"
 
     def test_multiple_joined_with_and(self) -> None:
-        clause = _build_where_clause(language="en", namn="Palme", referenskod=None, extraid=None)
-        assert clause == "language = 'en' AND namn LIKE '%Palme%'"
+        clause = build_where_clause(
+            filters={"language": "en", "speaker_name": "Palme"}, filterable=self.FILTERABLE
+        )
+        assert clause == "language = 'en' AND speaker_name = 'Palme'"
 
     def test_single_quote_is_escaped(self) -> None:
         # A lone apostrophe must be doubled so it can't break out of the literal.
-        clause = _build_where_clause(language=None, namn="O'Brien", referenskod=None, extraid=None)
-        assert clause == "namn LIKE '%O''Brien%'"
+        clause = build_where_clause(filters={"speaker_name": "O'Brien"}, filterable=self.FILTERABLE)
+        assert clause == "speaker_name = 'O''Brien'"
 
 
 class TestRrfFuse:
@@ -82,13 +86,13 @@ class TestRrfFuse:
         a = {"doc_id": "d1", "chunk_id": 0, "text": "a"}
         b = {"doc_id": "d1", "chunk_id": 1, "text": "b"}
         c = {"doc_id": "d2", "chunk_id": 0, "text": "c"}
-        fused = _rrf_fuse([[a, b], [a, c]])
+        fused = rrf_fuse([[a, b], [a, c]], key_fields=["doc_id", "chunk_id"])
         keys = [(h["doc_id"], h["chunk_id"]) for h in fused]
         assert keys[0] == ("d1", 0)  # appears top of both lists
         assert len(fused) == 3  # a deduped, b and c kept
 
     def test_empty_input(self) -> None:
-        assert _rrf_fuse([]) == []
+        assert rrf_fuse([], key_fields=["doc_id"]) == []
 
 
 class TestExtractQueryTerms:
@@ -99,9 +103,14 @@ class TestExtractQueryTerms:
         assert extract_query_terms("") == []
 
 
+HEX_DECLARED = Declared.model_validate(
+    {"identity": {"key_fields": ["doc_id"], "doc_key_pattern": "^[a-f0-9]{16}$"}}
+)
+
+
 class TestValidDocId:
     def test_accepts_16_lowercase_hex(self) -> None:
-        assert valid_doc_id("0123456789abcdef") is None
+        assert validate_doc_key(HEX_DECLARED, "0123456789abcdef") == "0123456789abcdef"
 
     @pytest.mark.parametrize(
         "bad",
@@ -116,7 +125,7 @@ class TestValidDocId:
     )
     def test_rejects_non_16_hex(self, bad: str) -> None:
         with pytest.raises(HTTPException) as exc:
-            valid_doc_id(bad)
+            validate_doc_key(HEX_DECLARED, bad)
         assert exc.value.status_code == 400
 
 

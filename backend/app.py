@@ -1,102 +1,107 @@
-"""App factory + uvicorn launcher for the Lance-backed transcript viewer.
+"""Composition root: one module-level app over the two router groups.
 
-Every endpoint reads from Lance directly — no disk walks, no sidecar JSON.
-``media_blob`` is Lance Blob V2 External (URI); ``thumbnail`` and ``frame_blob``
-are Blob V2 Inline (bytes); ``alignments_json`` is Lance JSONB. Blob reads use
-``ds.take_blobs(..., ids=[rowid])`` (lazy, seekable), so HTTP Range maps to
-``seek(start) + read(length)``.
+Per the fastapi house skill: ``app`` is module-level with ALL construction in
+``lifespan`` (importing this module does zero I/O — the dataset registry is
+lazy and datasets open on first request). The two groups stay import-
+independent (LANCE_MEDIA_MERGE §4.4): ``backend.media_api`` (viewer role) and
+``backend.search_api`` (search role) meet only here, so the rask lift re-hosts
+each group without touching routers.
 
-Search modes (`/api/search`): ``fts`` (Tantivy BM25), ``semantic`` (text
-vectors), ``visual`` (frame vectors, text or image query), ``hybrid`` (Lance
-native FTS+vector RRF), ``all`` (RRF over all three). ``rerank=true`` swaps the
-default RRF for the Qwen3-VL cross-encoder.
-
-Run:  raudio serve --db ./transcripts_v2.lance --port 8000
+No ``BaseHTTPMiddleware`` anywhere — it buffers responses and breaks 206 Range
+streaming; CORS with the Range ``expose_headers`` comes from
+``backend.core.middleware``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
-from fastmcp.utilities.lifespan import combine_lifespans
 
-from backend.atlas.router import router as atlas_router
 from backend.core.config import get_settings
 from backend.core.handlers import register_handlers
-from backend.core.lifespan import lifespan
 from backend.core.middleware import register_middleware
 from backend.core.probes import router as probes_router
-from backend.diarization.router import router as diarization_router
-from backend.graph.router import router as graph_router
-from backend.mcp.server import build_mcp_app
-from backend.media.router import router as media_router
-from backend.search.router import router as search_router
-from backend.state import open_resources
-from backend.system.router import router as system_router
-from backend.topics.router import router as topics_router
-from backend.voice.router import router as voice_router
+from backend.state import AppState, dataset_handle
+
+logger = logging.getLogger(__name__)
 
 
-def create_app(db_path: str | Path) -> FastAPI:
-    """Build the API-only FastAPI app.
-
-    ``db_path`` is the single positional arg the CLI and tests pass; Lance
-    handles are opened eagerly here (not in the lifespan) so a bare
-    ``TestClient(create_app(db))`` — used without a context manager — still
-    has ``app.state.resources``. The lifespan only warms caches + flips the
-    readiness flags, which a lifespan-less TestClient rightly skips. We set
-    the readiness flags to False here so ``/readyz`` is well-defined even
-    without the lifespan.
-
-    The MCP sub-app's lifespan is combined with ours because FastMCP's session
-    manager starts there — without it every ``/mcp`` request 500s. A
-    lifespan-less TestClient therefore can't exercise ``/mcp`` (the REST
-    surface is unaffected); MCP tests drive the tools through the in-memory
-    client instead.
-    """
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    resources = open_resources(db_path)
-    mcp_app = build_mcp_app(resources)
-    app = FastAPI(title="raudio api", lifespan=combine_lifespans(lifespan, mcp_app.lifespan))
-
-    app.state.resources = resources
-    app.state.startup_complete = False
+    state = AppState(
+        db_path=settings.db_path,
+        names=[],
+        chunks=None,
+        settings=settings,
+        http=httpx.Client(),
+    )
+    app.state.resources = state
+    try:
+        handle = dataset_handle(state)  # opens + validates the default descriptor: fail fast
+        logger.info("default dataset %s ready (%d tables)", handle.id, len(handle.descriptor.tables))
+    except Exception:
+        # /livez must stay green and other datasets servable; per-request
+        # resolution surfaces the config problem as a domain 404, never a 500.
+        logger.exception("default dataset failed to open — serving degraded")
+    app.state.startup_complete = True
     app.state.shutting_down = False
-
-    register_handlers(app)
-    register_middleware(app, settings)
-
-    app.include_router(probes_router)
-    app.include_router(search_router)
-    app.include_router(media_router)
-    app.include_router(system_router)
-    app.include_router(atlas_router)
-    app.include_router(topics_router)
-    app.include_router(diarization_router)
-    app.include_router(voice_router)
-    app.include_router(graph_router)
-
-    # MCP endpoint (streamable HTTP) at /mcp/ — hosts connect with e.g.
-    #   claude mcp add raudio --transport http http://localhost:8000/mcp/
-    app.mount("/mcp", mcp_app)
-
-    return app
+    yield
+    app.state.shutting_down = True
+    if state.http is not None:
+        state.http.close()
 
 
-def run(
-    db_path: str | Path,
-    *,
-    host: str | None = None,
-    port: int | None = None,
-) -> None:
-    """Start the API with uvicorn. Host/port fall back to ``Settings`` (RAUDIO_HOST/PORT)."""
+def _include_groups(app: FastAPI) -> None:
+    from backend.media_api.atlas import router as atlas_router
+    from backend.media_api.datasets import router as datasets_router
+    from backend.media_api.diarization import router as diarization_router
+    from backend.media_api.graph import router as graph_router
+    from backend.media_api.media import router as media_router
+    from backend.media_api.system import router as system_router
+    from backend.media_api.topics import router as topics_router
+    from backend.media_api.transcripts import router as transcripts_router
+    from backend.media_api.voice import router as voice_router
+    from backend.search_api.router import router as search_router
+
+    for router in (
+        probes_router,
+        datasets_router,
+        media_router,
+        transcripts_router,
+        system_router,
+        atlas_router,
+        voice_router,
+        diarization_router,
+        topics_router,
+        graph_router,
+        search_router,
+    ):
+        app.include_router(router)
+
+
+app = FastAPI(title="lance-media backend", lifespan=lifespan)
+register_handlers(app)
+register_middleware(app, get_settings())
+_include_groups(app)
+
+
+def run(db_path: str | None = None, *, host: str | None = None, port: int | None = None) -> None:
+    """Start uvicorn on this module's ``app`` (the ``rmedia serve`` entry).
+
+    ``db_path`` overrides ``RAUDIO_DB`` for this process; settings are re-read
+    so lifespan picks the override up.
+    """
+    import os
+
     import uvicorn
 
+    if db_path is not None:
+        os.environ["RAUDIO_DB"] = str(db_path)
+        get_settings.cache_clear()
     settings = get_settings()
-    uvicorn.run(
-        create_app(db_path),
-        host=host or settings.host,
-        port=port or settings.port,
-        log_level="info",
-    )
+    uvicorn.run(app, host=host or settings.host, port=port or settings.port)

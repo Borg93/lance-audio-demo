@@ -1,0 +1,152 @@
+"""Descriptor → runtime search target: the one place table/column names resolve.
+
+``resolve_target`` turns a :class:`~backend.lancekit.registry.DatasetHandle`
+into a :class:`SearchTarget` holding the opened Lance handles plus every name
+the retrieval modules need (key fields, hit projection, bindings). Nothing
+downstream of this module reads the descriptor, so the "all corpus knowledge
+flows from the descriptor" rule (§4.4) is enforced structurally.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict
+
+from backend.core.exceptions import ValidationError
+from backend.lancekit.descriptor import Declared, FtsBinding, VectorBinding
+from backend.lancekit.introspect import TableInfo
+from backend.lancekit.registry import DatasetHandle
+from backend.search_api.constants import DURATION_COLUMN
+from backend.search_api.filters import topic_layer_columns
+from backend.search_api.spec import SearchMode
+
+logger = logging.getLogger(__name__)
+
+# Capability key naming the per-hit word-timing column ("table.column" target).
+_ALIGNMENTS_CAPABILITY = "alignments"
+
+
+def hit_columns(declared: Declared, row_info: TableInfo) -> list[str]:
+    """Derive the hit projection for a row table from its declared roles.
+
+    Identity keys + time bounds (+ the legacy ``duration`` convenience column)
+    + display body/title/metadata fields — deduped, and intersected with the
+    table's live columns so a declared-but-absent display field can never break
+    a ``select``.
+    """
+    display = declared.display
+    wanted: list[str] = list(declared.identity.key_fields)
+    if declared.time is not None:
+        wanted += [declared.time.start, declared.time.end]
+    wanted.append(DURATION_COLUMN)
+    if display.body:
+        wanted.append(display.body)
+    wanted += display.title
+    wanted += [m.field for m in display.metadata]
+
+    live = {c.name for c in row_info.columns}
+    out: list[str] = []
+    for name in wanted:
+        if name in live and name not in out:
+            out.append(name)
+    return out
+
+
+class SearchTarget(BaseModel):
+    """Everything the retrieval modules need, resolved once per request.
+
+    The lancedb/lance handles aren't Pydantic-validatable, hence
+    ``arbitrary_types_allowed`` and the ``Any`` slots.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    row_table_name: str
+    key_fields: list[str]
+    payload_columns: list[str]
+    filterable: list[str]
+    topic_columns: list[str]
+    fts: FtsBinding | None
+    vectors: dict[str, VectorBinding]
+    # Column popped into each hit's ``alignments`` (None when the capability is
+    # absent or points off the row table — hits then carry ``alignments: []``).
+    alignments_column: str | None
+    # Text column standing in for the scene vector's space (the frame caption);
+    # attached to every hit for the list/table views.
+    caption_column: str | None
+    # The display body column — what the cross-encoder reranker scores.
+    body_column: str | None
+    row_tbl: Any  # lancedb sync Table
+    row_ds: Any  # row_tbl.to_lance(), resolved once per request
+    tables: dict[str, Any]  # opened lancedb Tables for every vector-binding table
+
+    def table_for(self, name: str) -> Any | None:
+        return self.tables.get(name)
+
+    def binding(self, mode: SearchMode) -> VectorBinding | None:
+        return self.vectors.get(mode.value)
+
+    def caption_table(self) -> Any | None:
+        """The frame table carrying ``caption_column``, or None."""
+        scene = self.vectors.get(SearchMode.SCENE.value)
+        if scene is None or not scene.caption_source:
+            return None
+        return self.table_for(scene.table)
+
+
+def resolve_target(handle: DatasetHandle) -> SearchTarget:
+    """Open the search tables named by ``handle``'s descriptor.
+
+    Raises :class:`ValidationError` (HTTP 400) when the dataset declares no
+    search block — an unsearchable dataset is a client addressing error, not a
+    server fault. A vector-binding table that fails to open degrades that leg
+    to empty instead of failing every mode.
+    """
+    declared = handle.descriptor.declared
+    search = declared.search
+    if search is None:
+        raise ValidationError("dataset has no search bindings")
+    row_info = handle.descriptor.tables.get(search.row_table)
+    if row_info is None:
+        # The registry validates descriptors at load, so this is a stale-handle
+        # race (table dropped after load), surfaced as a client-visible 400.
+        raise ValidationError("search row table missing from dataset")
+
+    row_tbl = handle.db.open_table(search.row_table)
+    tables: dict[str, Any] = {search.row_table: row_tbl}
+    for binding in search.vectors.values():
+        if binding.table in tables:
+            continue
+        try:
+            tables[binding.table] = handle.db.open_table(binding.table)
+        except Exception:  # noqa: BLE001 — one missing leg table must not kill fts/semantic
+            logger.warning("vector-binding table %s failed to open", binding.table, exc_info=True)
+
+    alignments_column: str | None = None
+    alignments_ref = declared.capabilities.get(_ALIGNMENTS_CAPABILITY)
+    if alignments_ref:
+        table, _, column = alignments_ref.partition(".")
+        # Only a row-table column can ride on hits; a foreign-table target would
+        # make the pop strip an unrelated same-named hit field.
+        if column and table == search.row_table:
+            alignments_column = column
+
+    scene = search.vectors.get(SearchMode.SCENE.value)
+
+    return SearchTarget(
+        row_table_name=search.row_table,
+        key_fields=list(declared.identity.key_fields),
+        payload_columns=hit_columns(declared, row_info),
+        filterable=list(search.filterable),
+        topic_columns=topic_layer_columns([c.name for c in row_info.columns]),
+        fts=search.fts,
+        vectors=dict(search.vectors),
+        alignments_column=alignments_column,
+        caption_column=scene.caption_source if scene else None,
+        body_column=declared.display.body,
+        row_tbl=row_tbl,
+        row_ds=row_tbl.to_lance(),
+        tables=tables,
+    )
