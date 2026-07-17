@@ -181,8 +181,8 @@ pipeline-sharded: shards  ## Transcribe all $(SHARDS) shards in parallel (one GP
 # ─── Viewer: Python backend + Bun frontend ──────────────────────────────────
 BACKEND_HOST ?= 127.0.0.1
 BACKEND_PORT ?= 8000
-# `make frontend` builds + serves the prebuilt SPA on this port via the Bun
-# static server (server.ts binds 0.0.0.0 and proxies /api/* → the backend).
+# `make frontend` builds + serves the app on this port via the Bun server
+# (server.ts runs the svelte-adapter-bun build + proxies /api/* → the backend).
 # Forward this port over SSH / your editor to reach it as localhost:5274.
 # Prefer this over `frontend-dev` for remote use — no Vite recompile spinner.
 FRONTEND_PORT ?= 5274
@@ -193,7 +193,7 @@ backend:              ## Run the FastAPI backend (Lance reads, /api/*).
 FRONTEND_DIR    ?= ./frontend
 FRONTEND_BUILD  ?= $(FRONTEND_DIR)/build
 
-frontend-build:       ## Build the SvelteKit static bundle into $(FRONTEND_BUILD).
+frontend-build:       ## Build the SvelteKit app (svelte-adapter-bun) into $(FRONTEND_BUILD).
 	cd $(FRONTEND_DIR) && bun install --silent && bun run build
 
 frontend-dev:         ## Run the SvelteKit dev server with HMR (vite, port 5173).

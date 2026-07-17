@@ -1,4 +1,4 @@
-import adapter from '@sveltejs/adapter-static';
+import adapter from 'svelte-adapter-bun';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
 /** @type {import('@sveltejs/kit').Config} */
@@ -12,17 +12,12 @@ const config = {
   },
   preprocess: vitePreprocess(),
   kit: {
-    adapter: adapter({
-      // Pure SPA: backend (FastAPI) handles all data; SvelteKit produces
-      // static HTML/JS that the existing `frontend/server.ts` Bun proxy
-      // can serve unchanged. `200.html` makes unknown routes fall through
-      // to client-side routing instead of 404.
-      pages: 'build',
-      assets: 'build',
-      fallback: '200.html',
-      precompress: false,
-      strict: true,
-    }),
+    // Bun-server output — the rask MFE build target (`svelte-adapter-bun`).
+    // The app stays client-rendered (`ssr = false` in src/routes/+layout.ts):
+    // the Bun server serves the shell + assets, the browser renders (WebGPU,
+    // localStorage, etc. never run server-side). `/api/*` is not this server's
+    // concern — dev proxies it (vite.config.ts), prod routes it at the gateway.
+    adapter: adapter(),
     alias: {
       $lib: './src/lib',
       '$lib/*': './src/lib/*',
