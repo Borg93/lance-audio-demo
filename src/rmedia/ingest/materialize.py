@@ -80,10 +80,14 @@ def materialize_blobs(db_path: str | Path, table: str = "documents") -> dict[str
             desc = ds.to_table(columns=[field.name]).column(field.name).combine_chunks()
             kinds = desc.field("kind").to_pylist()
             sizes = desc.field("size").to_pylist()
-            # Present iff the descriptor references bytes: an external blob has
-            # kind != 0 (its size reads 0 until resolved), a managed blob has
-            # size > 0; a null blob is all-zero. read_blobs skips exactly the
-            # absent ones, in ascending row order.
+            # Present iff the descriptor references bytes. Per the Lance blob page
+            # layout, a MANAGED blob smuggles validity into the description: a null
+            # is size 0 (with the position holding the def level), a real value has
+            # size > 0. An EXTERNAL blob (file:// / s3://) instead carries kind != 0
+            # and reads size 0 until resolved. So: present ⇔ kind != 0 or size > 0.
+            # read_blobs skips exactly the absent (null) ones, in ascending row
+            # order — we zip its stream against this mask, leaving nulls None, which
+            # blob_array supports (its own docs mix inline/external/null in one array).
             present = [k != 0 or s > 0 for k, s in zip(kinds, sizes, strict=True)]
             resolved = (p for _addr, p in ds.read_blobs(field.name, indices=list(range(n))))
             payloads = [next(resolved) if is_present else None for is_present in present]
