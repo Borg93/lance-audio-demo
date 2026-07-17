@@ -100,13 +100,26 @@
     { value: 'equals', label: 'equals' },
     { value: 'starts', label: 'starts with' },
   ];
+  const BOOL_OPS: SelectOption[] = [
+    { value: '=', label: 'is' },
+    { value: '!=', label: 'is not' },
+  ];
 
   let colName = $state('');
   let op = $state('contains');
   let val = $state('');
 
+  // `type` is the backend's Lance-derived kind (number | time | boolean | text);
+  // ops follow the KIND, not any column name — comparison ops for number/time, a
+  // true/false toggle for boolean, substring/exact for text.
   const colType = $derived(columns.find((c) => c.name === colName)?.type ?? 'text');
-  const opOptions = $derived(colType === 'number' ? NUMBER_OPS : TEXT_OPS);
+  const opOptions = $derived(
+    colType === 'number' || colType === 'time'
+      ? NUMBER_OPS
+      : colType === 'boolean'
+        ? BOOL_OPS
+        : TEXT_OPS,
+  );
   // Keep the operator valid when the column type changes.
   $effect(() => {
     const first = opOptions[0];
@@ -121,7 +134,18 @@
       if (Number.isNaN(num)) return null;
       return `${colName} ${op} ${num}`;
     }
+    if (colType === 'boolean') {
+      const t = v.toLowerCase();
+      const b = ['true', '1', 'yes', 'y'].includes(t)
+        ? 'true'
+        : ['false', '0', 'no', 'n'].includes(t)
+          ? 'false'
+          : null;
+      return b === null ? null : `${colName} ${op} ${b}`;
+    }
     const esc = v.replace(/'/g, "''");
+    // Temporal: comparison ops (NUMBER_OPS) against a quoted date/timestamp literal.
+    if (colType === 'time') return `${colName} ${op} '${esc}'`;
     if (op === 'equals') return `${colName} = '${esc}'`;
     if (op === 'starts') return `${colName} LIKE '${esc}%'`;
     return `${colName} LIKE '%${esc}%'`;
@@ -206,7 +230,13 @@
         <div class="flex gap-1.5">
           <Input
             bind:value={val}
-            placeholder={colType === 'number' ? 'number…' : 'value…'}
+            placeholder={colType === 'number'
+              ? 'number…'
+              : colType === 'time'
+                ? 'date/time…'
+                : colType === 'boolean'
+                  ? 'true / false'
+                  : 'value…'}
             class="h-8 flex-1 text-xs"
             onkeydown={(e) => {
               if (e.key === 'Enter') {
