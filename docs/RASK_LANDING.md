@@ -21,7 +21,7 @@
 |---|---|---|---|
 | `backend/media_api/` (viewer role) | ✅ ready to lift | rask brick `components/services/media_api`, `:8805`, gateway `{prefix}/media` | wrap `create_media_app`'s routers in `make_service_app`; **add S3 `storage_options`** |
 | `backend/search_api/` (search role) | ✅ ready to lift | rask brick `components/services/media_search`, `:8806`, prefix **before** `/media` + core catch-all | ditto; lancedb + encoder deps in the brick's own `pyproject` |
-| `frontend/` (SvelteKit SPA) | ✅ ready to lift | a `media` MFE (`/default/media`) | adapter-static→**adapter-bun**, `@rask/ui` shell, **zod→valibot**, API target `:8000`→gateway `:8888` |
+| `frontend/` (SvelteKit) | ✅ ready to lift (valibot + adapter-bun **done**) | a `media` MFE (`/default/media`) | remaining: `@rask/ui` shell, `kit.paths.base`, API target →gateway `:8888` |
 | `src/rmedia/` (Ray pipeline) | ✅ ready to lift | a rask brick job submitted to **KubeRay** via the Ray Jobs REST API | local `ray.init()` → `submit_stage_job`-style submission; entrypoint baked into the ray-lance image |
 | Lance data (`transcripts_v2.lance` + smoke) | ⚠️ needs a move | S3/rustfs bucket, `dir`→`rest` namespace | copy managed blobs; **re-ingest/rebase the external `media_blob` URIs** |
 | SHOULD features (voice · topics · graph) | ✅ ported + capability-gated | ride along with the two bricks | none (checks in §6) |
@@ -125,16 +125,26 @@ a standalone SvelteKit **SSR** app under `components/frontends/<name>`, pinned t
 a static base `/default/<name>`, built as a Bun server via `svelte-adapter-bun`,
 composed at one origin by Turborepo's Rust proxy (`:3024` dev) / K8s ingress.
 
+> **Done ahead of the merge (2026-07-16):** the two adapter-agnostic MFE chores
+> are already committed in this repo — **`zod → valibot`** (all 346 call-sites;
+> the biggest one) and the **`adapter-static → svelte-adapter-bun`** build swap
+> (production build driven live: EVIDENCE OK + smoke 6/6). What's left below needs
+> rask's own packages (`@rask/ui`, `@rask/api`) and so happens *in* rask.
+
 **What changes at merge time:**
-- **Adapter**: `@sveltejs/adapter-static` → `svelte-adapter-bun`; set
-  `kit.paths.base='/default/media'`; drop our hand-rolled `frontend/server.ts`
-  proxy (adapter-bun ships its own server).
+- **Adapter**: ✅ already on `svelte-adapter-bun` (this repo). Remaining: set
+  `kit.paths.base='/default/media'` (breaks standalone serving, so a merge-time
+  flip) and replace `frontend/server.ts` (our local handler+/api proxy) with
+  rask's gateway routing.
 - **Shell**: rewrite `+layout.svelte` to `import { AppShell } from '@rask/ui/shell'`;
   delete our local `$lib/components/ui/sidebar` chrome; `app.css` imports only
   `@rask/ui/styles/tokens.css`. Add a nav entry in
   `packages/ui/src/lib/shell/nav-config.ts` (a shared-library change).
-- **Validation**: **zod → valibot is mandatory** — rask has *zero* zod, `@rask/api`
-  hard-depends on valibot, and the toolchain doc mandates it. Port the descriptor
+- **Validation**: ✅ **already migrated to valibot** (this repo) — the 4 schema
+  files (`descriptor.ts`, `api.ts`, `table-columns.ts`, `workflow/persistence.ts`).
+  Remaining at merge: move the response-envelope schemas into `@rask/api`. Original
+  note kept for context: **zod → valibot is mandatory** — rask has *zero* zod,
+  `@rask/api` hard-depends on valibot, and the toolchain doc mandates it. Port the descriptor
   + envelope schemas in `src/lib/{descriptor,api,table-columns}.ts` to
   `import * as v from 'valibot'`. Response-envelope schemas SHOULD move into
   `@rask/api`; the corpus-agnostic `DatasetView`/`Row` schemas can stay app-local
@@ -350,7 +360,7 @@ Nothing below happens in this repo; it is the later goal's backlog.
 3. **Backend bricks** (§2): carve `media_api` (:8805) + `media_search` (:8806)
    under `make_service_app`; 9-point registration each; **avoid the `search-api`
    name collision**; set `RASK_VIEWER_INPUT/OUTPUT`.
-4. **Frontend MFE** (§3): adapter-bun + `@rask/ui` shell + **zod→valibot** (~284
+4. **Frontend MFE** (§3): ~~adapter-bun~~ ✅ + ~~zod→valibot~~ ✅ (done in-repo); remaining `@rask/ui` shell (~284
    call-sites) + gateway data target; four-place registration.
 5. **Ray job** (§5): bake an `rmedia_stage_job.py` entrypoint; add a Ray Jobs
    REST submitter; point at the KubeRay head.
