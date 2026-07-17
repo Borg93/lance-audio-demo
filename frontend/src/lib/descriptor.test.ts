@@ -152,3 +152,46 @@ describe('DatasetView — structurally different corpus (acid-test shape)', () =
     expect(nonDefault.datasetParam()).toBe('images');
   });
 });
+
+describe('type-category model — schema-agnostic by Lance type', () => {
+  const v = view(TRANSCRIPTS);
+
+  it('classifies columns by Lance type, not by role', () => {
+    expect(v.columnCategory('chunks', 'semantic_vec')).toBe('embedding'); // fixed_size_list<float>
+    expect(v.columnCategory('chunks', 'doc_id')).toBe('categorical'); // string
+    expect(v.columnCategory('chunks', 'nope')).toBeNull();
+  });
+
+  it('treats every embedding as ONE uniform category (text/pixel/scene alike)', () => {
+    const spaces = v.vectorSpaces;
+    expect(spaces.map((s) => s.key)).toEqual(['semantic', 'visual', 'scene']);
+    // the ONLY per-space distinction is on-row-table vs frame-join — from the binding
+    expect(spaces.find((s) => s.key === 'semantic')?.onRowTable).toBe(true);
+    expect(spaces.find((s) => s.key === 'visual')?.onRowTable).toBe(false);
+    expect(spaces.find((s) => s.key === 'scene')?.captionSource).toBe('caption');
+  });
+
+  it('derives search modes generically (identical to the old fixed set)', () => {
+    expect(v.searchModes).toEqual(['fts', 'semantic', 'visual', 'scene', 'scene_fts', 'hybrid', 'all']);
+  });
+
+  it('a NEW embedding key flows through as a mode with ZERO code edits', () => {
+    const withAudio = structuredClone(TRANSCRIPTS);
+    withAudio.tables.chunks.columns.push({
+      name: 'voice_vec',
+      arrow_type: 'fixed_size_list<float>[256]',
+      nullable: true,
+      vector_dim: 256,
+    });
+    (withAudio.declared.search.vectors as Record<string, unknown>).audio = {
+      table: 'chunks',
+      column: 'voice_vec',
+      dim: 256,
+      query_encoder: 'audio',
+    };
+    const av = view(withAudio);
+    expect(av.columnCategory('chunks', 'voice_vec')).toBe('embedding');
+    expect(av.vectorSpaces.map((s) => s.key)).toContain('audio');
+    expect(av.searchModes).toContain('audio'); // surfaced automatically — the point
+  });
+});

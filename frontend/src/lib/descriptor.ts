@@ -158,8 +158,63 @@ export const RowSchema = v.looseObject({
 });
 export type Row = v.InferOutput<typeof RowSchema> & Record<string, unknown>;
 
-/** The search modes a dataset supports, derived from its declared bindings. */
-export type SearchMode = 'fts' | 'semantic' | 'visual' | 'scene' | 'scene_fts' | 'hybrid' | 'all';
+/** The search modes a dataset supports, derived from its declared bindings.
+ *  The named literals are the corpus's current roles; the `(string & {})` arm
+ *  keeps the type open so a dataset can declare a vector space under ANY key
+ *  (e.g. `audio`) and have it flow through as a mode without a type edit. */
+export type SearchMode =
+  | 'fts'
+  | 'semantic'
+  | 'visual'
+  | 'scene'
+  | 'scene_fts'
+  | 'hybrid'
+  | 'all'
+  | (string & {});
+
+/** Generic column categories, derived from the LANCE/Arrow type (never a corpus
+ *  role): an embedding is any fixed-size-list<float>, so text / pixel / audio /
+ *  any-future embedding are ONE category. Drives type-appropriate UI (filters,
+ *  search) without naming what a column means. */
+export type ColumnCategory =
+  | 'embedding'
+  | 'blob'
+  | 'numerical'
+  | 'categorical'
+  | 'temporal'
+  | 'text'
+  | 'other';
+
+const _NUMERIC_RE = /\b(u?int\d*|float\d*|double|decimal\d*|half_float)\b/;
+const _TEMPORAL_RE = /\b(timestamp|date\d*|time\d*|duration|interval)\b/;
+
+/** Classify a discovered column by its Lance/Arrow type. `ftsColumns` are the
+ *  string columns that carry an FTS index (→ `text`, i.e. full-text searchable);
+ *  every other string/bool is `categorical`. */
+export function categoryOf(col: ColumnInfo, ftsColumns?: ReadonlySet<string>): ColumnCategory {
+  if (col.vector_dim != null) return 'embedding'; // fixed_size_list<float> — uniform, any modality
+  if (col.is_blob) return 'blob'; // lance.blob.v2 — media bytes
+  const t = col.arrow_type.toLowerCase();
+  if (ftsColumns?.has(col.name) && (t.includes('string') || t.includes('utf8'))) return 'text';
+  if (_NUMERIC_RE.test(t)) return 'numerical';
+  if (_TEMPORAL_RE.test(t)) return 'temporal';
+  if (t.includes('string') || t.includes('utf8') || t.includes('bool') || t.includes('dictionary'))
+    return 'categorical';
+  return 'other';
+}
+
+/** One declared embedding space, treated uniformly regardless of what it embeds.
+ *  `onRowTable` is the ONLY behavioural distinction (direct search vs a frame
+ *  table ranked-then-joined) — derived from the binding, not the role name. */
+export interface VectorSpace {
+  key: string;
+  table: string;
+  column: string;
+  dim: number;
+  encoder: string;
+  captionSource: string | null;
+  onRowTable: boolean;
+}
 
 const COSINE_DISTANCE_MAX = 2;
 
@@ -283,20 +338,48 @@ export class DatasetView {
     return this.declared.search?.rerank ?? false;
   }
 
-  /** The modes the search bar should offer, from declared bindings. */
+  /** String columns that carry an FTS index — the `text` (full-text) category. */
+  private get ftsColumns(): ReadonlySet<string> {
+    const fts = this.declared.search?.fts;
+    return new Set(fts ? [fts.column] : []);
+  }
+
+  /** Category of one declared column, from its Lance type (null if unknown). */
+  columnCategory(table: string, column: string): ColumnCategory | null {
+    const info = this.descriptor.tables[table]?.columns.find((c) => c.name === column);
+    return info ? categoryOf(info, this.ftsColumns) : null;
+  }
+
+  /** Every declared embedding space, uniform — text/pixel/audio all alike. The
+   *  only per-space behaviour (direct vs frame-join) rides on `onRowTable`. */
+  get vectorSpaces(): VectorSpace[] {
+    const search = this.declared.search;
+    if (!search) return [];
+    return Object.entries(search.vectors).map(([key, b]) => ({
+      key,
+      table: b.table,
+      column: b.column,
+      dim: b.dim,
+      encoder: b.query_encoder,
+      captionSource: b.caption_source,
+      onRowTable: b.table === search.row_table,
+    }));
+  }
+
+  /** The modes the search bar should offer, derived GENERICALLY from the
+   *  declared bindings: fts + one mode per embedding space (by its own key,
+   *  whatever it is) + a `_fts` variant for spaces with a caption source +
+   *  hybrid/all composites. A dataset that declares a new embedding key gets a
+   *  new mode with no code change here. */
   get searchModes(): SearchMode[] {
     const search = this.declared.search;
     if (!search) return [];
+    const spaces = this.vectorSpaces;
     const modes: SearchMode[] = [];
     if (search.fts != null) modes.push('fts');
-    const vectors = search.vectors;
-    if ('semantic' in vectors) modes.push('semantic');
-    if ('visual' in vectors) modes.push('visual');
-    if ('scene' in vectors) {
-      modes.push('scene');
-      if (vectors['scene']?.caption_source) modes.push('scene_fts');
-    }
-    if (search.fts != null && 'semantic' in vectors) modes.push('hybrid');
+    for (const s of spaces) modes.push(s.key);
+    for (const s of spaces) if (s.captionSource) modes.push(`${s.key}_fts`);
+    if (search.fts != null && spaces.length > 0) modes.push('hybrid');
     if (modes.length > 1) modes.push('all');
     return modes;
   }

@@ -670,7 +670,9 @@ class WorkflowGraph {
         imageName: c.imageName,
         where: c.where,
         filters: c.filters,
-        mode: c.mode,
+        // A generic (any-key) mode narrows to the persisted set here; an unknown
+        // key self-heals to 'fts' on reload (persistence.ts picklist fallback).
+        mode: c.mode as PersistedConfig['mode'],
         n: c.n,
         rerank: c.rerank,
         minScore: c.minScore,
