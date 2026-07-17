@@ -43,8 +43,17 @@
   let qVec = $state(spec.qVec ?? '');
   let imageFile = $state<File | null>(spec.image ?? null);
 
+  // Title-case a raw vector-space key for a dial label ('audio' → 'Audio',
+  // 'voice_print' → 'Voice Print').
+  const humanize = (key: string): string =>
+    key.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
   // Offered search kinds come from the dataset's declared modes — a mode the
-  // dataset lacks (e.g. no Scene captions, no vectors) never shows.
+  // dataset lacks (e.g. no Scene captions, no vectors) never shows. The named
+  // roles keep their friendly labels; ANY OTHER declared text-embedding space
+  // (a new embedding column) appears as its own option keyed by its space name,
+  // so a fresh embedding is searchable with no code change here. Image-encoder
+  // spaces use the Image attach affordance instead of a dial entry.
   const kindOptions = $derived.by<SelectOption[]>(() => {
     const view = activeView();
     const opts: SelectOption[] = [];
@@ -52,6 +61,12 @@
     if (view.hasMode('semantic')) opts.push({ value: 'meaning', label: 'Vector' });
     if (view.hasMode('hybrid')) opts.push({ value: 'both', label: 'Hybrid' });
     if (view.hasMode('scene')) opts.push({ value: 'scene', label: 'Scene' });
+    const named = new Set(['semantic', 'visual', 'scene']);
+    for (const s of view.vectorSpaces) {
+      if (!named.has(s.key) && s.encoder !== 'image') {
+        opts.push({ value: s.key, label: humanize(s.key) });
+      }
+    }
     return opts;
   });
 
@@ -88,7 +103,8 @@
     else if (kind === 'meaning') mode = 'semantic';
     else if (kind === 'scene') mode = sceneMethod === 'fts' ? 'scene_fts' : 'scene';
     else if (kind === 'both') mode = 'hybrid';
-    else mode = 'fts';
+    else if (kind === 'keyword') mode = 'fts';
+    else mode = kind; // a raw vector-space key — a new embedding searched by its own mode
     return {
       q: q.trim(),
       qVec: qVec.trim() || undefined,
