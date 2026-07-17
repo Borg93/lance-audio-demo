@@ -1,3 +1,4 @@
+import * as v from 'valibot';
 import { describe, expect, it } from 'vitest';
 import { DatasetDescriptorSchema, DatasetView, type Row } from '$lib/descriptor';
 
@@ -76,7 +77,7 @@ const IMAGES = {
 };
 
 function view(raw: unknown): DatasetView {
-  return new DatasetView(DatasetDescriptorSchema.parse(raw));
+  return new DatasetView(v.parse(DatasetDescriptorSchema, raw));
 }
 
 describe('DatasetView — transcripts corpus', () => {

@@ -18,16 +18,18 @@
  * All storage access is best-effort (private mode / quota → fall back to
  * defaults, never throw).
  */
-import { z } from 'zod';
+import * as v from 'valibot';
 
-const SavedColsSchema = z.object({ cols: z.array(z.string()), known: z.array(z.string()) });
+const SavedColsSchema = v.object({ cols: v.array(v.string()), known: v.array(v.string()) });
 
-const SavedTablePrefsSchema = z.object({
-  cols: z.array(z.string()),
-  known: z.array(z.string()),
-  widths: z.record(z.string(), z.number()),
-  wrap: z.boolean(),
+const SavedTablePrefsSchema = v.object({
+  cols: v.array(v.string()),
+  known: v.array(v.string()),
+  widths: v.record(v.string(), v.number()),
+  wrap: v.boolean(),
 });
+
+const StringArraySchema = v.array(v.string());
 
 /** Per-table user prefs: visible columns, dragged column widths (px, by
  *  column key — absent key = auto-sized), and the wrap-text toggle. */
@@ -54,7 +56,7 @@ export function loadTablePrefs(args: {
   try {
     const raw = localStorage.getItem(storageKey);
     if (raw) {
-      const saved = SavedTablePrefsSchema.parse(JSON.parse(raw));
+      const saved = v.parse(SavedTablePrefsSchema, JSON.parse(raw));
       const fresh = allKeys.filter((k) => !saved.known.includes(k) && defaults.includes(k));
       return { cols: [...saved.cols, ...fresh], widths: saved.widths, wrap: saved.wrap };
     }
@@ -111,14 +113,14 @@ function loadMergedCols(args: {
   try {
     const raw = localStorage.getItem(storageKey);
     if (raw) {
-      const saved = SavedColsSchema.parse(JSON.parse(raw));
+      const saved = v.parse(SavedColsSchema, JSON.parse(raw));
       const fresh = allKeys.filter((k) => !saved.known.includes(k) && defaults.includes(k));
       return [...saved.cols, ...fresh];
     }
     if (legacyKey) {
       const legacy = localStorage.getItem(legacyKey);
       if (legacy) {
-        const cols = z.array(z.string()).parse(JSON.parse(legacy));
+        const cols = v.parse(StringArraySchema, JSON.parse(legacy));
         const migrated = [...cols, ...legacyAppend.filter((k) => !cols.includes(k))];
         // Stamp the merged record NOW: without a `known` baseline a user who
         // never toggles again would re-migrate forever and miss every column
@@ -144,7 +146,7 @@ function persistMergedCols(storageKey: string, cols: string[], allKeys: string[]
 export function loadCols(storageKey: string, defaults: string[]): string[] {
   try {
     const raw = localStorage.getItem(storageKey);
-    if (raw) return z.array(z.string()).parse(JSON.parse(raw));
+    if (raw) return v.parse(StringArraySchema, JSON.parse(raw));
   } catch {
     /* fall through to defaults */
   }

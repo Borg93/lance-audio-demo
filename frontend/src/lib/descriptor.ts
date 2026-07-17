@@ -12,150 +12,151 @@
  * rows through it instead of hardcoding field names.
  */
 
-import { z } from 'zod';
+import * as v from 'valibot';
 
 // ─────────────────────────────────────────────────────────────────────
 // Descriptor envelope (mirrors backend/lancekit/descriptor.py)
 // ─────────────────────────────────────────────────────────────────────
 
-const ColumnInfoSchema = z.object({
-  name: z.string(),
-  arrow_type: z.string(),
-  nullable: z.boolean(),
-  vector_dim: z.number().int().nullable().default(null),
-  is_blob: z.boolean().default(false),
-});
-export type ColumnInfo = z.infer<typeof ColumnInfoSchema>;
+const int = () => v.pipe(v.number(), v.integer());
 
-const TableInfoSchema = z.object({
-  name: z.string(),
-  row_count: z.number().int(),
-  version: z.number().int(),
-  columns: z.array(ColumnInfoSchema),
-  indexes: z.array(z.object({ name: z.string(), index_type: z.string(), columns: z.array(z.string()) })),
+const ColumnInfoSchema = v.object({
+  name: v.string(),
+  arrow_type: v.string(),
+  nullable: v.boolean(),
+  vector_dim: v.optional(v.nullable(int()), null),
+  is_blob: v.optional(v.boolean(), false),
 });
-export type TableInfo = z.infer<typeof TableInfoSchema>;
+export type ColumnInfo = v.InferOutput<typeof ColumnInfoSchema>;
 
-const IdentitySchema = z.object({
-  key_fields: z.array(z.string()).min(1),
-  doc_key: z.string().default('doc_id'),
-  doc_key_pattern: z.string().default('.*'),
+const TableInfoSchema = v.object({
+  name: v.string(),
+  row_count: int(),
+  version: int(),
+  columns: v.array(ColumnInfoSchema),
+  indexes: v.array(v.object({ name: v.string(), index_type: v.string(), columns: v.array(v.string()) })),
 });
+export type TableInfo = v.InferOutput<typeof TableInfoSchema>;
 
-const DocumentBindingSchema = z.object({
-  table: z.string(),
-  media_blob: z.string(),
-  mime: z.string().nullable().default(null),
-  thumbnail: z.string().nullable().default(null),
-  thumbnail_mime: z.string().nullable().default(null),
+const IdentitySchema = v.object({
+  key_fields: v.pipe(v.array(v.string()), v.minLength(1)),
+  doc_key: v.optional(v.string(), 'doc_id'),
+  doc_key_pattern: v.optional(v.string(), '.*'),
 });
 
-const TimeBindingSchema = z.object({ start: z.string(), end: z.string() });
-
-const MetadataFieldSchema = z.object({ field: z.string(), label: z.string() });
-
-const DisplaySchema = z.object({
-  title: z.array(z.string()).default([]),
-  body: z.string().nullable().default(null),
-  caption: z.string().nullable().default(null),
-  metadata: z.array(MetadataFieldSchema).default([]),
+const DocumentBindingSchema = v.object({
+  table: v.string(),
+  media_blob: v.string(),
+  mime: v.optional(v.nullable(v.string()), null),
+  thumbnail: v.optional(v.nullable(v.string()), null),
+  thumbnail_mime: v.optional(v.nullable(v.string()), null),
 });
 
-const VectorBindingSchema = z.object({
-  table: z.string(),
-  column: z.string(),
-  dim: z.number().int(),
-  query_encoder: z.string(),
-  caption_source: z.string().nullable().default(null),
+const TimeBindingSchema = v.object({ start: v.string(), end: v.string() });
+
+const MetadataFieldSchema = v.object({ field: v.string(), label: v.string() });
+
+const DisplaySchema = v.object({
+  title: v.optional(v.array(v.string()), []),
+  body: v.optional(v.nullable(v.string()), null),
+  caption: v.optional(v.nullable(v.string()), null),
+  metadata: v.optional(v.array(MetadataFieldSchema), []),
 });
 
-const SearchSchema = z.object({
-  row_table: z.string(),
-  fts: z.object({ table: z.string(), column: z.string(), language: z.string().default('English') }).nullable().default(null),
-  vectors: z.record(z.string(), VectorBindingSchema).default({}),
-  filterable: z.array(z.string()).default([]),
-  rerank: z.boolean().default(false),
+const VectorBindingSchema = v.object({
+  table: v.string(),
+  column: v.string(),
+  dim: int(),
+  query_encoder: v.string(),
+  caption_source: v.optional(v.nullable(v.string()), null),
 });
 
-const AtlasChannelSchema = z.object({
-  name: z.string(),
-  column: z.string().nullable().default(null),
-  broadest_prefix: z.string().nullable().default(null),
+const SearchSchema = v.object({
+  row_table: v.string(),
+  fts: v.optional(
+    v.nullable(v.object({ table: v.string(), column: v.string(), language: v.optional(v.string(), 'English') })),
+    null,
+  ),
+  vectors: v.optional(v.record(v.string(), VectorBindingSchema), {}),
+  filterable: v.optional(v.array(v.string()), []),
+  rerank: v.optional(v.boolean(), false),
 });
 
-const AtlasSpaceSchema = z.object({
-  name: z.string(),
-  x: z.string(),
-  y: z.string(),
-  cluster: z.string(),
-  source_column: z.string(),
-  table: z.string(),
-  channels: z.array(AtlasChannelSchema).default([]),
+const AtlasChannelSchema = v.object({
+  name: v.string(),
+  column: v.optional(v.nullable(v.string()), null),
+  broadest_prefix: v.optional(v.nullable(v.string()), null),
 });
-export type AtlasSpaceDecl = z.infer<typeof AtlasSpaceSchema>;
 
-const DeclaredSchema = z
-  .object({
-    identity: IdentitySchema,
-    document: DocumentBindingSchema.nullable().default(null),
-    time: TimeBindingSchema.nullable().default(null),
-    display: DisplaySchema.default({}),
-    search: SearchSchema.nullable().default(null),
-    atlas: z.array(AtlasSpaceSchema).default([]),
-    capabilities: z.record(z.string(), z.string()).default({}),
-  })
-  .passthrough();
+const AtlasSpaceSchema = v.object({
+  name: v.string(),
+  x: v.string(),
+  y: v.string(),
+  cluster: v.string(),
+  source_column: v.string(),
+  table: v.string(),
+  channels: v.optional(v.array(AtlasChannelSchema), []),
+});
+export type AtlasSpaceDecl = v.InferOutput<typeof AtlasSpaceSchema>;
 
-export const DatasetDescriptorSchema = z.object({
-  id: z.string(),
-  tables: z.record(z.string(), TableInfoSchema),
+const DeclaredSchema = v.looseObject({
+  identity: IdentitySchema,
+  document: v.optional(v.nullable(DocumentBindingSchema), null),
+  time: v.optional(v.nullable(TimeBindingSchema), null),
+  display: v.optional(DisplaySchema, {}),
+  search: v.optional(v.nullable(SearchSchema), null),
+  atlas: v.optional(v.array(AtlasSpaceSchema), []),
+  capabilities: v.optional(v.record(v.string(), v.string()), {}),
+});
+
+export const DatasetDescriptorSchema = v.object({
+  id: v.string(),
+  tables: v.record(v.string(), TableInfoSchema),
   declared: DeclaredSchema,
 });
-export type DatasetDescriptor = z.infer<typeof DatasetDescriptorSchema>;
+export type DatasetDescriptor = v.InferOutput<typeof DatasetDescriptorSchema>;
 
-export const DatasetSummarySchema = z.object({
-  id: z.string(),
-  tables: z.record(z.string(), z.object({ row_count: z.number().int(), version: z.number().int() })).default({}),
-  capabilities: z.array(z.string()).default([]),
+export const DatasetSummarySchema = v.object({
+  id: v.string(),
+  tables: v.optional(v.record(v.string(), v.object({ row_count: int(), version: int() })), {}),
+  capabilities: v.optional(v.array(v.string()), []),
 });
-export const DatasetsResponseSchema = z.object({ datasets: z.array(DatasetSummarySchema) });
+export const DatasetsResponseSchema = v.object({ datasets: v.array(DatasetSummarySchema) });
 
 // ─────────────────────────────────────────────────────────────────────
 // Row envelope — the ranking + alignments contract, NOT corpus columns
 // ─────────────────────────────────────────────────────────────────────
 
-const WordSchema = z.object({
-  text: z.string(),
-  start: z.number(),
-  end: z.number(),
-  score: z.number().optional(),
+const WordSchema = v.object({
+  text: v.string(),
+  start: v.number(),
+  end: v.number(),
+  score: v.optional(v.number()),
 });
-export type Word = z.infer<typeof WordSchema>;
+export type Word = v.InferOutput<typeof WordSchema>;
 
-export const AlignmentSchema = z.object({
-  start: z.number(),
-  end: z.number(),
-  text: z.string(),
-  duration: z.number().optional(),
-  score: z.number().optional(),
-  words: z.array(WordSchema).optional(),
+export const AlignmentSchema = v.object({
+  start: v.number(),
+  end: v.number(),
+  text: v.string(),
+  duration: v.optional(v.number()),
+  score: v.optional(v.number()),
+  words: v.optional(v.array(WordSchema)),
 });
-export type Alignment = z.infer<typeof AlignmentSchema>;
+export type Alignment = v.InferOutput<typeof AlignmentSchema>;
 
 /** A search/browse result row. The parse validates the ENVELOPE — ranking
  *  signals + the alignments blob — and passes every other (corpus-specific)
  *  column through untouched, so the schema names no corpus column. Typed
  *  field access goes through {@link DatasetView}. */
-export const RowSchema = z
-  .object({
-    _score: z.number().optional(),
-    _distance: z.number().optional(),
-    _relevance_score: z.number().optional(),
-    alignments: z.array(AlignmentSchema).optional(),
-    tags: z.array(z.string()).optional(),
-  })
-  .passthrough();
-export type Row = z.infer<typeof RowSchema> & Record<string, unknown>;
+export const RowSchema = v.looseObject({
+  _score: v.optional(v.number()),
+  _distance: v.optional(v.number()),
+  _relevance_score: v.optional(v.number()),
+  alignments: v.optional(v.array(AlignmentSchema)),
+  tags: v.optional(v.array(v.string())),
+});
+export type Row = v.InferOutput<typeof RowSchema> & Record<string, unknown>;
 
 /** The search modes a dataset supports, derived from its declared bindings. */
 export type SearchMode = 'fts' | 'semantic' | 'visual' | 'scene' | 'scene_fts' | 'hybrid' | 'all';

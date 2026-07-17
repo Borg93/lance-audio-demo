@@ -10,7 +10,7 @@
  */
 
 import { tableFromIPC, type Vector } from 'apache-arrow';
-import { z } from 'zod';
+import * as v from 'valibot';
 
 import {
   activeView,
@@ -100,24 +100,24 @@ export class ApiError extends Error {
 
 // RFC 9457 problem+json: DomainError → { detail, title }; FastAPI 422 →
 // { title, errors:[...] } with no string `detail`. Parse both keys.
-const ProblemSchema = z.object({ detail: z.string().optional(), title: z.string().optional() });
+const ProblemSchema = v.object({ detail: v.optional(v.string()), title: v.optional(v.string()) });
 
 async function apiErrorFrom(r: Response): Promise<ApiError> {
   const body: unknown = await r.json().catch(() => null);
-  const parsed = ProblemSchema.safeParse(body);
+  const parsed = v.safeParse(ProblemSchema, body);
   const detail =
-    (parsed.success ? (parsed.data.detail ?? parsed.data.title) : undefined) ||
+    (parsed.success ? (parsed.output.detail ?? parsed.output.title) : undefined) ||
     r.statusText ||
     `HTTP ${r.status}`;
   return new ApiError(r.status, detail);
 }
 
-async function asJson<T>(r: Response, schema: z.ZodType<T>): Promise<T> {
+async function asJson<T>(r: Response, schema: v.GenericSchema<T>): Promise<T> {
   if (!r.ok) throw await apiErrorFrom(r);
-  return schema.parse(await r.json());
+  return v.parse(schema, await r.json());
 }
 
-const HitsArraySchema = z.array(RowSchema) as z.ZodType<Row[]>;
+const HitsArraySchema = v.array(RowSchema) as v.GenericSchema<Row[]>;
 
 /** Append the `dataset` selector to a params bag when a non-default dataset is
  *  active or the spec names one. */
@@ -175,7 +175,7 @@ function datasetSuffix(): string {
   return ds ? `?dataset=${encodeURIComponent(ds)}` : '';
 }
 
-const ChunkAlignmentsSchema = z.object({ alignments: z.array(AlignmentSchema) });
+const ChunkAlignmentsSchema = v.object({ alignments: v.array(AlignmentSchema) });
 
 /** Per-word alignments for one row, fetched on demand when opened in the player.
  *  Search results ship `alignments: []` (the timing blob dominates the payload).
@@ -193,11 +193,11 @@ export async function getChunkAlignments(
 const DocTranscriptChunkSchema = RowSchema;
 export type DocTranscriptChunk = Row;
 
-const DocTranscriptSchema = z.object({
-  doc_id: z.string(),
-  chunks: z.array(DocTranscriptChunkSchema),
+const DocTranscriptSchema = v.object({
+  doc_id: v.string(),
+  chunks: v.array(DocTranscriptChunkSchema),
 });
-export type DocTranscript = z.infer<typeof DocTranscriptSchema>;
+export type DocTranscript = v.InferOutput<typeof DocTranscriptSchema>;
 
 // Bounded LRU of in-flight/resolved transcripts (immutable per doc, heavy
 // payload) so re-opening any row in the same doc is instant.
@@ -236,21 +236,21 @@ export async function getDocTranscript(
 }
 
 // ── Diarization (Speakers tab, capability-gated) ────────────────────────────
-const DiarTurnSchema = z.object({
-  turn_id: z.number().int(),
-  speaker: z.string(),
-  start: z.number(),
-  end: z.number(),
+const DiarTurnSchema = v.object({
+  turn_id: v.pipe(v.number(), v.integer()),
+  speaker: v.string(),
+  start: v.number(),
+  end: v.number(),
 });
-export type DiarTurn = z.infer<typeof DiarTurnSchema>;
+export type DiarTurn = v.InferOutput<typeof DiarTurnSchema>;
 
-const DiarizationResponseSchema = z.object({
-  built: z.boolean(),
-  doc_id: z.string(),
-  turns: z.array(DiarTurnSchema),
-  speakers: z.array(z.string()),
+const DiarizationResponseSchema = v.object({
+  built: v.boolean(),
+  doc_id: v.string(),
+  turns: v.array(DiarTurnSchema),
+  speakers: v.array(v.string()),
 });
-export type DiarizationResponse = z.infer<typeof DiarizationResponseSchema>;
+export type DiarizationResponse = v.InferOutput<typeof DiarizationResponseSchema>;
 
 export async function getDiarization(
   docId: string,
@@ -261,18 +261,18 @@ export async function getDiarization(
 }
 
 // ── Health ──────────────────────────────────────────────────────────────
-const PingSchema = z.object({ ok: z.boolean(), url: z.string(), error: z.string().nullish() });
-const HealthSchema = z.object({
-  db: z.object({
-    path: z.string(),
-    tables: z.array(z.string()),
-    chunks: z.number(),
-    documents: z.number(),
+const PingSchema = v.object({ ok: v.boolean(), url: v.string(), error: v.nullish(v.string()) });
+const HealthSchema = v.object({
+  db: v.object({
+    path: v.string(),
+    tables: v.array(v.string()),
+    chunks: v.number(),
+    documents: v.number(),
   }),
   embed: PingSchema,
   rerank: PingSchema,
 });
-export type Health = z.infer<typeof HealthSchema>;
+export type Health = v.InferOutput<typeof HealthSchema>;
 
 export async function getHealth(fetcher: typeof fetch = fetch): Promise<Health> {
   const r = await fetcher('/api/health');
@@ -283,12 +283,12 @@ export async function getHealth(fetcher: typeof fetch = fetch): Promise<Health> 
 const DocumentSchema = RowSchema;
 export type Document = Row;
 
-const DocumentsResponseSchema = z.object({
-  total: z.number().int(),
-  page: z.number().int(),
-  docs: z.array(DocumentSchema),
+const DocumentsResponseSchema = v.object({
+  total: v.pipe(v.number(), v.integer()),
+  page: v.pipe(v.number(), v.integer()),
+  docs: v.array(DocumentSchema),
 });
-export type DocumentsResponse = z.infer<typeof DocumentsResponseSchema>;
+export type DocumentsResponse = v.InferOutput<typeof DocumentsResponseSchema>;
 
 export async function listDocuments(
   page = 1,
@@ -302,12 +302,12 @@ export async function listDocuments(
 }
 
 // ── Filterable columns ───────────────────────────────────────────────────
-const ColumnSchema = z.object({ name: z.string(), type: z.string() });
-export type ColumnInfo = z.infer<typeof ColumnSchema>;
+const ColumnSchema = v.object({ name: v.string(), type: v.string() });
+export type ColumnInfo = v.InferOutput<typeof ColumnSchema>;
 
 export async function listColumns(fetcher: typeof fetch = fetch): Promise<ColumnInfo[]> {
   const r = await fetcher(`/api/columns${datasetSuffix()}`);
-  return asJson(r, z.array(ColumnSchema));
+  return asJson(r, v.array(ColumnSchema));
 }
 
 // ── Descriptor + dataset discovery ──────────────────────────────────────────
@@ -333,7 +333,7 @@ export async function getDatasetView(
   if (!r.ok) throw await apiErrorFrom(r);
   // Parse directly (not via asJson) so the value keeps the schema's OUTPUT type,
   // where `.default()`-ed fields are required — the DatasetView ctor's shape.
-  const descriptor = DatasetDescriptorSchema.parse(await r.json());
+  const descriptor = v.parse(DatasetDescriptorSchema, await r.json());
   return new DatasetViewClass(descriptor).withDatasetParam(isDefault);
 }
 
@@ -347,14 +347,14 @@ export const mediaUrl = (row: Row): string => activeView().mediaUrl(row);
  *  (`declared.atlas[].name`), so this is `string`, not a fixed corpus set. */
 export type AtlasSpace = string;
 
-const AtlasStatusSchema = z.object({
-  projected: z.boolean(),
-  rows: z.number().int(),
-  space: z.string().optional(),
+const AtlasStatusSchema = v.object({
+  projected: v.boolean(),
+  rows: v.pipe(v.number(), v.integer()),
+  space: v.optional(v.string()),
   // Which named spaces are built (gates the space toggle).
-  spaces: z.record(z.string(), z.boolean()).optional(),
+  spaces: v.optional(v.record(v.string(), v.boolean())),
 });
-export type AtlasStatus = z.infer<typeof AtlasStatusSchema>;
+export type AtlasStatus = v.InferOutput<typeof AtlasStatusSchema>;
 
 export async function getAtlasStatus(
   space: AtlasSpace,
@@ -499,7 +499,7 @@ export async function getAtlasPoints(
     channels,
   };
   if (spaceMeta) data.space = spaceMeta;
-  if (docFilesMeta) data.docFiles = z.array(z.string()).parse(JSON.parse(docFilesMeta));
+  if (docFilesMeta) data.docFiles = v.parse(v.array(v.string()), JSON.parse(docFilesMeta));
   const rowid = table.getChild('rowid');
   if (rowid) data.rowid = numberColumn(rowid);
   const cluster = table.getChild('cluster');
@@ -540,22 +540,22 @@ export interface TopicNode {
   children?: TopicNode[] | undefined;
 }
 
-const TopicNodeSchema: z.ZodType<TopicNode> = z.lazy(() =>
-  z.object({
-    name: z.string(),
-    value: z.number().optional(),
-    children: z.array(TopicNodeSchema).optional(),
+const TopicNodeSchema: v.GenericSchema<TopicNode> = v.lazy(() =>
+  v.object({
+    name: v.string(),
+    value: v.optional(v.number()),
+    children: v.optional(v.array(TopicNodeSchema)),
   }),
 );
 
-const TopicsResponseSchema = z.object({
-  built: z.boolean(),
-  layers: z.number().int(),
-  n_chunks: z.number().int(),
-  hierarchy: TopicNodeSchema.nullable(),
-  noise_label: z.string().optional(),
+const TopicsResponseSchema = v.object({
+  built: v.boolean(),
+  layers: v.pipe(v.number(), v.integer()),
+  n_chunks: v.pipe(v.number(), v.integer()),
+  hierarchy: v.nullable(TopicNodeSchema),
+  noise_label: v.optional(v.string()),
 });
-export type TopicsResponse = z.infer<typeof TopicsResponseSchema>;
+export type TopicsResponse = v.InferOutput<typeof TopicsResponseSchema>;
 
 export async function getTopics(fetcher: typeof fetch = fetch): Promise<TopicsResponse> {
   return asJson(await fetcher(`/api/topics${datasetSuffix()}`), TopicsResponseSchema);
@@ -568,29 +568,29 @@ export function isEntityId(id: string): boolean {
   return ENTITY_ID_RE.test(id);
 }
 
-export const GraphStatusSchema = z.object({
-  built: z.boolean(),
-  entities: z.number().int(),
-  relations: z.number().int(),
-  mentions: z.number().int(),
-  videos: z.number().int(),
+export const GraphStatusSchema = v.object({
+  built: v.boolean(),
+  entities: v.pipe(v.number(), v.integer()),
+  relations: v.pipe(v.number(), v.integer()),
+  mentions: v.pipe(v.number(), v.integer()),
+  videos: v.pipe(v.number(), v.integer()),
 });
-export type GraphStatus = z.infer<typeof GraphStatusSchema>;
+export type GraphStatus = v.InferOutput<typeof GraphStatusSchema>;
 
 export async function getGraphStatus(fetcher: typeof fetch = fetch): Promise<GraphStatus> {
   return asJson(await fetcher(`/api/graph/status${datasetSuffix()}`), GraphStatusSchema);
 }
 
-const CypherValueSchema = z.union([z.string(), z.number(), z.null()]);
-export type CypherValue = z.infer<typeof CypherValueSchema>;
+const CypherValueSchema = v.union([v.string(), v.number(), v.null_()]);
+export type CypherValue = v.InferOutput<typeof CypherValueSchema>;
 
-export const GraphCypherResponseSchema = z.object({
-  built: z.boolean(),
-  columns: z.array(z.string()),
-  rows: z.array(z.array(CypherValueSchema)),
-  error: z.string().nullable(),
+export const GraphCypherResponseSchema = v.object({
+  built: v.boolean(),
+  columns: v.array(v.string()),
+  rows: v.array(v.array(CypherValueSchema)),
+  error: v.nullable(v.string()),
 });
-export type GraphCypherResponse = z.infer<typeof GraphCypherResponseSchema>;
+export type GraphCypherResponse = v.InferOutput<typeof GraphCypherResponseSchema>;
 
 export async function runGraphCypher(
   query: string,
@@ -607,20 +607,20 @@ export async function runGraphCypher(
   return asJson(r, GraphCypherResponseSchema);
 }
 
-export const GraphMatchSchema = z.object({
-  entity_id: z.string(),
-  name: z.string(),
-  entity_type: z.string(),
-  mention_count: z.number().int(),
-  videos: z.number().int(),
+export const GraphMatchSchema = v.object({
+  entity_id: v.string(),
+  name: v.string(),
+  entity_type: v.string(),
+  mention_count: v.pipe(v.number(), v.integer()),
+  videos: v.pipe(v.number(), v.integer()),
 });
-export type GraphMatch = z.infer<typeof GraphMatchSchema>;
+export type GraphMatch = v.InferOutput<typeof GraphMatchSchema>;
 
-const GraphSearchResponseSchema = z.object({
-  built: z.boolean(),
-  matches: z.array(GraphMatchSchema),
+const GraphSearchResponseSchema = v.object({
+  built: v.boolean(),
+  matches: v.array(GraphMatchSchema),
 });
-export type GraphSearchResponse = z.infer<typeof GraphSearchResponseSchema>;
+export type GraphSearchResponse = v.InferOutput<typeof GraphSearchResponseSchema>;
 
 export async function searchGraphEntities(
   q: string,
@@ -634,50 +634,50 @@ export async function searchGraphEntities(
   );
 }
 
-const GraphEntitySchema = z.object({
-  entity_id: z.string(),
-  name: z.string(),
-  entity_type: z.string(),
-  mention_count: z.number().int(),
+const GraphEntitySchema = v.object({
+  entity_id: v.string(),
+  name: v.string(),
+  entity_type: v.string(),
+  mention_count: v.pipe(v.number(), v.integer()),
 });
-export type GraphEntity = z.infer<typeof GraphEntitySchema>;
+export type GraphEntity = v.InferOutput<typeof GraphEntitySchema>;
 
 // A clip carries its doc id + time span + body text plus a display title; the
 // title's source column is the dataset's (graph_presets.clip_title_column).
-const GraphClipSchema = z.object({
-  chunk_id: z.string(),
-  doc_id: z.string(),
-  title: z.string(),
-  start: z.number(),
-  end: z.number(),
-  text: z.string(),
+const GraphClipSchema = v.object({
+  chunk_id: v.string(),
+  doc_id: v.string(),
+  title: v.string(),
+  start: v.number(),
+  end: v.number(),
+  text: v.string(),
 });
-export type GraphClip = z.infer<typeof GraphClipSchema>;
+export type GraphClip = v.InferOutput<typeof GraphClipSchema>;
 
-const GraphNeighborSchema = z.object({
-  entity_id: z.string(),
-  name: z.string(),
-  entity_type: z.string(),
-  direction: z.enum(['out', 'in']),
-  description: z.string(),
+const GraphNeighborSchema = v.object({
+  entity_id: v.string(),
+  name: v.string(),
+  entity_type: v.string(),
+  direction: v.picklist(['out', 'in']),
+  description: v.string(),
 });
-export type GraphNeighbor = z.infer<typeof GraphNeighborSchema>;
+export type GraphNeighbor = v.InferOutput<typeof GraphNeighborSchema>;
 
-const GraphCooccurSchema = z.object({
-  entity_id: z.string(),
-  name: z.string(),
-  shared: z.number().int(),
+const GraphCooccurSchema = v.object({
+  entity_id: v.string(),
+  name: v.string(),
+  shared: v.pipe(v.number(), v.integer()),
 });
-export type GraphCooccur = z.infer<typeof GraphCooccurSchema>;
+export type GraphCooccur = v.InferOutput<typeof GraphCooccurSchema>;
 
-export const GraphEntityResponseSchema = z.object({
-  built: z.boolean(),
-  entity: GraphEntitySchema.nullable(),
-  clips: z.array(GraphClipSchema),
-  neighbors: z.array(GraphNeighborSchema),
-  cooccur: z.array(GraphCooccurSchema),
+export const GraphEntityResponseSchema = v.object({
+  built: v.boolean(),
+  entity: v.nullable(GraphEntitySchema),
+  clips: v.array(GraphClipSchema),
+  neighbors: v.array(GraphNeighborSchema),
+  cooccur: v.array(GraphCooccurSchema),
 });
-export type GraphEntityResponse = z.infer<typeof GraphEntityResponseSchema>;
+export type GraphEntityResponse = v.InferOutput<typeof GraphEntityResponseSchema>;
 
 export async function getGraphEntity(
   entityId: string,
@@ -690,28 +690,28 @@ export async function getGraphEntity(
   );
 }
 
-const GraphNodeSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  type: z.string(),
-  mentions: z.number().int(),
-  videos: z.number().int(),
+const GraphNodeSchema = v.object({
+  id: v.string(),
+  name: v.string(),
+  type: v.string(),
+  mentions: v.pipe(v.number(), v.integer()),
+  videos: v.pipe(v.number(), v.integer()),
 });
-export type GraphNode = z.infer<typeof GraphNodeSchema>;
+export type GraphNode = v.InferOutput<typeof GraphNodeSchema>;
 
-const GraphEdgeSchema = z.object({
-  source: z.string(),
-  target: z.string(),
-  description: z.string(),
+const GraphEdgeSchema = v.object({
+  source: v.string(),
+  target: v.string(),
+  description: v.string(),
 });
-export type GraphEdge = z.infer<typeof GraphEdgeSchema>;
+export type GraphEdge = v.InferOutput<typeof GraphEdgeSchema>;
 
-export const GraphSubgraphResponseSchema = z.object({
-  built: z.boolean(),
-  nodes: z.array(GraphNodeSchema),
-  edges: z.array(GraphEdgeSchema),
+export const GraphSubgraphResponseSchema = v.object({
+  built: v.boolean(),
+  nodes: v.array(GraphNodeSchema),
+  edges: v.array(GraphEdgeSchema),
 });
-export type GraphSubgraphResponse = z.infer<typeof GraphSubgraphResponseSchema>;
+export type GraphSubgraphResponse = v.InferOutput<typeof GraphSubgraphResponseSchema>;
 
 export async function getGraphSubgraph(
   entityId?: string,
@@ -729,12 +729,12 @@ export async function getGraphSubgraph(
 }
 
 // ── Voice search ("Find this voice", capability-gated) ──────────────────────
-const VoiceStatusSchema = z.object({
-  built: z.boolean(),
-  turns: z.number().int(),
-  speakers: z.number().int(),
+const VoiceStatusSchema = v.object({
+  built: v.boolean(),
+  turns: v.pipe(v.number(), v.integer()),
+  speakers: v.pipe(v.number(), v.integer()),
 });
-export type VoiceStatus = z.infer<typeof VoiceStatusSchema>;
+export type VoiceStatus = v.InferOutput<typeof VoiceStatusSchema>;
 
 export async function getVoiceStatus(fetcher: typeof fetch = fetch): Promise<VoiceStatus> {
   return asJson(await fetcher(`/api/voice/status${datasetSuffix()}`), VoiceStatusSchema);
@@ -743,16 +743,16 @@ export async function getVoiceStatus(fetcher: typeof fetch = fetch): Promise<Voi
 /** A voice-ranked hit: the matched row (renders as a normal result card) plus
  *  the matched speaker turn. The row envelope is a {@link Row}; the turn fields
  *  are the voice capability's own contract. */
-export const VoiceHitSchema = RowSchema.and(
-  z.object({
-    speaker_label: z.string(),
-    turn_id: z.number().int(),
-    turn_start: z.number(),
-    turn_end: z.number(),
-    _distance: z.number(),
-    turn_score: z.number(),
+export const VoiceHitSchema = v.intersect([RowSchema,
+  v.object({
+    speaker_label: v.string(),
+    turn_id: v.pipe(v.number(), v.integer()),
+    turn_start: v.number(),
+    turn_end: v.number(),
+    _distance: v.number(),
+    turn_score: v.number(),
   }),
-) as z.ZodType<VoiceHit>;
+]) as v.GenericSchema<VoiceHit>;
 export type VoiceHit = Row & {
   speaker_label: string;
   turn_id: number;
@@ -762,20 +762,20 @@ export type VoiceHit = Row & {
   turn_score: number;
 };
 
-const VoiceQueryInfoSchema = z.object({
-  doc_id: z.string().nullable(),
-  speaker_label: z.string().nullable(),
-  turn_id: z.number().int().nullable(),
-  turn_start: z.number().nullable(),
-  turn_end: z.number().nullable(),
+const VoiceQueryInfoSchema = v.object({
+  doc_id: v.nullable(v.string()),
+  speaker_label: v.nullable(v.string()),
+  turn_id: v.nullable(v.pipe(v.number(), v.integer())),
+  turn_start: v.nullable(v.number()),
+  turn_end: v.nullable(v.number()),
 });
-export type VoiceQueryInfo = z.infer<typeof VoiceQueryInfoSchema>;
+export type VoiceQueryInfo = v.InferOutput<typeof VoiceQueryInfoSchema>;
 
-export const VoiceSimilarResponseSchema = z.object({
+export const VoiceSimilarResponseSchema = v.object({
   query: VoiceQueryInfoSchema,
-  hits: z.array(VoiceHitSchema),
+  hits: v.array(VoiceHitSchema),
 });
-export type VoiceSimilarResponse = z.infer<typeof VoiceSimilarResponseSchema>;
+export type VoiceSimilarResponse = v.InferOutput<typeof VoiceSimilarResponseSchema>;
 
 /** Query-by-example anchor: a document plus exactly one locator. */
 export type VoiceAnchor = { docId: string } & (

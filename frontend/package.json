@@ -28,7 +28,7 @@
     "svelte": "^5.36.0",
     "tailwind-merge": "^2.5.5",
     "tailwind-variants": "^0.3.0",
-    "zod": "^3.24.1"
+    "valibot": "^1.4.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -6,7 +6,7 @@ export default defineConfig({
     environment: 'node',
     // zod 3.25 re-exports `z` as a namespace (`import * as z; export { z }`);
     // vitest's runner mishandles that unless zod is transformed through Vite.
-    server: { deps: { inline: ['zod'] } },
+    server: { deps: { inline: ['valibot'] } },
   },
   resolve: {
     alias: { $lib: new URL('./src/lib', import.meta.url).pathname },
