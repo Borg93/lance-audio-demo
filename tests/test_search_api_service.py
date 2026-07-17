@@ -595,6 +595,112 @@ class TestSearchRoutes:
         assert r.json()  # frame ranking joined back to row hits
 
 
+# ── Version-keyed result cache ────────────────────────────────────────────────
+
+
+class TestResultCache:
+    def _spec(self, **kw):
+        return SearchSpec(q=kw.pop("q", "carbon"), mode=kw.pop("mode", SearchMode.FTS), **kw)
+
+    def test_hit_skips_recompute_and_returns_same(self, articles) -> None:
+        from backend.search_api.result_cache import run_cached
+
+        cache: dict = {}
+        calls = {"n": 0}
+
+        def produce():
+            calls["n"] += 1
+            return [{"para_id": "p-climate", "run": calls["n"]}]
+
+        r1 = run_cached(cache, 8, articles, self._spec(), None, None, produce)
+        r2 = run_cached(cache, 8, articles, self._spec(), None, None, produce)
+        assert calls["n"] == 1  # second call served from cache, produce not re-run
+        assert r1 == r2
+        assert len(cache) == 1
+
+    def test_disabled_size_zero_always_recomputes(self, articles) -> None:
+        from backend.search_api.result_cache import run_cached
+
+        cache: dict = {}
+        calls = {"n": 0}
+
+        def produce():
+            calls["n"] += 1
+            return []
+
+        run_cached(cache, 0, articles, self._spec(), None, None, produce)
+        run_cached(cache, 0, articles, self._spec(), None, None, produce)
+        assert calls["n"] == 2  # cache off: no memoization, no version reads
+        assert cache == {}
+
+    def test_distinct_queries_get_distinct_entries(self, articles) -> None:
+        from backend.search_api.result_cache import run_cached
+
+        cache: dict = {}
+        calls = {"n": 0}
+
+        def produce():
+            calls["n"] += 1
+            return []
+
+        run_cached(cache, 8, articles, self._spec(q="a"), None, None, produce)
+        run_cached(cache, 8, articles, self._spec(q="b"), None, None, produce)
+        assert calls["n"] == 2 and len(cache) == 2
+
+    def test_lru_eviction_drops_oldest(self, articles) -> None:
+        from backend.search_api.result_cache import run_cached
+
+        cache: dict = {}
+        for i in range(5):
+            run_cached(cache, 3, articles, self._spec(q=f"q{i}"), None, None, lambda: [])
+        assert len(cache) == 3  # capped at max_size, oldest evicted
+
+    def test_query_hash_covers_filters_and_image(self) -> None:
+        from backend.search_api.result_cache import query_hash
+
+        spec = self._spec(q="a")
+        assert query_hash(spec, {"lang": "en"}, None) != query_hash(spec, {"lang": "sv"}, None)
+        assert query_hash(spec, None, b"img1") != query_hash(spec, None, b"img2")
+        assert query_hash(spec, None, None) != query_hash(spec, None, b"img1")
+        # filter ORDER must not matter (canonicalized)
+        assert query_hash(spec, {"a": "1", "b": "2"}, None) == query_hash(spec, {"b": "2", "a": "1"}, None)
+
+    def test_version_signature_covers_every_search_table(self, articles) -> None:
+        from backend.search_api.result_cache import version_signature
+
+        sig = version_signature(articles)
+        # articles reads paras (row + fts) and shots (visual/scene) — both versioned.
+        assert "paras:" in sig and "shots:" in sig
+
+    def test_a_version_change_invalidates(self, articles, monkeypatch) -> None:
+        # A table write bumps the signature → the key changes → recompute. Driven
+        # here by faking the signature so the shared corpus stays untouched.
+        import backend.search_api.result_cache as rc
+
+        cache: dict = {}
+        calls = {"n": 0}
+        versions = iter(["v1", "v1", "v2"])
+        monkeypatch.setattr(rc, "version_signature", lambda _handle: next(versions))
+
+        def produce():
+            calls["n"] += 1
+            return [calls["n"]]
+
+        r1 = rc.run_cached(cache, 8, articles, self._spec(), None, None, produce)  # v1 miss
+        r2 = rc.run_cached(cache, 8, articles, self._spec(), None, None, produce)  # v1 hit
+        r3 = rc.run_cached(cache, 8, articles, self._spec(), None, None, produce)  # v2 miss
+        assert calls["n"] == 2
+        assert r1 == r2 and r1 != r3
+
+    def test_route_populates_cache_and_serves_repeat(self, client, articles_state) -> None:
+        articles_state.search_cache.clear()
+        h1 = _hits(client, q="carbon", mode="fts", n=5)
+        assert len(articles_state.search_cache) == 1
+        h2 = _hits(client, q="carbon", mode="fts", n=5)
+        assert h1 == h2
+        assert len(articles_state.search_cache) == 1  # same key → still one entry
+
+
 # ── Lazy client accessors (503 mapping + descriptor-fed dim) ──────────────────
 
 

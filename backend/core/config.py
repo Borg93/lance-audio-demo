@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     descriptor_dir: Path = Field(default=Path("config/descriptors"), alias="MEDIA_DESCRIPTOR_DIR")
     cors_origins: list[str] = Field(default_factory=lambda: ["*"], alias="RAUDIO_CORS_ORIGINS")
 
+    # Version-keyed search result cache (the read-fast tier). Number of result
+    # sets to retain per app instance; 0 disables it entirely (then no per-request
+    # version reads are paid). Each entry is small (a page of hits), so a few
+    # hundred is cheap; a write to any table a query reads bumps its Lance version
+    # and strands the old entry (LRU-evicted).
+    search_cache_size: int = Field(default=256, ge=0, alias="MEDIA_SEARCH_CACHE_SIZE")
+
     # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
     # serve datasets from MinIO / RustFS / AWS: the registry then lists + opens
     # under MEDIA_S3_DB_ROOT (an s3:// URI) with these storage_options. All unset

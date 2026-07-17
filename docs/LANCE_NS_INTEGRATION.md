@@ -259,7 +259,32 @@ Two important distinctions:
   contract.** lance-ns governs the physical dataset (manifest/version/lineage/FGA);
   our descriptor governs how a corpus *renders* (identity, display, search modes,
   atlas spaces, capabilities). They compose — descriptor discovery is a `/describe`
-  call plus our declared半 (the `lance_media.descriptor` schema-metadata key).
+  call plus our declared half (the `lance_media.descriptor` schema-metadata key).
+
+### 6a. Caching — which tier is ours, which is the engine's
+
+We are a **visual analysis frontend, not a query engine**, so caching splits cleanly
+by layer (reference model: **Firn/firnflow** — LanceDB + object storage + a tiered
+`foyer` cache):
+
+| Cache | Owner | Why | Status |
+|---|---|---|---|
+| **Result cache** — query → hits, keyed `(dataset, table-version, query-hash)`, invalidate-by-version | **us (the viewer)** | It memoizes *our* read patterns (search/atlas/graph); a viewer has high repeat locality (re-run, page back/forth). View-layer concern. | **built** — `backend/search_api/result_cache.py`, opt-in `MEDIA_SEARCH_CACHE_SIZE` (0=off), mirrors the atlas `points_cache` |
+| **Object-byte cache** — S3 fragment/index bytes on NVMe, survives restarts | **the query engine / lance-ns** | Storage-tier concern; makes *cold* queries fast. Wrong layer to hand-roll in Python. | **deferred** — belongs in a Rust serving layer via `foyer` (Firn's L4), or Lance's own object-store cache |
+| Reader metadata cache (page/index/dictionary LRU) | **Lance, already** | Keeps a live reader fast; not results, not persistent | free |
+
+Key points for the merge:
+- **No `foyer` for us** — it's Rust; our backend is Python. foyer is the right pick only
+  if/when the search path moves into a Rust serving layer (the catalog). The Python
+  analogue for an object cache, if ever wanted here, is `fsspec` filecache.
+- **Not distributed** — the result cache is per-process on `AppState`. The version-key
+  makes it *coherent by construction* (a write bumps the Lance version → stale entry is
+  unreachable, never wrong), so multiple replicas need no coordination; Redis only earns
+  its keep for shared warmth across many replicas, which a viewer/Studio app doesn't need.
+- **Portable seam** — `run_search` stayed pure; the cache is a router wrapper
+  (`_cached_search`) that's opt-in. When a real query engine takes over search, flip the
+  size to 0 and delete one module — the durable artifact is the *key design*, which the
+  engine reuses. This is exactly a "part replaced by a query engine later."
 
 ---
 

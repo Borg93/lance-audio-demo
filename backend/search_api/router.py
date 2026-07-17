@@ -26,9 +26,10 @@ from backend.core.exceptions import ValidationError
 from backend.lancekit.registry import DatasetHandle
 from backend.search_api.deps import EmbedderFactoryDep, RerankerFactoryDep, StateDep
 from backend.search_api.filters import TOPIC_FILTER, extract_filters
+from backend.search_api.result_cache import run_cached
 from backend.search_api.service import run_search
 from backend.search_api.spec import PostSearchSpec, SearchMode, SearchSpec
-from backend.state import dataset_handle
+from backend.state import AppState, dataset_handle
 
 router = APIRouter(prefix="/api", tags=["search"])
 
@@ -39,6 +40,40 @@ _MAX_IMAGE_BYTES = 25 * 1024 * 1024
 def _filterable(handle: DatasetHandle) -> list[str]:
     search = handle.descriptor.declared.search
     return search.filterable if search is not None else []
+
+
+def _cached_search(
+    state: AppState,
+    handle: DatasetHandle,
+    spec: SearchSpec,
+    filters: dict[str, str],
+    image_bytes: bytes | None,
+    get_embedder: Any,
+    get_reranker: Any,
+) -> list[dict[str, Any]]:
+    """Run the search behind the version-keyed result cache (blocking; the POST
+    path offloads this whole call to the threadpool). ``run_search`` stays the
+    single source of truth — the cache only memoizes its output per query."""
+
+    def _run() -> list[dict[str, Any]]:
+        return run_search(
+            handle,
+            get_embedder=get_embedder,
+            get_reranker=get_reranker,
+            spec=spec,
+            filters=filters,
+            image_bytes=image_bytes,
+        )
+
+    return run_cached(
+        state.search_cache,
+        state.settings.search_cache_size,
+        handle,
+        spec,
+        filters,
+        image_bytes,
+        _run,
+    )
 
 
 @router.get("/search")
@@ -61,14 +96,7 @@ def search_get(
     # browse (the Tree page contract); other filters without a query stay [].
     if not spec.q and not spec.q_vec and not filters.get(TOPIC_FILTER):
         return []
-    return run_search(
-        handle,
-        get_embedder=get_embedder,
-        get_reranker=get_reranker,
-        spec=spec,
-        filters=filters,
-        image_bytes=None,
-    )
+    return _cached_search(state, handle, spec, filters, None, get_embedder, get_reranker)
 
 
 def _post_spec(
@@ -132,13 +160,8 @@ async def search_post(
     filters = extract_filters(form_values, _filterable(handle))
     if not spec.q and not spec.q_vec and not image_bytes and not filters.get(TOPIC_FILTER):
         return []
-    # run_search makes blocking vLLM (httpx) + Lance calls — keep the event loop free.
+    # The cache lookup does blocking version reads and run_search makes blocking
+    # vLLM (httpx) + Lance calls — offload the whole cached path off the event loop.
     return await run_in_threadpool(
-        run_search,
-        handle,
-        get_embedder=get_embedder,
-        get_reranker=get_reranker,
-        spec=spec,
-        filters=filters,
-        image_bytes=image_bytes,
+        _cached_search, state, handle, spec, filters, image_bytes, get_embedder, get_reranker
     )
