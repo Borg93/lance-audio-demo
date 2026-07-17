@@ -70,9 +70,11 @@
     return opts;
   });
 
-  // Whether the dataset supports image-similarity (visual) search — gates the
-  // Image attach affordance below.
-  const hasVisual = $derived(activeView().hasMode('visual'));
+  // The first declared IMAGE-embedding space (any key — not just `visual`) — an
+  // image-only query runs this mode, and its presence gates the Image attach
+  // affordance below. So an image embedding under any name still gets upload.
+  const imageSpace = $derived(activeView().vectorSpaces.find((s) => s.encoder === 'image') ?? null);
+  const hasVisual = $derived(imageSpace !== null);
 
   // Keep `kind` valid if the dataset doesn't offer the current mode.
   $effect(() => {
@@ -99,7 +101,7 @@
     // Image + any text → 3-way "all" (FTS + text-vector + frame-vector). Image
     // alone → visual. Otherwise the dial decides.
     if (imageFile && hasText) mode = 'all';
-    else if (imageFile) mode = 'visual';
+    else if (imageFile) mode = imageSpace?.key ?? 'visual';
     else if (kind === 'meaning') mode = 'semantic';
     else if (kind === 'scene') mode = sceneMethod === 'fts' ? 'scene_fts' : 'scene';
     else if (kind === 'both') mode = 'hybrid';
