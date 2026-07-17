@@ -31,6 +31,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from backend.core.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
+from backend.lancekit import store
 from backend.media_api.wespeaker import (
     MIN_TURN_DURATION_S,
     TARGET_SAMPLE_RATE,
@@ -128,9 +129,9 @@ def _capability_table(declared: Declared, name: str) -> str | None:
 
 
 def _table_exists(handle: DatasetHandle, name: str | None) -> bool:
-    # Probed on disk (not via the descriptor's startup snapshot) so a table
-    # built after the app started is picked up without a restart.
-    return name is not None and (handle.path / f"{name}.lance").is_dir()
+    # Probed on the store (not via the descriptor's startup snapshot) so a table
+    # built after the app started is picked up without a restart — over S3 or local.
+    return name is not None and store.exists(handle.table_uri(name), handle.storage_options)
 
 
 def _payload_columns(handle: DatasetHandle, declared: Declared) -> list[str]:

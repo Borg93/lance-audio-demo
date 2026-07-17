@@ -30,6 +30,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
 
 from backend.deps import StateDep
+from backend.lancekit import store
 from backend.schemas.graph import (
     CypherResponse,
     EntityClip,
@@ -214,7 +215,7 @@ def _build_resources(handle: DatasetHandle, names: _KgTables) -> _GraphResources
         "RELATIONSHIP": names.relationships,
     }
     tables = {
-        label: lance.dataset(str(handle.path / f"{name}.lance")).to_table()
+        label: lance.dataset(handle.table_uri(name), storage_options=handle.storage_options).to_table()
         for label, name in files.items()
     }
     cfg = (
@@ -266,12 +267,13 @@ def _resources(handle: DatasetHandle) -> _GraphResources | None:
     names = _kg_tables(handle.descriptor.declared)
     if names is None:
         return None
-    entities_path = handle.path / f"{names.entities}.lance"
     all_names = (names.entities, names.chunks, names.mentions, names.relationships)
-    if not all((handle.path / f"{n}.lance").exists() for n in all_names):
+    if not all(store.exists(handle.table_uri(n), handle.storage_options) for n in all_names):
         return None
-    version = lance.dataset(str(entities_path)).version
-    key = (str(handle.path), version)
+    version = lance.dataset(
+        handle.table_uri(names.entities), storage_options=handle.storage_options
+    ).version
+    key = (handle.uri, version)
     # Single-flight + bounded: the ~20s/~370MB build must not run N times under a
     # cold-start thundering herd, and superseded versions must not accumulate.
     with _CACHE_LOCK:

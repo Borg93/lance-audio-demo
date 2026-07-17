@@ -1,0 +1,34 @@
+{
+  "identity": {
+    "key_fields": ["doc_id", "speech_id", "chunk_id"],
+    "doc_key": "doc_id",
+    "doc_key_pattern": "^[a-f0-9]{16}$"
+  },
+  "document": {
+    "table": "documents",
+    "media_blob": "media_blob",
+    "mime": "media_mime"
+  },
+  "time": { "start": "start", "end": "end" },
+  "display": {
+    "title": ["doc_id"],
+    "body": "text",
+    "metadata": [{ "field": "language", "label": "Language" }]
+  },
+  "search": {
+    "row_table": "chunks",
+    "fts": { "table": "chunks", "column": "text", "language": "Swedish" },
+    "vectors": {
+      "semantic": { "table": "chunks", "column": "text_embedding", "dim": 2048, "query_encoder": "text" }
+    },
+    "filterable": ["language"],
+    "rerank": false
+  },
+  "atlas": [],
+  "capabilities": {
+    "diarization": "speaker_turns",
+    "voice": "speaker_embeddings.embedding",
+    "speakers": "speakers",
+    "frames": "chunk_frames.frame_blob"
+  }
+}

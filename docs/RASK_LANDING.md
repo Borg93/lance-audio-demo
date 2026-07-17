@@ -206,11 +206,14 @@ Two code paths were threaded (both DONE):
    discovery use the object-store seam instead of `Path.glob`/`is_dir` (the
    `s3://`→`s3:/` collapse is gone).
 
-**Remaining (not on the core read path):** the capability routes
-`graph.py`/`topics.py`/`diarization.py`/`voice_service.py` still open via
-`handle.path` (local-only) — they thread the same `handle.storage_options` +
-`handle.table_uri()` when those capabilities need S3 (parity/smoke datasets don't
-declare them). External `media_blob` (file://) still needs re-ingest (§4.4).
+**Capability routes — also DONE (2026-07-16):** `graph.py` / `topics.py` /
+`diarization.py` / `voice_service.py` now open via `handle.table_uri()` +
+`handle.storage_options` (grep gate: no bare `handle.path / f"…"` opens left).
+Verified live on MinIO with `parity_new.lance`: `/api/voice/status` built:true
+(323 turns / 15 speakers) and `/api/diarization/{doc}` built:true (114 turns) over
+S3; topics/graph return the correct `built:false` (their S3 existence-check path is
+exercised — the `built:true` branch needs the 10G transcripts_v2, not uploaded).
+**Remaining:** external `media_blob` (file://) still needs re-ingest (§4.4).
 
 ### 4.3 Blob streaming over S3 — already-proven contract
 

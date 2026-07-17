@@ -21,6 +21,7 @@ import lance
 from fastapi import APIRouter
 
 from backend.deps import StateDep
+from backend.lancekit import store
 from backend.lancekit.topics_meta import NOISE_LABEL
 from backend.schemas.topics import TopicsResponse
 from backend.state import dataset_handle
@@ -50,10 +51,10 @@ def get_topics(state: StateDep, dataset: str | None = None) -> TopicsResponse:
     if target is None:
         return _NOT_BUILT
     table, _, column = target.partition(".")
-    path = handle.path / f"{table}.lance"
-    if not path.exists():
+    uri = handle.table_uri(table)
+    if not store.exists(uri, handle.storage_options):
         return _NOT_BUILT
-    rows = lance.dataset(str(path)).to_table().to_pylist()
+    rows = lance.dataset(uri, storage_options=handle.storage_options).to_table().to_pylist()
     if not rows:
         return _NOT_BUILT
     # The columns are a writer-guaranteed contract (build_topic_tree always

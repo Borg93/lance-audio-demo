@@ -19,6 +19,7 @@ from fastapi import APIRouter
 
 from backend.core.exceptions import ValidationError
 from backend.deps import StateDep
+from backend.lancekit import store
 from backend.schemas.diarization import DiarizationResponse, SpeakerTurn
 from backend.state import dataset_handle
 
@@ -51,10 +52,15 @@ def get_diarization(doc_id: str, state: StateDep, dataset: str | None = None) ->
     target = handle.descriptor.declared.capabilities.get("diarization")
     if target is None:
         return _not_built(doc_id)
-    path = handle.path / f"{target.partition('.')[0]}.lance"
-    if not path.exists():
+    table = target.partition(".")[0]
+    uri = handle.table_uri(table)
+    if not store.exists(uri, handle.storage_options):
         return _not_built(doc_id)
-    rows = lance.dataset(str(path)).to_table(filter=f"{_TURN_DOC} = '{doc_id}'").to_pylist()
+    rows = (
+        lance.dataset(uri, storage_options=handle.storage_options)
+        .to_table(filter=f"{_TURN_DOC} = '{doc_id}'")
+        .to_pylist()
+    )
     if not rows:
         return _not_built(doc_id)
     # The columns are a writer-guaranteed contract (every row carries all five,
