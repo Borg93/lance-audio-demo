@@ -16,6 +16,58 @@
 
 ---
 
+## At a glance
+
+Two things live in this repo — **compute** and an **app** — and they attach to
+the lance-ns lakehouse at two different points. The batch pipeline plugs into the
+medallion cascade as **silver/gold derivers** (★ = proven, see §4); the app is a
+**read-only client** of the catalog, which *is* the query engine.
+
+```mermaid
+flowchart LR
+    analyst(["Analyst"]):::user
+
+    subgraph media["lance-media — THIS repo"]
+        rmedia["rmedia pipeline<br/>Ray + vLLM<br/><i>compute only</i>"]:::mine
+        app["Search / Viewer app<br/>SvelteKit + WebGPU<br/><i>analysis frontend</i>"]:::mine
+    end
+
+    subgraph ns["lance-ns — the LAKEHOUSE (= the query engine)"]
+        catalog["Catalog REST API<br/>/query · /blobs · /describe"]:::engine
+        subgraph cascade["medallion cascade — Dapr movers (raw → bronze → silver → gold)"]
+            direction LR
+            bronze["bronze<br/>raw media blobs"]:::data
+            derivers["silver derivers<br/>★ OUR stages plug in<br/>audio + fan-out PROVEN"]:::proven
+            silver["silver-media<br/>embeddings · frames ·<br/>speaker-turns"]:::data
+            gold["gold-media<br/>★ OUR aggregations<br/>atlas · topics · KG"]:::proven
+            bronze --> derivers --> silver --> gold
+        end
+        catalog -. reads .-> silver
+        catalog -. reads .-> gold
+    end
+
+    rask["rask — deploy platform: KubeRay · Dapr · rustfs · CNPG · gateway · MFEs<br/>hosts lance-ns + lance-media; our app replaces its viewer + search MFE"]:::host
+
+    analyst --> app
+    rmedia ==>|"ingest + run as movers"| bronze
+    app ==>|"read only · governed · no S3 creds"| catalog
+    rask -. hosts .-> ns
+    rask -. hosts .-> media
+
+    classDef user fill:#0d3b2e,stroke:#46f9b8,color:#eafff5
+    classDef mine fill:#12345a,stroke:#6aa9ff,color:#eaf2ff
+    classDef engine fill:#3a2a4d,stroke:#b388ff,color:#f3ecff
+    classDef data fill:#2a2438,stroke:#b388ff,color:#efe9ff
+    classDef proven fill:#0d3b2e,stroke:#46f9b8,color:#eafff5,stroke-width:3px
+    classDef host fill:#3a2418,stroke:#ff9457,color:#ffe9d9
+```
+
+**In one line:** our *compute* becomes lakehouse silver/gold; our *app* reads that
+data back through the catalog; rask hosts everything. No merge is performed here —
+this is the map plus the de-risking proof.
+
+---
+
 ## 1. The three repos and who owns "the query engine"
 
 | repo | role | is it the query engine? |
