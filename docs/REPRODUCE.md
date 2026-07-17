@@ -400,6 +400,40 @@ What it brings up (idempotent — skips any port already healthy):
 
 ---
 
+## Serving from S3 (MinIO / RustFS) — object-store backing
+
+The backend reads Lance from an S3-compatible store when the `MEDIA_S3_*` env is
+set; unset, it uses the local `db_root` (byte-identical). Three steps: make the
+dataset self-contained, move it, serve it.
+
+```bash
+# 1. Make media self-contained (the lance-ns way): external file:// media_blob
+#    → managed blob-v2 bytes, so a plain copy carries them and they resolve
+#    off-box. Run LOCALLY (where the file:// sources still resolve), BEFORE moving.
+uv run rmedia --db transcripts_v2.lance materialize-blobs   # → MATERIALIZE OK
+
+# 2. Move the dataset to the bucket + verify tabular/vector/blob reads over S3.
+uv run --with numpy python scripts/move_to_s3.py transcripts_v2.lance \
+    --endpoint http://127.0.0.1:9000 --key <key> --secret <secret> \
+    --bucket lance-media                                    # → S3 READ OK
+
+# 3. Serve the backend from S3 (env only — no code change).
+MEDIA_S3_ENDPOINT=http://127.0.0.1:9000 \
+MEDIA_S3_ACCESS_KEY_ID=<key> MEDIA_S3_SECRET_ACCESS_KEY=<secret> \
+MEDIA_S3_DB_ROOT=s3://lance-media RAUDIO_DB=transcripts_v2.lance \
+    uv run uvicorn backend.app:app --host 127.0.0.1 --port 8000
+```
+
+Every read path serves from S3: `GET /api/datasets`, `/datasets/{id}/descriptor`,
+FTS/vector `/api/search`, blob/Range `/api/media/{doc}` (206 + `Content-Range`),
+and the capabilities `/api/voice/status`, `/api/diarization/{doc}`, `/api/topics`,
+`/api/graph/status` + `POST /api/graph/cypher` — all verified on MinIO **and**
+RustFS (`rustfs` uses `--endpoint http://127.0.0.1:9100`; path-style is forced, as
+both stores reject virtual-hosted addressing). Full detail: `docs/RASK_LANDING.md`
+§4.
+
+---
+
 ## Final verification (the smoke test)
 
 ```bash

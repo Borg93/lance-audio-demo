@@ -209,10 +209,14 @@ Two code paths were threaded (both DONE):
 **Capability routes — also DONE (2026-07-16):** `graph.py` / `topics.py` /
 `diarization.py` / `voice_service.py` now open via `handle.table_uri()` +
 `handle.storage_options` (grep gate: no bare `handle.path / f"…"` opens left).
-Verified live on MinIO with `parity_new.lance`: `/api/voice/status` built:true
-(323 turns / 15 speakers) and `/api/diarization/{doc}` built:true (114 turns) over
-S3; topics/graph return the correct `built:false` (their S3 existence-check path is
-exercised — the `built:true` branch needs the 10G transcripts_v2, not uploaded).
+Verified live on MinIO — **all four `built:true` over S3**: `/api/voice/status`
+(323 turns / 15 speakers) and `/api/diarization/{doc}` (114 turns) on
+`parity_new.lance`; `/api/topics` (145k chunks + hierarchy tree) and
+`/api/graph/status` (139,407 entities / 290,408 relations / 507,344 mentions /
+1,154 videos) — plus a live `POST /api/graph/cypher` returning real rows (Sverige
+8478, Regeringen 4779, EU 2708) — on a compact fixture of the real topics + kg_*
+tables. Every backend read path (tabular, vector, FTS, blob, and all capabilities)
+now serves from S3.
 **External `media_blob` — also DONE:** `rmedia materialize-blobs` converts the
 external `file://` pointers to managed blob-v2 bytes so the dataset is
 self-contained on S3 (§4.4, verified end-to-end incl. a 206 Range serve).
