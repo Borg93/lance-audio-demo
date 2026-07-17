@@ -16,6 +16,7 @@ import lance
 import pyarrow as pa
 from pydantic import BaseModel
 
+from backend.lancekit import store
 from backend.lancekit.blobs import is_blob_field
 
 logger = logging.getLogger(__name__)
@@ -66,9 +67,9 @@ def _index_field(index: object, key: str, default: object = None) -> object:
     return getattr(index, key, default)
 
 
-def table_info(uri: str | Path) -> TableInfo:
+def table_info(uri: str | Path, storage_options: dict[str, str] | None = None) -> TableInfo:
     """Introspect one Lance table (schema, vector dims, blob columns, indexes)."""
-    ds = lance.dataset(str(uri))
+    ds = lance.dataset(str(uri), storage_options=storage_options)
     indexes = []
     for ix in ds.list_indices():
         raw_fields = _index_field(ix, "fields", [])
@@ -89,15 +90,19 @@ def table_info(uri: str | Path) -> TableInfo:
     )
 
 
-def discover_tables(db_path: str | Path) -> dict[str, TableInfo]:
-    """All user tables under a dataset root (``__manifest`` etc. are reserved)."""
-    root = Path(db_path)
+def discover_tables(
+    db_path: str | Path, storage_options: dict[str, str] | None = None
+) -> dict[str, TableInfo]:
+    """All user tables under a dataset root (``__manifest`` etc. are reserved).
+
+    Lists over the object store when ``db_path`` is an ``s3://`` URI, else the
+    local directory — see :mod:`backend.lancekit.store`.
+    """
     out: dict[str, TableInfo] = {}
-    for entry in sorted(root.glob("*.lance")):
-        if not entry.is_dir() or entry.stem.startswith("__"):
-            continue
+    for stem in store.list_lance_stems(db_path, storage_options):
+        uri = store.join(db_path, f"{stem}.lance")
         try:
-            out[entry.stem] = table_info(entry)
+            out[stem] = table_info(uri, storage_options)
         except Exception as exc:  # noqa: BLE001 — one unreadable table must not hide the rest
-            logger.warning("skipping unreadable table %s: %s", entry, exc)
+            logger.warning("skipping unreadable table %s: %s", uri, exc)
     return out

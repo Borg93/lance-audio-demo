@@ -71,7 +71,10 @@ def dataset_handle(state: AppState, dataset_id: str | None = None):
 
     if state.registry is None:
         state.registry = DatasetRegistry(
-            state.settings.db_root, state.settings.descriptor_dir, state.settings.default_dataset_id
+            state.settings.registry_root,
+            state.settings.descriptor_dir,
+            state.settings.default_dataset_id,
+            storage_options=state.settings.storage_options,
         )
     registry: DatasetRegistry = state.registry
     try:

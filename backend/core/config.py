@@ -47,9 +47,45 @@ class Settings(BaseSettings):
     descriptor_dir: Path = Field(default=Path("config/descriptors"), alias="MEDIA_DESCRIPTOR_DIR")
     cors_origins: list[str] = Field(default_factory=lambda: ["*"], alias="RAUDIO_CORS_ORIGINS")
 
+    # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
+    # serve datasets from MinIO / RustFS / AWS: the registry then lists + opens
+    # under MEDIA_S3_DB_ROOT (an s3:// URI) with these storage_options. All unset
+    # (the default) = the local-filesystem db_root path, byte-identical to before.
+    s3_endpoint: str | None = Field(default=None, alias="MEDIA_S3_ENDPOINT")
+    s3_access_key_id: str | None = Field(default=None, alias="MEDIA_S3_ACCESS_KEY_ID")
+    s3_secret_access_key: str | None = Field(default=None, alias="MEDIA_S3_SECRET_ACCESS_KEY")
+    s3_region: str = Field(default="us-east-1", alias="MEDIA_S3_REGION")
+    s3_db_root: str | None = Field(default=None, alias="MEDIA_S3_DB_ROOT")
+
     @property
     def default_dataset_id(self) -> str:
         return self.db_path.stem
+
+    @property
+    def storage_options(self) -> dict[str, str] | None:
+        """Lance ``storage_options`` for the object store (None = local filesystem).
+
+        Path-style addressing is forced (``virtual_hosted_style_request=false``)
+        because RustFS/MinIO reject virtual-hosted signing — verified live.
+        """
+        if not self.s3_endpoint:
+            return None
+        return {
+            "endpoint": self.s3_endpoint,
+            "access_key_id": self.s3_access_key_id or "",
+            "secret_access_key": self.s3_secret_access_key or "",
+            "region": self.s3_region,
+            "allow_http": "true" if self.s3_endpoint.startswith("http://") else "false",
+            "virtual_hosted_style_request": "false",
+        }
+
+    @property
+    def registry_root(self) -> str:
+        """The root the registry lists/opens datasets under — the S3 URI when
+        configured, else the local ``db_root`` path."""
+        if self.s3_endpoint and self.s3_db_root:
+            return self.s3_db_root
+        return str(self.db_root)
     # Externally-reachable origin for media URLs in MCP clip apps (LAN IP,
     # tunnel, reverse proxy). Unset = derive http://{host}:{port} locally.
     # AnyHttpUrl: this value lands verbatim in the clip app's CSP allow-list

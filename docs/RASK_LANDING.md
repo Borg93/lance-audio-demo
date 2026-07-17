@@ -33,9 +33,10 @@ The backend is already the hard 80%: **module-level `app` + lifespan**, two
 `MEDIA_EMBED_URL` / `MEDIA_RERANK_URL`, `core/config.py:32-47`), **zero
 `raudio`/`rmedia` imports**, and per-group thin factories (`create_media_app`
 `media_api/__init__.py:44`; `create_search_app` `search_api/app.py:24`) that
-re-host under `service_kit.make_service_app` without touching a router. The one
-structural gap is **object storage**: the backend is local-filesystem-only today
-(§4).
+re-host under `service_kit.make_service_app` without touching a router. The
+**object-storage** gap that used to sit here is now closed on the core read path:
+the backend serves datasets/descriptor/search from S3-backed Lance (MinIO +
+RustFS, verified) behind env-gated `storage_options` — see §4.2.
 
 ---
 
@@ -181,29 +182,35 @@ in `rest` mode the namespace's own options are **merged** with these
 (`ray.md:298`). The canonical builder to reuse verbatim is
 `lance-ns/services/common/objectfs.py:lance_storage_options` (`:20-42`).
 
-### 4.2 Two access patterns in our backend to wire (currently none)
+### 4.2 The backend's S3 access paths — DONE + verified (2026-07-16)
 
-The backend is **local-filesystem-only** — grep finds no `storage_options`
-anywhere. Two code paths must be threaded:
+> **Status: the core read paths are now S3-capable and proven locally on both
+> MinIO and RustFS.** The wiring is additive + env-gated (`MEDIA_S3_ENDPOINT` /
+> `MEDIA_S3_ACCESS_KEY_ID` / `MEDIA_S3_SECRET_ACCESS_KEY` / `MEDIA_S3_DB_ROOT` →
+> `Settings.storage_options`); all vars unset = the local `db_root` path,
+> byte-identical to before (283 backend tests still green, ruff/ty clean). An
+> object-store seam (`backend/lancekit/store.py`) replaces `Path.glob`/`is_dir`.
+> **Verified live:** `GET /api/datasets`, `/datasets/{id}/descriptor`, and FTS
+> `/api/search` all served from `smoke.lance` on MinIO; managed-blob `take_blobs`
+> streamed over both stores (`scripts/move_to_s3.py`).
 
-1. **Registry connection (cheap).** `backend/lancekit/registry.py:74`
-   `lancedb.connect(str(path))` — pass `storage_options` once and every
-   `handle.db.open_table` caller inherits it (`search_api/target.py:117,123`,
-   `voice_service.py`).
-2. **Bare `lance.dataset` — the blob/Range hot path (costly).**
-   `media_api/media.py:75-80` builds `handle.path/'{table}.lance'` as a
-   filesystem `Path`, calls `path.is_dir()`, then `lance.dataset(str(path))`
-   with **no** `storage_options`. Same shape in `introspect.py:71,96`,
-   `descriptor.py:152`, `diarization.py:57`, `topics.py:56`, `graph.py:217,273`,
-   `voice_service.py:133`. Each needs `storage_options` **and** its
-   `Path.is_dir()/.glob()` existence/enumeration replaced with object-store-aware
-   listing.
-3. **Path-traversal guard & dataset discovery.** `registry.py:61-69` rejects
-   `/`/`\\` and enforces `path.parent==root` + `path.is_dir()`; `registry.py:54`
-   and `descriptor.py`/`introspect.py` `glob('*.lance')` to enumerate. Under an
-   `s3://` root, `Path()` collapses `s3://`→`s3:/` and `.is_dir()/.glob()` fail —
-   these need object-store equivalents (this **is** the doc's "dir→rest namespace
-   flip").
+Two code paths were threaded (both DONE):
+
+1. **Registry connection.** `registry.py` now takes `storage_options`, resolves
+   the dataset root as an `s3://` URI (or local), connects
+   `lancedb.connect(uri, storage_options=…)`, and every `handle.db.open_table`
+   caller inherits it (`search_api/target.py` → search works over S3).
+2. **Bare `lance.dataset` — discovery + descriptor + blob path.** `introspect`,
+   `descriptor`, and `media_api/media.py` open with `storage_options` and
+   enumerate via `store.list_lance_stems`. The traversal guard + dataset
+   discovery use the object-store seam instead of `Path.glob`/`is_dir` (the
+   `s3://`→`s3:/` collapse is gone).
+
+**Remaining (not on the core read path):** the capability routes
+`graph.py`/`topics.py`/`diarization.py`/`voice_service.py` still open via
+`handle.path` (local-only) — they thread the same `handle.storage_options` +
+`handle.table_uri()` when those capabilities need S3 (parity/smoke datasets don't
+declare them). External `media_blob` (file://) still needs re-ingest (§4.4).
 
 ### 4.3 Blob streaming over S3 — already-proven contract
 

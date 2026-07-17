@@ -22,6 +22,7 @@ from pathlib import Path
 import lance
 from pydantic import BaseModel, Field
 
+from backend.lancekit import store
 from backend.lancekit.introspect import TableInfo, discover_tables
 
 logger = logging.getLogger(__name__)
@@ -144,15 +145,19 @@ class DatasetDescriptor(BaseModel):
         return column == "" or info.column(column) is not None
 
 
-def load_declared(db_path: str | Path, dataset_id: str, descriptor_dir: str | Path) -> Declared | None:
+def load_declared(
+    db_path: str | Path,
+    dataset_id: str,
+    descriptor_dir: str | Path,
+    storage_options: dict[str, str] | None = None,
+) -> Declared | None:
     """Config-file override first, else the schema-metadata stamp on any table."""
     override = Path(descriptor_dir) / f"{dataset_id}.json"
     if override.exists():
         return Declared.model_validate_json(override.read_text())
-    for entry in sorted(Path(db_path).glob("*.lance")):
-        if not entry.is_dir() or entry.stem.startswith("__"):
-            continue
-        metadata = lance.dataset(str(entry)).schema.metadata or {}
+    for stem in store.list_lance_stems(db_path, storage_options):
+        uri = store.join(db_path, f"{stem}.lance")
+        metadata = lance.dataset(uri, storage_options=storage_options).schema.metadata or {}
         raw = metadata.get(DESCRIPTOR_METADATA_KEY)
         if raw:
             return Declared.model_validate(json.loads(raw.decode()))
@@ -214,11 +219,14 @@ def validate_descriptor(declared: Declared, tables: dict[str, TableInfo]) -> lis
 
 
 def load_dataset_descriptor(
-    db_path: str | Path, dataset_id: str, descriptor_dir: str | Path
+    db_path: str | Path,
+    dataset_id: str,
+    descriptor_dir: str | Path,
+    storage_options: dict[str, str] | None = None,
 ) -> DatasetDescriptor:
     """Discover + declare + validate; raises ``ValueError`` on an invalid descriptor."""
-    tables = discover_tables(db_path)
-    declared = load_declared(db_path, dataset_id, descriptor_dir)
+    tables = discover_tables(db_path, storage_options)
+    declared = load_declared(db_path, dataset_id, descriptor_dir, storage_options)
     if declared is None:
         raise ValueError(f"dataset {dataset_id!r}: no declared descriptor (config file or schema stamp)")
     problems = validate_descriptor(declared, tables)

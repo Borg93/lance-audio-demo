@@ -47,7 +47,10 @@ def _registry(state: AppState) -> DatasetRegistry:
     because enumeration has no dataset id to resolve through it."""
     if state.registry is None:
         state.registry = DatasetRegistry(
-            state.settings.db_root, state.settings.descriptor_dir, state.settings.default_dataset_id
+            state.settings.registry_root,
+            state.settings.descriptor_dir,
+            state.settings.default_dataset_id,
+            storage_options=state.settings.storage_options,
         )
     return state.registry
 

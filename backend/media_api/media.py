@@ -73,11 +73,16 @@ def chunk_key_filter(declared: Declared, doc_id: str, rest: Sequence[int]) -> st
 
 
 def table_dataset(handle: DatasetHandle, table: str) -> lance.LanceDataset:
-    """Open one table of the dataset as a ``lance.LanceDataset`` (blob-capable)."""
-    path = handle.path / f"{table}.lance"
-    if not path.is_dir():
+    """Open one table of the dataset as a ``lance.LanceDataset`` (blob-capable).
+
+    Opens over the object store when the dataset is S3-backed
+    (``handle.storage_options``); the local existence check is skipped for URIs
+    (``lance.dataset`` raises if the table is absent).
+    """
+    uri = handle.table_uri(table)
+    if handle.storage_options is None and not (handle.path / f"{table}.lance").is_dir():
         raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}")
-    return lance.dataset(str(path))
+    return lance.dataset(uri, storage_options=handle.storage_options)
 
 
 def rowid_for_doc(ds: lance.LanceDataset, doc_key: str, doc_id: str) -> int | None:
