@@ -88,15 +88,30 @@ def main() -> int:
         bcol = next((f.name for f in ds.schema
                      if getattr(f.type, "extension_name", "") == "lance.blob.v2"), None)
         rows = ds.count_rows()
+        # Tabular: a moved table must actually carry rows.
+        if rows <= 0:
+            print(f"  {table}: FAILED — 0 rows over S3")
+            ok = False
+            continue
         extra = ""
+        # Vector KNN over S3 — the read path the docstring promises to prove.
+        if vcol:
+            try:
+                dim = ds.schema.field(vcol).type.list_size
+                hits = ds.to_table(nearest={"column": vcol, "q": [0.0] * dim, "k": 1}).num_rows
+                extra += f" | vector {vcol} KNN→{hits} over S3"
+            except Exception as exc:  # noqa: BLE001
+                extra += f" | vector {vcol} KNN FAILED ({type(exc).__name__})"
+                ok = False
         if bcol:
             try:
                 blob = ds.take_blobs(bcol, indices=[0])[0]
-                extra = f" | blob {bcol}[0]={blob.size()}B over S3"
+                extra += f" | blob {bcol}[0]={blob.size()}B over S3"
             except Exception as exc:  # noqa: BLE001 — external file:// pointers don't resolve off-box
-                extra = f" | blob {bcol} unresolved ({type(exc).__name__}; external → re-ingest)"
-        print(f"  {table}: {rows} rows over S3{' | vector ' + vcol if vcol else ''}{extra}")
-        ok &= rows >= 0
+                # External pointers legitimately don't resolve off-box (§4.4) — a
+                # note, not a failure; managed blobs would resolve here.
+                extra += f" | blob {bcol} unresolved ({type(exc).__name__}; external → re-ingest)"
+        print(f"  {table}: {rows} rows over S3{extra}")
     print("S3 READ OK" if ok else "FAILED")
     return 0 if ok else 1
 

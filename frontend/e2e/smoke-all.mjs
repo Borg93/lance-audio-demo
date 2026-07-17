@@ -80,4 +80,7 @@ const t = await runDataset('transcripts_v2 (default, content required)', null, t
 const s = await runDataset('smoke (?dataset=smoke, no-crash required)', 'smoke', false);
 await browser.close();
 console.log(`\nTOTAL: transcripts ${t}/${ROUTES.length}, smoke ${s}/${ROUTES.length} route-renders clean`);
-process.exit(0);
+// Exit code must reflect the counts so this can gate CI / a make target — both
+// datasets must render every route (this doc's cited "6/6 + 6/6" evidence).
+const allClean = t === ROUTES.length && s === ROUTES.length;
+process.exit(allClean ? 0 : 1);

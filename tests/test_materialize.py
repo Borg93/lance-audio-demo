@@ -52,6 +52,35 @@ def test_materialize_flips_external_blob_to_managed(tmp_path: Path) -> None:
     assert blob.read_range(0, blob.size()) == payload
 
 
+def test_materialize_preserves_null_blobs(tmp_path: Path) -> None:
+    """A null blob row (e.g. a doc with no thumbnail) must survive — read_blobs
+    skips nulls, so a naive rewrite would crash on a length mismatch."""
+    db = tmp_path / "db.lance"
+    documents = db / "documents.lance"
+    payload = b"THUMB-bytes-" * 40
+    table = pa.table(
+        {
+            "doc_id": pa.array(["a", "b", "c"]),
+            # middle row has NO thumbnail (null) — the common shape
+            "thumbnail": blob_array([payload, None, payload]),
+        },
+        schema=pa.schema([pa.field("doc_id", pa.string()), blob_field("thumbnail")]),
+    )
+    lance.write_dataset(table, str(documents), data_storage_version="2.2", enable_stable_row_ids=True)
+
+    stats = materialize_blobs(db, table="documents")
+    # only the 2 non-null rows are counted as materialized
+    assert stats["thumbnail"] == {"rows": 2, "bytes": 2 * len(payload)}
+
+    ds = lance.dataset(str(documents))
+    assert ds.count_rows() == 3  # row count preserved, no crash
+    desc = ds.to_table(columns=["thumbnail"]).column("thumbnail").combine_chunks()
+    assert [s > 0 for s in desc.field("size").to_pylist()] == [True, False, True]
+    # the present rows still resolve to their bytes, managed
+    blobs = ds.take_blobs("thumbnail", indices=[0, 2])
+    assert all(b.read_range(0, b.size()) == payload for b in blobs)
+
+
 def test_materialize_noop_on_tables_without_blobs(tmp_path: Path) -> None:
     db = tmp_path / "db.lance"
     plain = db / "chunks.lance"

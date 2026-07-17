@@ -140,6 +140,16 @@ ARTICLES_DESCRIPTOR = {
                 "query_encoder": "text",
                 "caption_source": "blurb",
             },
+            # A space the search box CAN'T drive: its query encoder is neither
+            # text nor image (an audio voiceprint), so a text/image query has no
+            # matching vector. It's a real declared space, but must degrade to
+            # empty (not 400) and never abort an 'all' fusion.
+            "voiceprint": {
+                "table": "paras",
+                "column": "body_vec",
+                "dim": DIM,
+                "query_encoder": "audio",
+            },
         },
         "filterable": ["lang", "kind", "topic"],
         "rerank": True,
@@ -318,6 +328,18 @@ class TestRunSearchDegradation:
     def test_all_without_vectors_falls_back_to_fts(self, docs) -> None:
         spec = SearchSpec(q="carbon emissions", mode=SearchMode.ALL)
         assert _run(docs, spec)
+
+    def test_foreign_encoder_mode_returns_empty(self, articles) -> None:
+        # A mode naming a space the search box can't drive (audio voiceprint):
+        # no query vector matches its encoder, so it degrades to [] — NOT a 400
+        # feeding a text vector into a foreign column.
+        assert _run(articles, SearchSpec(q="carbon", mode="voiceprint", n=3)) == []
+
+    def test_all_ignores_the_foreign_encoder_leg(self, articles) -> None:
+        # The voiceprint space is declared, but 'all' must skip it (not abort)
+        # and still fuse the FTS + semantic + visual + scene legs into hits.
+        hits = _run(articles, SearchSpec(q=PARAS["economy"], mode=SearchMode.ALL, n=3))
+        assert hits
 
 
 # ── run_search: descriptor-driven retrieval on the full dataset ──────────────

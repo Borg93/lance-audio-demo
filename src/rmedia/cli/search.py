@@ -82,4 +82,4 @@ def cmd_serve(
     from backend import run
 
     cfg: CliContext = ctx.obj
-    run(db_path=cfg.db, host=host, port=port)
+    run(db_path=str(cfg.db), host=host, port=port)

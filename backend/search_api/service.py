@@ -111,14 +111,21 @@ def _fts_binding(target: SearchTarget) -> FtsBinding:
 
 
 def _query_vec(ctx: SearchContext, binding: VectorBinding) -> Any | None:
-    """Pick the query vector a binding prefers, falling back to the other one.
+    """Pick the query vector a binding can be searched with, or ``None`` if the
+    search box can't drive its modality.
 
-    The bi-encoder maps text and images into one space, so a text query can
-    rank an image column (and vice versa) when only one vector exists.
+    The bi-encoder maps text and images into one space, so a text query can rank
+    an image column (and vice versa) when only one vector exists. A space whose
+    query encoder is neither ``text`` nor ``image`` (e.g. an audio voiceprint)
+    has no query vector the search box can produce — it is served by its own
+    capability, not generic search — so return ``None`` and let the caller skip
+    that leg rather than feed it a wrong-modality / wrong-dimension vector.
     """
     if binding.query_encoder == "image":
         return ctx.image_vec if ctx.image_vec is not None else ctx.text_vec
-    return ctx.text_vec if ctx.text_vec is not None else ctx.image_vec
+    if binding.query_encoder == "text":
+        return ctx.text_vec if ctx.text_vec is not None else ctx.image_vec
+    return None
 
 
 def _vector_leg(
@@ -186,7 +193,12 @@ def _search_vector_mode(ctx: SearchContext) -> list[dict[str, Any]]:
     binding = ctx.target.binding(ctx.spec.mode)
     if binding is None:
         return []
-    hits = _vector_leg(ctx, binding, _query_vec(ctx, binding), n=ctx.spec.n)
+    vec = _query_vec(ctx, binding)
+    if vec is None:
+        # The mode names a space the search box can't drive (foreign encoder, or
+        # no query text/image supplied) — nothing to rank, so degrade to empty.
+        return []
+    hits = _vector_leg(ctx, binding, vec, n=ctx.spec.n)
     return _maybe_rerank(ctx, hits) if binding.query_encoder != "image" else hits
 
 
@@ -209,6 +221,23 @@ def _search_vector_fts_mode(ctx: SearchContext) -> list[dict[str, Any]]:
     return _maybe_rerank(ctx, hits)
 
 
+def _row_text_binding(target: SearchTarget) -> VectorBinding | None:
+    """The text-encoder vector space that lives on the row table — the leg Lance
+    fuses with FTS in a hybrid query (both must sit on one table).
+
+    Prefers a space keyed ``semantic`` (the convention) but falls back to the
+    first text space on the row table, so hybrid works for any text-embedding
+    dataset, not only one that happens to name its space ``semantic``.
+    """
+    semantic = target.binding(SearchMode.SEMANTIC)
+    if semantic is not None and semantic.table == target.row_table_name:
+        return semantic
+    for binding in target.vectors.values():
+        if binding.query_encoder == "text" and binding.table == target.row_table_name:
+            return binding
+    return None
+
+
 def _search_hybrid(ctx: SearchContext) -> list[dict[str, Any]]:
     """Lance-native FTS + text-vector fusion (RRF, or Linear when weighted)."""
     spec = ctx.spec
@@ -216,10 +245,8 @@ def _search_hybrid(ctx: SearchContext) -> list[dict[str, Any]]:
     if ctx.text_vec is None:
         raise ValidationError("hybrid requires text query")
     fts = _fts_binding(target)
-    binding = target.binding(SearchMode.SEMANTIC)
-    # Lance's hybrid query runs both legs on ONE table, so the semantic binding
-    # must live on the row table alongside the FTS column.
-    if binding is None or binding.table != target.row_table_name:
+    binding = _row_text_binding(target)
+    if binding is None:
         raise ValidationError("text embeddings are not built for this dataset")
     try:
         from lancedb.query import MatchQuery, PhraseQuery
@@ -283,14 +310,20 @@ def _search_all(ctx: SearchContext) -> list[dict[str, Any]]:
         except Exception:  # noqa: BLE001 — a missing FTS index just drops this leg
             pass
 
-    # One vector leg per DECLARED embedding space — uniform across modalities.
-    # An image-encoder space prefers the image query (falling back to text, since
-    # the bi-encoder shares one space); every other space uses the text query.
+    # One vector leg per DECLARED embedding space the search box can drive —
+    # uniform across modalities. `_query_vec` picks the right query vector (image
+    # for an image encoder, text otherwise) or None for a space we can't drive
+    # (foreign encoder), which is skipped. Each leg drops on failure — like the
+    # FTS leg above — so one wrong-dimension / unbuilt space can't 400 the whole
+    # fused search, it just contributes nothing.
     for binding in target.vectors.values():
-        prefers_image = binding.query_encoder == "image" and ctx.image_vec is not None
-        vec = ctx.image_vec if prefers_image else ctx.text_vec
-        if vec is not None:
+        vec = _query_vec(ctx, binding)
+        if vec is None:
+            continue
+        try:
             rankings.append(_vector_leg(ctx, binding, vec, n=spec.n * 3))
+        except Exception:  # noqa: BLE001 — a wrong-dim / unbuilt leg just drops
+            logger.warning("vector leg %r dropped from 'all' search", binding.column, exc_info=True)
 
     fused = rrf_fuse(rankings, key_fields=target.key_fields)
     # Optional cross-encoder rerank on the fused head (rerank_n), then trim to

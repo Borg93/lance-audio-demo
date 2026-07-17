@@ -70,14 +70,20 @@ class Settings(BaseSettings):
         """
         if not self.s3_endpoint:
             return None
-        return {
+        opts = {
             "endpoint": self.s3_endpoint,
-            "access_key_id": self.s3_access_key_id or "",
-            "secret_access_key": self.s3_secret_access_key or "",
             "region": self.s3_region,
             "allow_http": "true" if self.s3_endpoint.startswith("http://") else "false",
             "virtual_hosted_style_request": "false",
         }
+        # Pin static credentials only when BOTH are supplied. Otherwise omit them
+        # so Lance/object_store falls back to the standard AWS credential chain
+        # (AWS_* env vars, ~/.aws, IAM role) — sending "" would be read as an
+        # explicit empty key and break that chain (the normal K8s/rask deploy).
+        if self.s3_access_key_id and self.s3_secret_access_key:
+            opts["access_key_id"] = self.s3_access_key_id
+            opts["secret_access_key"] = self.s3_secret_access_key
+        return opts
 
     @property
     def registry_root(self) -> str:

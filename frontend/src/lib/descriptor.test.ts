@@ -175,7 +175,30 @@ describe('type-category model — schema-agnostic by Lance type', () => {
     expect(v.searchModes).toEqual(['fts', 'semantic', 'visual', 'scene', 'scene_fts', 'hybrid', 'all']);
   });
 
-  it('a NEW embedding key flows through as a mode with ZERO code edits', () => {
+  it('a NEW text-encoder embedding key flows through as a mode with ZERO code edits', () => {
+    const withDense = structuredClone(TRANSCRIPTS);
+    withDense.tables.chunks.columns.push({
+      name: 'dense_vec',
+      arrow_type: 'fixed_size_list<float>[1024]',
+      nullable: true,
+      vector_dim: 1024,
+    });
+    (withDense.declared.search.vectors as Record<string, unknown>).dense = {
+      table: 'chunks',
+      column: 'dense_vec',
+      dim: 1024,
+      query_encoder: 'text',
+    };
+    const dv = view(withDense);
+    expect(dv.columnCategory('chunks', 'dense_vec')).toBe('embedding');
+    expect(dv.vectorSpaces.map((s) => s.key)).toContain('dense');
+    expect(dv.searchModes).toContain('dense'); // a text-queryable space surfaces — the point
+  });
+
+  it('a foreign-encoder embedding is enumerated but NOT offered as a search mode', () => {
+    // A voiceprint space (query_encoder the search box can't produce) is a real
+    // declared space — it shows up in vectorSpaces — but advertising it as a
+    // text/image search mode would 400 in the backend, so searchModes omits it.
     const withAudio = structuredClone(TRANSCRIPTS);
     withAudio.tables.chunks.columns.push({
       name: 'voice_vec',
@@ -190,8 +213,7 @@ describe('type-category model — schema-agnostic by Lance type', () => {
       query_encoder: 'audio',
     };
     const av = view(withAudio);
-    expect(av.columnCategory('chunks', 'voice_vec')).toBe('embedding');
-    expect(av.vectorSpaces.map((s) => s.key)).toContain('audio');
-    expect(av.searchModes).toContain('audio'); // surfaced automatically — the point
+    expect(av.vectorSpaces.map((s) => s.key)).toContain('audio'); // enumerated
+    expect(av.searchModes).not.toContain('audio'); // but not a search-box mode
   });
 });

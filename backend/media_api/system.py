@@ -55,7 +55,9 @@ def health(state: StateDep, dataset: DatasetParam = None) -> HealthResponse:
     doc_info = tables.get(declared.document.table) if declared.document is not None else None
     return HealthResponse(
         db=DbFacts(
-            path=str(handle.path),
+            # handle.uri, not str(handle.path): Path() collapses an s3:// URI's
+            # double slash to "s3:/…", so the badge would show a mangled root.
+            path=handle.uri,
             tables=sorted(tables),
             chunks=row_info.row_count if row_info is not None else 0,
             documents=doc_info.row_count if doc_info is not None else 0,

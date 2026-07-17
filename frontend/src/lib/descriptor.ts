@@ -185,7 +185,9 @@ export type ColumnCategory =
   | 'text'
   | 'other';
 
-const _NUMERIC_RE = /\b(u?int\d*|float\d*|double|decimal\d*|half_float)\b/;
+// `half_?float` catches both pyarrow's `halffloat` (float16) and a `half_float`
+// spelling; the `\b` keeps `int`/`float` from matching inside longer words.
+const _NUMERIC_RE = /\b(u?int\d*|float\d*|double|decimal\d*|half_?float)\b/;
 const _TEMPORAL_RE = /\b(timestamp|date\d*|time\d*|duration|interval)\b/;
 
 /** Classify a discovered column by its Lance/Arrow type. `ftsColumns` are the
@@ -196,10 +198,12 @@ export function categoryOf(col: ColumnInfo, ftsColumns?: ReadonlySet<string>): C
   if (col.is_blob) return 'blob'; // lance.blob.v2 — media bytes
   const t = col.arrow_type.toLowerCase();
   if (ftsColumns?.has(col.name) && (t.includes('string') || t.includes('utf8'))) return 'text';
+  // A dictionary type names an integer INDEX type (`dictionary<…, indices=int32>`),
+  // so it must be classified before the numeric test or it'd read as 'numerical'.
+  if (t.includes('dictionary')) return 'categorical';
   if (_NUMERIC_RE.test(t)) return 'numerical';
   if (_TEMPORAL_RE.test(t)) return 'temporal';
-  if (t.includes('string') || t.includes('utf8') || t.includes('bool') || t.includes('dictionary'))
-    return 'categorical';
+  if (t.includes('string') || t.includes('utf8') || t.includes('bool')) return 'categorical';
   return 'other';
 }
 
@@ -374,12 +378,21 @@ export class DatasetView {
   get searchModes(): SearchMode[] {
     const search = this.declared.search;
     if (!search) return [];
-    const spaces = this.vectorSpaces;
+    // Only spaces the search box can actually drive: text- or image-encoder
+    // spaces. A space with a foreign query encoder (e.g. an audio voiceprint) is
+    // served by its own capability, not this box, and the backend would 400 a
+    // text query against it — so it's not offered as a mode.
+    const queryable = this.vectorSpaces.filter(
+      (s) => s.encoder === 'text' || s.encoder === 'image',
+    );
     const modes: SearchMode[] = [];
     if (search.fts != null) modes.push('fts');
-    for (const s of spaces) modes.push(s.key);
-    for (const s of spaces) if (s.captionSource) modes.push(`${s.key}_fts`);
-    if (search.fts != null && spaces.length > 0) modes.push('hybrid');
+    for (const s of queryable) modes.push(s.key);
+    for (const s of queryable) if (s.captionSource) modes.push(`${s.key}_fts`);
+    // Hybrid fuses FTS + a text vector on ONE table, so it needs a text-encoder
+    // space on the row table; offer it only when that exists.
+    const hasRowTextSpace = queryable.some((s) => s.encoder === 'text' && s.onRowTable);
+    if (search.fts != null && hasRowTextSpace) modes.push('hybrid');
     if (modes.length > 1) modes.push('all');
     return modes;
   }
