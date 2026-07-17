@@ -74,7 +74,7 @@ def search_get(
 def _post_spec(
     q: Annotated[str, Form()] = "",
     n: Annotated[int, Form()] = 20,
-    mode: Annotated[SearchMode, Form()] = SearchMode.HYBRID,
+    mode: Annotated[str, Form()] = SearchMode.HYBRID.value,
     rerank: Annotated[bool, Form()] = False,
     rerank_n: Annotated[int, Form()] = 20,
     weight: Annotated[float | None, Form()] = None,

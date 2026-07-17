@@ -271,12 +271,11 @@ def _run(handle, spec, *, filters=None, image=None, embedder=_embedder, reranker
 
 
 class TestRunSearchErrors:
-    def test_semantic_without_binding_is_400(self, docs) -> None:
-        spec = SearchSpec(q="carbon", mode=SearchMode.SEMANTIC)
-        with pytest.raises(HTTPException) as exc:
-            _run(docs, spec)
-        assert exc.value.status_code == 400
-        assert "embeddings" in exc.value.detail
+    def test_semantic_without_binding_returns_empty(self, docs) -> None:
+        # Every embedding space is optional + uniform: a dataset without a
+        # semantic vector yields NO results for that mode (not an error) — same
+        # graceful degradation as visual/scene below.
+        assert _run(docs, SearchSpec(q="carbon", mode=SearchMode.SEMANTIC)) == []
 
     def test_hybrid_without_text_query_is_400(self, articles) -> None:
         # Image-only hybrid: no text vector, so the FTS half can't run.
@@ -517,8 +516,13 @@ class TestSearchRoutes:
     def test_empty_query_returns_empty(self, client) -> None:
         assert _hits(client, q="") == []
 
-    def test_unknown_mode_is_422(self, client) -> None:
-        assert client.get("/api/search", params={"q": "x", "mode": "bogus"}).status_code == 422
+    def test_unknown_mode_degrades_to_empty(self, client) -> None:
+        # `mode` is now `str` (any dataset embedding key is valid), so an
+        # unavailable mode is no longer a 422 boundary — it degrades to no
+        # results at the service (200 + []).
+        r = client.get("/api/search", params={"q": "x", "mode": "bogus"})
+        assert r.status_code == 200
+        assert r.json() == []
 
     def test_filter_params_read_from_descriptor_filterable(self, client) -> None:
         # `lang` is not a route parameter — the router learns it from the

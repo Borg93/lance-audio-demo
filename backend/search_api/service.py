@@ -172,58 +172,40 @@ def _search_fts(ctx: SearchContext) -> list[dict[str, Any]]:
     return _maybe_rerank(ctx, raw)
 
 
-def _search_scene_fts(ctx: SearchContext) -> list[dict[str, Any]]:
-    """BM25 over the scene binding's caption column, joined back to the row table."""
-    scene = ctx.target.binding(SearchMode.SCENE)
-    if scene is None or not scene.caption_source:
+def _search_vector_mode(ctx: SearchContext) -> list[dict[str, Any]]:
+    """Cosine over the DECLARED vector space the mode names — one uniform path for
+    every embedding column (text / pixel / audio / any future modality).
+
+    Behaviour is derived from the binding, never a role name: a space on the row
+    table is searched directly; one on a frame table is ranked there and joined
+    back by the identity keys (``_vector_leg``). Text-rerank applies only to
+    text-queryable spaces — an image space keeps its own similarity order (the
+    cross-encoder has no query text to score). The dispatcher only routes here
+    when the mode IS a declared vector key, so the binding is present.
+    """
+    binding = ctx.target.binding(ctx.spec.mode)
+    if binding is None:
+        return []
+    hits = _vector_leg(ctx, binding, _query_vec(ctx, binding), n=ctx.spec.n)
+    return _maybe_rerank(ctx, hits) if binding.query_encoder != "image" else hits
+
+
+def _search_vector_fts_mode(ctx: SearchContext) -> list[dict[str, Any]]:
+    """BM25 over a vector space's ``caption_source`` text (mode ``<key>_fts``),
+    joined back to the row table — generalises the old ``scene_fts``."""
+    key = ctx.spec.mode[: -len("_fts")]
+    binding = ctx.target.binding(key)
+    if binding is None or not binding.caption_source:
         return []
     hits = frame_fts_search(
-        ctx.target.table_for(scene.table),
+        ctx.target.table_for(binding.table),
         ctx.target,
         ctx.spec.q,
-        column=scene.caption_source,
+        column=binding.caption_source,
         n=ctx.spec.n,
         where=ctx.where,
         scope_where=ctx.spec.where,
     )
-    return _maybe_rerank(ctx, hits)
-
-
-def _search_semantic(ctx: SearchContext) -> list[dict[str, Any]]:
-    """Cosine over the semantic binding's vector column."""
-    binding = ctx.target.binding(SearchMode.SEMANTIC)
-    if binding is None:
-        raise ValidationError("text embeddings are not built for this dataset")
-    hits = _vector_leg(ctx, binding, _query_vec(ctx, binding), n=ctx.spec.n)
-    return _maybe_rerank(ctx, hits)
-
-
-def _search_visual(ctx: SearchContext) -> list[dict[str, Any]]:
-    """Frame-image similarity → row-table join.
-
-    Image-only ranking: the text reranker has no query text to score, so
-    results keep their frame-similarity order regardless of the rerank toggle.
-    Degrades to ``[]`` when the dataset declares no visual binding.
-    """
-    binding = ctx.target.binding(SearchMode.VISUAL)
-    if binding is None:
-        return []
-    return _vector_leg(ctx, binding, _query_vec(ctx, binding), n=ctx.spec.n)
-
-
-def _search_scene(ctx: SearchContext) -> list[dict[str, Any]]:
-    """Rank frames by caption similarity in the shared text-embedding space.
-
-    Falls back to the image vector if that's all we got; degrades to ``[]``
-    when the dataset declares no scene binding.
-    """
-    binding = ctx.target.binding(SearchMode.SCENE)
-    if binding is None:
-        return []
-    vec = _query_vec(ctx, binding)
-    if vec is None:
-        raise ValidationError("scene search requires a query")
-    hits = _vector_leg(ctx, binding, vec, n=ctx.spec.n)
     return _maybe_rerank(ctx, hits)
 
 
@@ -301,22 +283,14 @@ def _search_all(ctx: SearchContext) -> list[dict[str, Any]]:
         except Exception:  # noqa: BLE001 — a missing FTS index just drops this leg
             pass
 
-    # Semantic (text-vector) leg.
-    semantic = target.binding(SearchMode.SEMANTIC)
-    if ctx.text_vec is not None and semantic is not None:
-        rankings.append(_vector_leg(ctx, semantic, ctx.text_vec, n=spec.n * 3))
-
-    # Visual (frame-vector) leg — image query preferred, text fallback (shared space).
-    visual = target.binding(SearchMode.VISUAL)
-    if visual is not None:
-        vec_for_frames = ctx.image_vec if ctx.image_vec is not None else ctx.text_vec
-        if vec_for_frames is not None:
-            rankings.append(_vector_leg(ctx, visual, vec_for_frames, n=spec.n * 3))
-
-    # Scene (caption-vector) leg — text-only (captions live in the text space).
-    scene = target.binding(SearchMode.SCENE)
-    if ctx.text_vec is not None and scene is not None:
-        rankings.append(_vector_leg(ctx, scene, ctx.text_vec, n=spec.n * 3))
+    # One vector leg per DECLARED embedding space — uniform across modalities.
+    # An image-encoder space prefers the image query (falling back to text, since
+    # the bi-encoder shares one space); every other space uses the text query.
+    for binding in target.vectors.values():
+        prefers_image = binding.query_encoder == "image" and ctx.image_vec is not None
+        vec = ctx.image_vec if prefers_image else ctx.text_vec
+        if vec is not None:
+            rankings.append(_vector_leg(ctx, binding, vec, n=spec.n * 3))
 
     fused = rrf_fuse(rankings, key_fields=target.key_fields)
     # Optional cross-encoder rerank on the fused head (rerank_n), then trim to
@@ -324,20 +298,40 @@ def _search_all(ctx: SearchContext) -> list[dict[str, Any]]:
     return _maybe_rerank(ctx, fused)[: spec.n]
 
 
-_MODE_HANDLERS: dict[SearchMode, Callable[[SearchContext], list[dict[str, Any]]]] = {
-    SearchMode.FTS: _search_fts,
-    SearchMode.SCENE_FTS: _search_scene_fts,
-    SearchMode.SEMANTIC: _search_semantic,
-    SearchMode.VISUAL: _search_visual,
-    SearchMode.SCENE: _search_scene,
-    SearchMode.HYBRID: _search_hybrid,
-    SearchMode.ALL: _search_all,
+#: Composite / text-only modes with dedicated handlers. Every OTHER mode is a
+#: declared vector-space key (→ _search_vector_mode) or '<key>_fts' (→
+#: _search_vector_fts_mode), so adding an embedding column adds a mode with no
+#: change here — the search is uniform across modalities.
+_COMPOSITE_HANDLERS: dict[str, Callable[[SearchContext], list[dict[str, Any]]]] = {
+    SearchMode.FTS.value: _search_fts,
+    SearchMode.HYBRID.value: _search_hybrid,
+    SearchMode.ALL.value: _search_all,
 }
 
-#: Modes that need a query vector — only these pay the embedding round-trip.
-_EMBEDDING_MODES = frozenset(
-    {SearchMode.SEMANTIC, SearchMode.VISUAL, SearchMode.SCENE, SearchMode.HYBRID, SearchMode.ALL}
-)
+
+def _dispatch(ctx: SearchContext) -> list[dict[str, Any]]:
+    """Route a mode: a composite (fts/hybrid/all), a ``<key>_fts`` BM25 leg, or a
+    declared vector space. A mode the dataset does not declare yields NO results
+    (graceful) — every embedding space is optional and uniform, so an absent one
+    is simply empty, not an error. (The frontend only offers declared modes.)"""
+    mode = ctx.spec.mode
+    composite = _COMPOSITE_HANDLERS.get(mode)
+    if composite is not None:
+        return composite(ctx)
+    if mode.endswith("_fts"):
+        return _search_vector_fts_mode(ctx)
+    return _search_vector_mode(ctx)
+
+
+def _mode_needs_query_vector(target: SearchTarget, mode: str) -> bool:
+    """Whether a mode ranks by a query embedding (so run_search must embed it).
+    Any declared vector key does; fts and '<key>_fts' (BM25 on caption text)
+    don't; hybrid/all always do."""
+    if mode in (SearchMode.HYBRID.value, SearchMode.ALL.value):
+        return True
+    if mode.endswith("_fts"):
+        return False
+    return target.binding(mode) is not None
 
 
 def run_search(
@@ -386,7 +380,7 @@ def run_search(
     # use a distinct query string (spec.q_vec); the FTS leg always uses spec.q.
     text_vec = None
     image_vec = None
-    if spec.mode in _EMBEDDING_MODES:
+    if _mode_needs_query_vector(target, spec.mode):
         client = get_embedder()
         vec_text = spec.q_vec or spec.q  # empty q_vec falls back to q
         try:
@@ -407,8 +401,4 @@ def run_search(
         text_vec=text_vec,
         image_vec=image_vec,
     )
-    handler = _MODE_HANDLERS.get(spec.mode)
-    if handler is None:
-        # Unreachable — SearchSpec validation rejects unknown modes up-front.
-        raise AssertionError(f"unhandled mode: {spec.mode!r}")
-    return postprocess_hits(handler(ctx), target)
+    return postprocess_hits(_dispatch(ctx), target)

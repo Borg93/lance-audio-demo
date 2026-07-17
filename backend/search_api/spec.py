@@ -28,22 +28,19 @@ class SearchMode(StrEnum):
     ALL = "all"
 
 
-def available_modes(search: Search) -> list[SearchMode]:
-    """The mode set a dataset's search bindings support.
+def available_modes(search: Search) -> list[str]:
+    """The mode set a dataset's search bindings support — derived GENERICALLY.
 
-    ``fts`` + ``hybrid`` + ``all`` are always in the set (``all`` fuses whatever
-    legs exist); ``semantic`` / ``visual`` / ``scene`` appear iff
-    ``search.vectors`` declares a binding under that mode name, and ``scene_fts``
-    iff the scene binding names a ``caption_source`` text column.
+    ``fts`` + ``hybrid`` + ``all`` always (``all`` fuses whatever legs exist);
+    ONE mode per declared vector space, under its OWN key (``semantic`` /
+    ``visual`` / ``scene`` today, or any future embedding key like ``audio``);
+    plus a ``<key>_fts`` mode for any space naming a ``caption_source`` text
+    column. A new embedding column adds a mode with no code change here.
     """
-    modes = [SearchMode.FTS]
-    for mode in (SearchMode.SEMANTIC, SearchMode.VISUAL, SearchMode.SCENE):
-        if mode.value in search.vectors:
-            modes.append(mode)
-    scene = search.vectors.get(SearchMode.SCENE.value)
-    if scene is not None and scene.caption_source:
-        modes.append(SearchMode.SCENE_FTS)
-    modes.extend((SearchMode.HYBRID, SearchMode.ALL))
+    modes: list[str] = [SearchMode.FTS.value]
+    modes.extend(search.vectors.keys())
+    modes.extend(f"{key}_fts" for key, b in search.vectors.items() if b.caption_source)
+    modes.extend((SearchMode.HYBRID.value, SearchMode.ALL.value))
     return modes
 
 
@@ -61,7 +58,10 @@ class SearchSpec(BaseModel):
 
     q: str = ""
     n: int = 20
-    mode: SearchMode = SearchMode.FTS
+    # A vector-space key (any declared embedding), a `<key>_fts`, or a composite
+    # (fts/hybrid/all). `str`, not the enum, so a dataset's own embedding keys
+    # are accepted; the service validates + 400s an unknown mode.
+    mode: str = SearchMode.FTS.value
     rerank: bool = False
     # How many of the top results the cross-encoder reranker re-scores (the
     # rerank "head"); the rest keep first-stage order. Only used when
@@ -121,4 +121,4 @@ class PostSearchSpec(SearchSpec):
     differs, matching the image-search UX (an upload usually wants fusion).
     """
 
-    mode: SearchMode = SearchMode.HYBRID
+    mode: str = SearchMode.HYBRID.value

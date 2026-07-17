@@ -85,8 +85,11 @@ class SearchTarget(BaseModel):
     def table_for(self, name: str) -> Any | None:
         return self.tables.get(name)
 
-    def binding(self, mode: SearchMode) -> VectorBinding | None:
-        return self.vectors.get(mode.value)
+    def binding(self, mode: str) -> VectorBinding | None:
+        """The vector binding declared under ``mode`` (a vector-space key), or
+        None. ``str`` so any declared embedding key resolves, not just the named
+        roles — ``SearchMode`` members are strings, so they still work."""
+        return self.vectors.get(str(mode))
 
     def caption_table(self) -> Any | None:
         """The frame table carrying ``caption_column``, or None."""

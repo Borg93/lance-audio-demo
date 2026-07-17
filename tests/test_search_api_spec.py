@@ -28,7 +28,6 @@ from backend.search_api.filters import (
 )
 from backend.search_api.spec import SearchMode, SearchSpec, available_modes
 from backend.search_api.target import hit_columns
-from pydantic import ValidationError
 
 # ── SearchSpec: validation + clamping ─────────────────────────────────────────
 
@@ -52,7 +51,7 @@ class TestDefaults:
         spec = SearchSpec()
         assert spec.q == ""
         assert spec.n == 20
-        assert spec.mode is SearchMode.FTS
+        assert spec.mode == SearchMode.FTS  # str value "fts" (mode is str now)
         assert spec.fuzziness == 0
         assert spec.weight is None
         assert spec.rerank is False
@@ -99,16 +98,18 @@ class TestClamping:
 
 
 class TestModeCoercion:
-    def test_string_coerces_to_enum(self) -> None:
-        # FastAPI hands the raw query string in; Pydantic coerces it to the enum.
-        assert SearchSpec.model_validate({"mode": "hybrid"}).mode is SearchMode.HYBRID
+    def test_mode_is_a_plain_string(self) -> None:
+        # `mode` is `str` (not the enum) so a dataset's OWN embedding keys are
+        # accepted; the service validates availability + degrades to [].
+        assert SearchSpec.model_validate({"mode": "hybrid"}).mode == "hybrid"
 
-    def test_scene_mode_coerces(self) -> None:
-        assert SearchSpec.model_validate({"mode": "scene"}).mode is SearchMode.SCENE
+    def test_a_declared_role_key_passes_through(self) -> None:
+        assert SearchSpec.model_validate({"mode": "scene"}).mode == "scene"
 
-    def test_unknown_mode_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            SearchSpec.model_validate({"mode": "bogus"})
+    def test_any_mode_string_accepted_at_the_spec(self) -> None:
+        # No 422 boundary anymore — a mode the dataset can't serve yields no
+        # results at the service (graceful), not a spec rejection.
+        assert SearchSpec.model_validate({"mode": "bogus"}).mode == "bogus"
 
 
 class TestExtraIgnored:
