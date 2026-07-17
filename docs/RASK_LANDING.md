@@ -213,7 +213,9 @@ Verified live on MinIO with `parity_new.lance`: `/api/voice/status` built:true
 (323 turns / 15 speakers) and `/api/diarization/{doc}` built:true (114 turns) over
 S3; topics/graph return the correct `built:false` (their S3 existence-check path is
 exercised — the `built:true` branch needs the 10G transcripts_v2, not uploaded).
-**Remaining:** external `media_blob` (file://) still needs re-ingest (§4.4).
+**External `media_blob` — also DONE:** `rmedia materialize-blobs` converts the
+external `file://` pointers to managed blob-v2 bytes so the dataset is
+self-contained on S3 (§4.4, verified end-to-end incl. a 206 Range serve).
 
 ### 4.3 Blob streaming over S3 — already-proven contract
 
@@ -242,7 +244,16 @@ migration classes:
 So the move is: **(a)** `aws s3 cp --recursive transcripts_v2.lance
 s3://bucket/prefix/transcripts_v2.lance` (managed thumbnail + frames + manifest +
 indices are self-contained, relative internal refs — `file_format.md:3184`); then
-**(b)** fix the external `media_blob`. Two options — **prefer re-ingest**:
+**(b)** fix the external `media_blob`. **DONE — implemented + verified
+(2026-07-16):** `uv run rmedia --db <ds> materialize-blobs` converts external
+`media_blob` → **managed** blob-v2 bytes in place (`read_blobs`→`blob_array`
+re-wrap, the lance-ns `ingest_to_bronze` contract; `src/rmedia/ingest/materialize.py`).
+Proven end-to-end: `documents.media_blob` flipped `kind:3` (external `file://`) →
+`kind:2` (managed, 376 MB in-dataset for the 5-doc sample), moved to S3, and
+resolved over S3 **with every local `input/sv/*.mp4` source hidden** (65 MB, ftyp
+magic); the backend served it `206 Partial Content` `Content-Range:
+bytes 100-199/79564268 video/mp4` over S3. Two options remain a choice only for
+*which* remediation — the code prefers re-ingest:
 
 - **(B) re-ingest** the source videos with `external_blob_mode="ingest"`
   (`ray.md:899`) so bytes become Lance-managed on S3. The source MP4s live in the

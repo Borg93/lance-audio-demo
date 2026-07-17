@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from ..ingest.ingest import ingest_many, load_transcript, reindex_fts
+from ..ingest.materialize import materialize_blobs
 from ._app import CliContext, app
 
 
@@ -172,3 +173,27 @@ def cmd_reindex_fts(
         f"remove_stop_words={remove_stop_words}, ascii_folding={ascii_folding}).",
         err=True,
     )
+
+
+@app.command("materialize-blobs")
+def cmd_materialize_blobs(
+    ctx: typer.Context,
+    table: Annotated[
+        str,
+        typer.Option("--table", help="Table whose external blob columns to materialize."),
+    ] = "documents",
+) -> None:
+    """Rewrite external blob-v2 columns as Lance-managed bytes (self-contained for S3).
+
+    The lance-ns way (``ingest_to_bronze``): materialize ``file://`` blob pointers into
+    managed bytes so a plain copy to S3 carries them and they resolve off-box. Run
+    locally (where the sources resolve) BEFORE moving the dataset to S3.
+    """
+    cfg: CliContext = ctx.obj
+    stats = materialize_blobs(cfg.db, table=table)
+    if not stats:
+        typer.echo(f"{table}: no blob columns to materialize", err=True)
+        return
+    for column, s in stats.items():
+        typer.echo(f"{column}: {s['rows']} rows, {s['bytes']:,} bytes now managed", err=True)
+    typer.echo("MATERIALIZE OK")
