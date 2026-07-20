@@ -519,10 +519,11 @@ class WorkflowGraph {
     this.selectedNodeIds = [...newIds];
   }
 
-  /** Auto-layout the graph left-to-right. Blocked mid-run. */
-  tidy(): void {
+  /** Auto-layout the graph left-to-right. Blocked mid-run. elkjs is async, so
+   *  the nodes update when layout resolves (fire-and-forget from the button). */
+  async tidy(): Promise<void> {
     if (this.running) return;
-    this.nodes = autoLayout(this.nodes, this.edges);
+    this.nodes = await autoLayout(this.nodes, this.edges);
   }
 
   /** Patch one node's run state. */

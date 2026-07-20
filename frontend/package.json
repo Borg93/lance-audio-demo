@@ -18,13 +18,13 @@
     "prepare": "svelte-kit sync"
   },
   "dependencies": {
-    "@dagrejs/dagre": "^3.0.0",
     "@techstark/opencv-js": "5.0.0-release.1",
     "@xyflow/svelte": "^1.6.0",
     "apache-arrow": "^21.1.0",
     "bits-ui": "^2.0.0",
     "clsx": "^2.1.1",
     "d3-force": "^3.0.0",
+    "elkjs": "^0.9.3",
     "embedding-atlas": "^0.21.0",
     "flatbush": "^4.6.2",
     "lucide-svelte": "^0.468.0",
