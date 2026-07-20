@@ -18,20 +18,38 @@
  * Both feed the SAME LabelOp. See docs/ACTIVE_LABELING.md.
  */
 
-/** The target set of a labeling op. HOW it's formed (browse vs search) is the
- *  viewer's concern; the op only sees the resolved target. `query`/`all` are
- *  corpus-scale ⇒ batch execution; `one`/`picked` can run interactively. */
-export type Selection =
-  | { kind: "one"; index: number }
-  | { kind: "picked"; indices: number[] }
-  | {
-      kind: "query";
-      /** SQL predicate over the annotations/media columns (the FiftyOne filter). */
-      where?: string;
-      /** Embedding-interaction: nearest-k to an anchor vector in a column. */
-      vector?: { column: string; anchor: number[]; k: number };
-    }
-  | { kind: "all" };
+/** The target set of a labeling op. Two GRANULARITIES, bridged by the descriptor
+ *  identity `hitKey` (doc_id|speech_id|chunk_id) — the universal selection currency
+ *  already used by the atlas cross-filter + the workflow scope, NOT a parallel one:
+ *
+ *   CHUNK-level (the READ plane's output — atlas lasso/box/cluster via
+ *   `crossFilter.selectedIds`, search/filter via `scope.ts` → ScopeClause):
+ *     - `chunks`  a set of `hitKey`s (the picked hits / lassoed points)
+ *     - `scope`   a SQL WHERE (scope.ts `ScopeClause.clause`, cap-guarded)
+ *     - `corpus`  everything
+ *   Drives: chunk tags (the existing TaggerNode), "open these in the annotator", or
+ *   a batch predict/propagate deriver over the scope.
+ *
+ *   ANNOTATION-level (WITHIN the open chunk — the annotator canvas/list, engine ROW
+ *   INDEX; `id` is the stable annotation identity):
+ *     - `one`     a single annotation
+ *     - `picked`  a canvas/table multi-select
+ *   Drives: manual set/verdict, interactive assist (SAM click / INSID3 on the page).
+ */
+export type ChunkSelection =
+  | { level: "chunks"; keys: string[] }
+  | { level: "scope"; where: string }
+  | { level: "corpus" };
+
+export type AnnoSelection =
+  | { level: "one"; index: number }
+  | { level: "picked"; indices: number[] };
+
+export type Selection = ChunkSelection | AnnoSelection;
+
+/** Chunk-level selections are corpus-scale ⇒ batch; annotation-level run interactively. */
+export const isChunkSelection = (s: Selection): s is ChunkSelection =>
+  s.level === "chunks" || s.level === "scope" || s.level === "corpus";
 
 /** Who assigns the label — and the provenance stamp it writes to `annotations.source`. */
 export type ProducerKind = "human" | "model" | "propagate" | "judge";

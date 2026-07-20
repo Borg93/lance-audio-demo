@@ -269,7 +269,7 @@ export class AnnotatorController {
     // interactive · one). Routing through apply() proves the annotator isn't
     // coupled to the review flow — a model/batch producer slots into the same seam.
     this.apply({
-      target: { kind: "one", index },
+      target: { level: "one", index },
       producer: "human",
       op: "verdict",
       execution: "interactive",
@@ -314,10 +314,11 @@ export class AnnotatorController {
     };
   }
 
-  /** Resolve an interactive Selection to row indices. query/all are corpus-scale
-   *  (batch) so client-side they fall back to the current canvas selection. */
+  /** Resolve an interactive (annotation-level) Selection to engine row indices.
+   *  Chunk-level selections are corpus-scale (batch), so client-side they fall back
+   *  to the current canvas selection. */
   private _resolveInteractive(sel: Selection): number[] {
-    switch (sel.kind) {
+    switch (sel.level) {
       case "one":
         return [sel.index];
       case "picked":
