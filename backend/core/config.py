@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     # HTTP endpoint, like the catalog transport).
     assist_url: str | None = Field(default=None, alias="MEDIA_ASSIST_URL")
 
+    # Batch labeling job runner — a lance-ns RayJob submit endpoint (the silver-deriver
+    # enqueue for bulk/auto-labeling over a read-plane selection). Unset ⇒ a deterministic
+    # in-repo mock so the submit/poll round-trip is wired + testable (drop-in for the real
+    # submitter, like the assist + catalog transports). We only enqueue — the deriver runs
+    # in lance-ns (lance-ray + the catalog mover), never in this process.
+    jobs_url: str | None = Field(default=None, alias="MEDIA_JOBS_URL")
+
     @field_validator("read_backend", "write_backend")
     @classmethod
     def _check_backend(cls, v: str) -> str:

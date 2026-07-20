@@ -19,6 +19,7 @@
     type VoiceSimilarResponse,
   } from '$lib/api';
   import { voiceSearch } from '$lib/voice-search.svelte';
+  import { submitBatchJob } from '$lib/labeling/jobs';
   import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
   import SearchBar from '$lib/components/search-bar.svelte';
   import ActiveFilters from '$lib/components/active-filters.svelte';
@@ -187,6 +188,27 @@
     const dv = activeView();
     const keys = reviewHits.map((h) => dv.keyPath(h).join('/')).filter(Boolean);
     if (keys.length) void goto(`/annotate?keys=${keys.join(',')}`);
+  }
+
+  // Read→BATCH handoff (bulk/auto-labeling, the 3rd LabelOp mode): enqueue a producer
+  // over this chunk-level selection as a lance-ns silver deriver. We only submit — the
+  // deriver runs async and its predictions surface on re-read.
+  let autoLabelMsg = $state<string | null>(null);
+  async function autoLabelHits(reviewHits: Hit[]) {
+    const dv = activeView();
+    const keys = reviewHits.map((h) => dv.keyPath(h).join('/')).filter(Boolean);
+    if (!keys.length) return;
+    autoLabelMsg = 'submitting…';
+    try {
+      const job = await submitBatchJob({
+        producer: 'grounding-dino',
+        op: 'predict',
+        scope: { level: 'chunks', keys },
+      });
+      autoLabelMsg = `${job.status} · ${job.job_id} (${keys.length} chunks)`;
+    } catch (e) {
+      autoLabelMsg = e instanceof Error ? e.message : 'submit failed';
+    }
   }
 
   // DIRECTION B (seed) — promote a map selection to the search's result set by
@@ -832,8 +854,22 @@
                           <span class="text-muted-foreground/70">· showing {mapHits.length}</span>
                         {/if}
                       </span>
+                      {#if autoLabelMsg}
+                        <span class="ml-auto font-mono text-[11px] text-muted-foreground" title="batch job">
+                          {autoLabelMsg}
+                        </span>
+                      {/if}
                       <button
-                        class="ml-auto rounded border border-border px-2 py-0.5 text-xs hover:bg-muted"
+                        class={autoLabelMsg
+                          ? 'rounded border border-border px-2 py-0.5 text-xs hover:bg-muted'
+                          : 'ml-auto rounded border border-border px-2 py-0.5 text-xs hover:bg-muted'}
+                        title="Auto-label this selection (batch deriver over the scope)"
+                        onclick={() => autoLabelHits(mapHits)}
+                      >
+                        Auto-label {mapHits.length}
+                      </button>
+                      <button
+                        class="rounded border border-border px-2 py-0.5 text-xs hover:bg-muted"
                         title="Open this selection in the annotator"
                         onclick={() => annotateHits(mapHits)}
                       >

@@ -68,6 +68,7 @@ def _include_groups(app: FastAPI) -> None:
     from backend.media_api.datasets import router as datasets_router
     from backend.media_api.diarization import router as diarization_router
     from backend.media_api.graph import router as graph_router
+    from backend.media_api.jobs import router as jobs_router
     from backend.media_api.media import router as media_router
     from backend.media_api.system import router as system_router
     from backend.media_api.topics import router as topics_router
@@ -89,6 +90,7 @@ def _include_groups(app: FastAPI) -> None:
         search_router,
         annotate_router,
         assist_router,
+        jobs_router,
     ):
         app.include_router(router)
 

@@ -21,7 +21,9 @@ import { type Table, tableFromIPC } from "apache-arrow";
 import type { CommitShape, GeometryUpdate, PixiContext, Tool } from "$lib/engine";
 import { LayerStore, buildBatchTable } from "$lib/engine";
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "$lib/labeling/types";
+import { isChunkSelection } from "$lib/labeling/types";
 import { PRODUCERS } from "$lib/labeling/producers";
+import { submitBatchJob } from "$lib/labeling/jobs";
 
 export type Mode = "view" | "edit";
 
@@ -640,15 +642,18 @@ export class AnnotatorController {
     const spec = PRODUCERS[op.producer];
     if (!spec) return { status: "unsupported", reason: `unknown producer '${op.producer}'` };
 
-    // Batch locus = a silver deriver over a (query/all) selection: the annotator
-    // enqueues, the job surfaces async by media id + Lance version. Not wired in the
-    // prototype (that's the lance-ray/catalog-mover write path).
+    // Batch locus = a silver deriver over a chunk-level selection: enqueue via the jobs
+    // seam (lance-ns runs it; the result surfaces async by media id + Lance version).
     if (op.execution === "batch") {
-      return {
-        status: "queued",
-        job: `${spec.source}:${op.op}`,
-        note: "batch deriver (not wired)",
-      };
+      if (isChunkSelection(op.target)) {
+        void submitBatchJob({
+          producer: op.producer,
+          op: op.op,
+          scope: op.target,
+          prompt: op.payload.prompt,
+        }).catch(() => {}); // fire-and-forget; the read-plane trigger surfaces errors
+      }
+      return { status: "queued", job: `${spec.source}:${op.op}`, note: "batch deriver enqueued" };
     }
 
     // Interactive + human = the manual review path (real, local-first → Save).
