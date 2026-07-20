@@ -30,46 +30,50 @@ const sidebar = await page.locator("[data-testid=annotation-sidebar]").count();
 const layers = await page.locator("[data-testid=layer-panel]").count();
 const zoom = await page.locator("[data-testid=zoom-controls]").count();
 const pagenav = await page.locator("[data-testid=page-nav]").count();
-// the 3 seeded annotations render in the review queue, predictions first
 const listItems = await page.locator("[data-testid=annotation-list] ul > li").count();
-const topOfQueue =
-  (await page
-    .locator("[data-testid=annotation-list] ul > li")
-    .first()
-    .textContent()
-    .catch(() => "")) ?? "";
 
-// functional: undo/redo a review edit (select → Accept → Undo reverts)
-const detailText = async () =>
-  (
+// review loop: select a prediction → accept-and-advance (A) bumps the accepted count
+// + advances the selection; Ctrl+Z reverts. Read the count off the sidebar summary.
+const acceptedCount = async () => {
+  const t =
     (await page
-      .locator("[data-testid=annotation-detail]")
+      .locator("[data-testid=annotation-sidebar]")
       .textContent()
-      .catch(() => "")) || ""
-  ).replace(/\s+/g, " ");
+      .catch(() => "")) || "";
+  const m = t.match(/accepted\s+(\d+)/);
+  return m ? Number(m[1]) : -1;
+};
+const acc0 = await acceptedCount();
 await page.locator("[data-testid=annotation-list] ul > li button").first().click();
 await page.waitForSelector("[data-testid=annotation-detail]", { timeout: 5000 }).catch(() => {});
-const before = await detailText();
-await page
-  .locator("[data-testid=annotation-detail] button", { hasText: "Accept" })
-  .click()
-  .catch(() => {});
-await page.waitForTimeout(200);
-const afterAccept = await detailText();
-// Save button becomes enabled once dirty (non-destructive check — we don't click it;
-// the live POST→merge_insert round-trip is proven separately).
-const saveEnabled = await page.getByTitle(/^Save to Lance/).isEnabled().catch(() => false);
-await page
-  .getByTitle(/^Undo/)
-  .click()
-  .catch(() => {});
-await page.waitForTimeout(200);
-const afterUndo = await detailText();
-const undoOk =
-  /prediction/.test(before) &&
-  /accepted/.test(afterAccept) &&
-  /prediction/.test(afterUndo) &&
-  saveEnabled;
+const advancedFrom = (
+  (await page
+    .locator("[data-testid=annotation-detail]")
+    .textContent()
+    .catch(() => "")) || ""
+).replace(/\s+/g, " ");
+const saveEnabledBefore = await page
+  .getByTitle(/^Save to Lance/)
+  .isEnabled()
+  .catch(() => false);
+await page.locator("body").press("a"); // accept-and-advance
+await page.waitForTimeout(250);
+const acc1 = await acceptedCount();
+const advancedTo = (
+  (await page
+    .locator("[data-testid=annotation-detail]")
+    .textContent()
+    .catch(() => "")) || ""
+).replace(/\s+/g, " ");
+await page.locator("body").press("Control+z"); // undo the accept
+await page.waitForTimeout(250);
+const acc2 = await acceptedCount();
+const reviewOk =
+  acc0 === 1 &&
+  acc1 === 2 &&
+  acc2 === 1 &&
+  saveEnabledBefore === false &&
+  advancedTo !== advancedFrom;
 
 console.log("viewer status :", status.trim());
 console.log("canvas count  :", canvas);
@@ -86,15 +90,12 @@ console.log(
   pagenav,
 );
 console.log("queue items   :", listItems);
-console.log("top of queue  :", topOfQueue.replace(/\s+/g, " ").trim().slice(0, 60));
 console.log(
-  "undo/redo     :",
-  undoOk
-    ? "OK"
-    : `FAIL before=${before.slice(0, 30)} accept=${afterAccept.slice(0, 30)} undo=${afterUndo.slice(0, 30)}`,
+  "accept-advance:",
+  reviewOk ? "OK" : `FAIL acc ${acc0}->${acc1}->${acc2} advanced=${advancedTo !== advancedFrom}`,
 );
 const layoutOk = toolbar === 1 && sidebar === 1 && layers === 1 && zoom === 1 && pagenav === 1;
 const dataOk = canvas > 0 && listItems === 3 && /annotations from Lance/.test(status);
-console.log(layoutOk && dataOk && undoOk ? "BOTH OK" : "BOTH FAIL");
+console.log(layoutOk && dataOk && reviewOk ? "BOTH OK" : "BOTH FAIL");
 await browser.close();
-process.exit(layoutOk && dataOk && undoOk ? 0 : 1);
+process.exit(layoutOk && dataOk && reviewOk ? 0 : 1);

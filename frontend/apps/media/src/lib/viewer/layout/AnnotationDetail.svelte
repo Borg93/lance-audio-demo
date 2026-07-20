@@ -1,7 +1,7 @@
 <script lang="ts">
   // Single-annotation inspector/editor. Controlled: edits route through the facade
   // (canvas + overlay updated together). (Ported from ra-anno AnnotationSidebar detail.)
-  import { Check, X, RotateCcw } from 'lucide-svelte';
+  import { Check, X, RotateCcw, ChevronUp, ChevronDown } from 'lucide-svelte';
   import { Button, Input } from '$lib/components/ui';
   import { cn } from '$lib/utils';
   import { statusBadge } from './statusStyle';
@@ -19,6 +19,18 @@
       <span class={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', statusBadge(row.status))}>
         {row.status || '—'}
       </span>
+    </div>
+
+    <div class="flex items-center justify-between text-xs text-muted-foreground">
+      <span class="tabular-nums">{controller.queuePos.at} / {controller.queuePos.of} in queue</span>
+      <div class="flex gap-0.5">
+        <Button variant="ghost" size="icon-xs" title="Previous (K / ↑)" onclick={() => controller.prev()}>
+          <ChevronUp class="size-3.5" />
+        </Button>
+        <Button variant="ghost" size="icon-xs" title="Next (J / ↓)" onclick={() => controller.next()}>
+          <ChevronDown class="size-3.5" />
+        </Button>
+      </div>
     </div>
 
     <label class="flex flex-col gap-1 text-xs">
@@ -62,8 +74,8 @@
         variant="outline"
         size="sm"
         class="flex-1"
-        title="Accept"
-        onclick={() => controller.setStatus(row.index, 'accepted')}
+        title="Accept &amp; advance (A / Enter)"
+        onclick={() => controller.acceptAndAdvance('accepted')}
       >
         <Check class="size-3.5" /> Accept
       </Button>
@@ -71,8 +83,8 @@
         variant="outline"
         size="sm"
         class="flex-1"
-        title="Reject"
-        onclick={() => controller.setStatus(row.index, 'rejected')}
+        title="Reject &amp; advance (R)"
+        onclick={() => controller.acceptAndAdvance('rejected')}
       >
         <X class="size-3.5" /> Reject
       </Button>

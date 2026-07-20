@@ -71,9 +71,24 @@
       if (controller.canDraw || tool === 'select' || tool === 'pan') controller.setTool(tool);
       return;
     }
-    if (e.key === 'Delete' || e.key === 'Backspace') controller.deleteSelected();
-    else if (k === 'p') controller.convertToPolygon();
-    else if (e.key === 'Escape') controller.select(null);
+    // review-queue loop — accept/reject-and-advance + queue navigation
+    if (k === 'a' || e.key === 'Enter') {
+      controller.acceptAndAdvance('accepted');
+    } else if (k === 'r') {
+      controller.acceptAndAdvance('rejected');
+    } else if (k === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      controller.next();
+    } else if (k === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      controller.prev();
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      controller.deleteSelected();
+    } else if (k === 'p') {
+      controller.convertToPolygon();
+    } else if (e.key === 'Escape') {
+      controller.select(null);
+    }
   }
 </script>
 

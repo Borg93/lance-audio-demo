@@ -11,20 +11,14 @@
 
   let filter = $state('');
 
+  // The review order lives on the controller (shared with accept-and-advance); the
+  // list only adds its text filter on top.
   const queue = $derived(
-    controller.rows
-      .filter((r) => {
-        const q = filter.trim().toLowerCase();
-        if (!q) return true;
-        return (r.text + ' ' + r.label + ' ' + r.group).toLowerCase().includes(q);
-      })
-      .toSorted((a, b) => {
-        // predictions before decided, then uncertainty desc, then confidence asc
-        const ap = a.status === 'prediction' ? 0 : 1;
-        const bp = b.status === 'prediction' ? 0 : 1;
-        if (ap !== bp) return ap - bp;
-        return (b.uncertainty ?? -1) - (a.uncertainty ?? -1);
-      }),
+    controller.reviewQueue.filter((r) => {
+      const q = filter.trim().toLowerCase();
+      if (!q) return true;
+      return (r.text + ' ' + r.label + ' ' + r.group).toLowerCase().includes(q);
+    }),
   );
 </script>
 

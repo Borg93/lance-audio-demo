@@ -194,6 +194,26 @@ export class AnnotatorController {
     return this.rows.find((r) => r.index === i) ?? null;
   });
 
+  /** The review order — predictions first, highest uncertainty first (the active-
+   *  learning queue). The ONE source both the sidebar list and accept-and-advance
+   *  read, so "what to review next" is a sort, not a recompute. */
+  readonly reviewQueue = $derived.by<AnnoRow[]>(() =>
+    this.rows.toSorted((a, b) => {
+      const ap = a.status === "prediction" ? 0 : 1;
+      const bp = b.status === "prediction" ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      return (b.uncertainty ?? -1) - (a.uncertainty ?? -1);
+    }),
+  );
+
+  /** 1-based position of the selection in the review queue (0 if none) + the total. */
+  readonly queuePos = $derived.by<{ at: number; of: number }>(() => {
+    const of = this.reviewQueue.length;
+    const i = this.selectedIndex;
+    const idx = i == null ? -1 : this.reviewQueue.findIndex((r) => r.index === i);
+    return { at: idx < 0 ? 0 : idx + 1, of };
+  });
+
   readonly canDraw = $derived(this.mode === "edit");
   readonly canUndo = $derived(this._undo.length > 0);
   readonly canRedo = $derived(this._redo.length > 0);
@@ -330,6 +350,39 @@ export class AnnotatorController {
       execution: "interactive",
       payload: { fields: { status } },
     });
+  }
+
+  // ── review-queue navigation (accept-and-advance — the throughput loop) ──
+  private _queuePos(): number {
+    const i = this.selectedIndex;
+    return i == null ? -1 : this.reviewQueue.findIndex((r) => r.index === i);
+  }
+  /** Move the selection by ±1 within the review queue (clamped). */
+  selectQueueRelative(delta: number): void {
+    const q = this.reviewQueue;
+    if (!q.length) return;
+    const pos = this._queuePos();
+    const target = pos < 0 ? 0 : Math.min(Math.max(pos + delta, 0), q.length - 1);
+    const row = q[target];
+    if (row) this.select(row.index);
+  }
+  next(): void {
+    this.selectQueueRelative(1);
+  }
+  prev(): void {
+    this.selectQueueRelative(-1);
+  }
+  /** Set the selection's status, then advance to the next item still needing review
+   *  (the next prediction in queue order), else the next row — the review loop. */
+  acceptAndAdvance(status: string): void {
+    const i = this.selectedIndex;
+    if (i == null) return;
+    const q = this.reviewQueue; // capture pre-change order (the row re-sorts after)
+    const pos = q.findIndex((r) => r.index === i);
+    this.setStatus(i, status);
+    const rest = pos < 0 ? q : q.slice(pos + 1);
+    const nextRow = rest.find((r) => r.status === "prediction") ?? rest[0];
+    this.select(nextRow ? nextRow.index : null);
   }
 
   // ── the write-plane seam: dispatch a LabelOp (all 3 modes flow through here) ──
