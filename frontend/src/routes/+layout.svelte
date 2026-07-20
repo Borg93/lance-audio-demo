@@ -12,6 +12,7 @@
     Share2,
     BookOpen,
     Workflow,
+    SquarePen,
     type Icon as LucideIcon,
   } from 'lucide-svelte';
   import * as Sidebar from '$lib/components/ui/sidebar';
@@ -43,6 +44,12 @@
       label: 'Workflow',
       icon: Workflow,
       hint: 'Build & run a retrieval pipeline as a node graph',
+    },
+    {
+      href: '/annotate',
+      label: 'Annotate',
+      icon: SquarePen,
+      hint: 'View & annotate documents/HTR — canvas + review-queue table',
     },
     {
       href: '/guide',

@@ -5,6 +5,10 @@
 // server-side); we lay the medallion lane out left→right by hand.
 import { render } from "svelte/server";
 import { Position, type Edge, type Node } from "@xyflow/svelte";
+// Inline the Svelte Flow stylesheet into the SSR head — component CSS imports are
+// injected client-side by Vite, so a pure server render would otherwise emit
+// unstyled (invisible) nodes.
+import xyflowCss from "@xyflow/svelte/dist/style.css?inline";
 import Flow from "$lib/diagram/Flow.svelte";
 import type { RequestHandler } from "./$types";
 
@@ -45,7 +49,7 @@ export const GET: RequestHandler = () => {
   const width = 4 * (W + 80);
   const height = 200;
   const { body, head } = render(Flow, { props: { nodes, edges, width, height } });
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>lance-media pipeline</title>${head}<style>html,body{margin:0}.diagram{width:${width}px;height:${height}px}</style></head><body><div class="diagram">${body}</div></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>lance-media pipeline</title>${head}<style>${xyflowCss}</style><style>html,body{margin:0}.diagram{width:${width}px;height:${height}px}</style></head><body><div class="diagram">${body}</div></body></html>`;
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 };
 
