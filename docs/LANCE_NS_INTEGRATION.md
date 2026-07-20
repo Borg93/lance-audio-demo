@@ -222,6 +222,39 @@ points (`docs/DATA-CONTRACT.md`) at zero code cost to us:
   chunks→frames→embeddings→atlas DAG becomes a queryable provenance graph
   (`GET /datasets/<gold>/upstream`). rask has **zero** lineage today; we'd arrive
   already wired into it.
+
+### 5a. Lineage is OpenLineage — and the HARNESS emits it, not the job
+
+Verified against lance-ns source (2026-07-20): lineage is **OpenLineage spec
+2-0-2** (`openlineage-python`), hand-built `RunEvent`s published as Dapr
+CloudEvents on a shared lineage topic, consumed by `services/lineage` into the
+graph. `services/common/openlineage.py` is the single spec-constant module
+(`RUN_EVENT_SCHEMA_URL`, `run_id_for(seed)` deterministic run ids,
+`schema_facet`, `column_lineage_facet`, `ErrorMessageRunFacet` on FAIL) so every
+emitter stamps the same spec version. The cascade *head* is itself a lineage
+event: `ingest_trigger` subscribes to the raw-write `RunEvent` and fires the
+pipeline (loop-guarded against the movers' own writes).
+
+**The emission contract that matters for us:** a deriver does NOT emit.
+`compute.transform_stage` returns a `StageResult` — read/written versions,
+measured output rows+bytes, and a `column_map` (`IDENTITY` for carried columns,
+`TRANSFORMATION` for derived ones) — and the **mover harness** turns that into
+the START/COMPLETE/FAIL `RunEvent` with `outputStatistics`, `schema`, and
+`columnLineage` facets. Our deriver proof (`docs/proofs/lance-ns-media-derivers.patch`)
+conformed to exactly this: the stages return results, the harness emits — which
+is why their lineage-emit tests stayed green without our patch containing a
+single OpenLineage line.
+
+**Consequences:**
+- Merged as derivers, our stages inherit spec-true OpenLineage **for free**;
+  we must supply an honest `column_map` per stage (our `Stage` declarations
+  already carry `read_columns`/`key_columns`/`output_columns`, which map 1:1).
+- **Standalone rmedia today emits NOTHING** — running the pipeline outside
+  lance-ns (make targets, local Ray) produces no lineage events. Deliberate:
+  emission is the harness's job, and duplicating an emitter in rmedia would
+  drift from their pinned spec constants. If pre-merge lineage is ever needed,
+  the right shape is a thin optional emitter that imports THEIR
+  `common/openlineage.py` helpers, not a reimplementation.
 - **Creds** — workload identity (KubeRay projected SA) + short-TTL table-scoped
   creds via `POST /v1/table/{id}/credentials`. **No durable secret on compute** —
   which resolves the S3-wiring open question from `RASK_LANDING.md §4` in the
