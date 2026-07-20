@@ -36,6 +36,9 @@ SCHEMA = pa.schema(
         ("height", pa.float32()),
         ("rotation", pa.float32()),
         ("polygon", pa.list_(pa.float32())),
+        # temporal facet — audio segments + a shape pinned to a video moment (seconds)
+        ("t_start", pa.float32()),
+        ("t_end", pa.float32()),
         # content + class
         ("text", pa.string()),
         ("label", pa.string()),
@@ -74,6 +77,8 @@ def seed(db_path: str, doc_id: str) -> str:
         "height": [90.0, 80.0, 0.0],
         "rotation": [0.0, 0.0, 0.0],
         "polygon": [[], [], [120.0, 240.0, 260.0, 250.0, 190.0, 320.0]],
+        "t_start": [0.0, 0.0, 0.0],  # image annotations have no time axis
+        "t_end": [0.0, 0.0, 0.0],
         "text": ["regeringen", "principmodellen", "region"],
         "label": ["text-line", "text-line", "figure"],
         "status": ["prediction", "prediction", "accepted"],
