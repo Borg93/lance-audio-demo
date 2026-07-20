@@ -363,6 +363,16 @@ Merge sequence (all *after* the lance-ns→rask fold-in, none in this repo now):
 4. **Re-point the app at the catalog** — swap direct `lance.dataset` opens for
    `/query` + `/blobs` + `/describe`; land it as `apps/media` (or a rask MFE)
    reusing `packages/ui`; descriptor discovery via `/describe` + the metadata key.
+   **PROTOTYPED (in-repo):** `backend/lancekit/reader.py` puts direct-Lance and the
+   catalog `/query` client behind ONE duck-typed `TableReader`, selected by
+   `MEDIA_READ_BACKEND=direct|catalog` (+ `MEDIA_CATALOG_URI`). The scan path
+   (`to_table`/`count_rows`) reads through the lance-ns `QueryTableRequest` client
+   (empty vector + large `k` = scan) and decodes the Arrow-IPC-file response;
+   `tests/test_lancekit_reader.py` proves it row-identical to direct Lance. Host-
+   agnostic + retry-friendly (no hard-coded host) so it drops into a Dapr service-
+   invocation / Ray-Serve-fronted catalog. Open items: blob-by-`_rowid` + hybrid
+   `search` stay direct (the analysis's HIGH-risk phases); a live-server probe of
+   empty-vector-scan acceptance; per-request auth-token threading.
 5. **Declare consumer columns** — feed our descriptor's search/identity bindings
    into the gold mover's `requiredColumns` so the quality gate guards them.
 

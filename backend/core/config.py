@@ -57,6 +57,24 @@ class Settings(BaseSettings):
     s3_region: str = Field(default="us-east-1", alias="MEDIA_S3_REGION")
     s3_db_root: str | None = Field(default=None, alias="MEDIA_S3_DB_ROOT")
 
+    # Read-path backend (LANCE_NS_INTEGRATION §catalog-client). "direct" (default) =
+    # open Lance ourselves, byte-identical to today. "catalog" = read through the
+    # lance-ns catalog /v1/table/query contract (backend/lancekit/reader.py); when
+    # MEDIA_CATALOG_URI is set it hits that live REST catalog, else an in-process
+    # native-namespace transport. Host-agnostic + retry-friendly so the catalog path
+    # drops into a Dapr service-invocation / Ray-Serve-fronted catalog unchanged.
+    read_backend: str = Field(default="direct", alias="MEDIA_READ_BACKEND")
+    catalog_uri: str | None = Field(default=None, alias="MEDIA_CATALOG_URI")
+    catalog_delimiter: str = Field(default="$", alias="MEDIA_CATALOG_DELIMITER")
+    catalog_token: str | None = Field(default=None, alias="MEDIA_CATALOG_TOKEN")
+
+    @field_validator("read_backend")
+    @classmethod
+    def _check_read_backend(cls, v: str) -> str:
+        if v not in {"direct", "catalog"}:
+            raise ValueError(f"MEDIA_READ_BACKEND must be 'direct' or 'catalog', got {v!r}")
+        return v
+
     @property
     def default_dataset_id(self) -> str:
         return self.db_path.stem
@@ -92,6 +110,7 @@ class Settings(BaseSettings):
         if self.s3_endpoint and self.s3_db_root:
             return self.s3_db_root
         return str(self.db_root)
+
     # Externally-reachable origin for media URLs in MCP clip apps (LAN IP,
     # tunnel, reverse proxy). Unset = derive http://{host}:{port} locally.
     # AnyHttpUrl: this value lands verbatim in the clip app's CSP allow-list
