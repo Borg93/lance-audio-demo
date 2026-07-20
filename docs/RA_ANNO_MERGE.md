@@ -119,6 +119,26 @@ into one engine, one Arrow data path**. Keep the custom WGSL scatter only if
 profiling shows PixiJS instancing can't hold the point count you need (millions) —
 **measure before committing**; at 145k either handles it.
 
+## 4a. The audio viewer — peaks.js (the AV analogue of the page viewer)
+
+Audio needs its own region-aware viewer exactly as documents need the page/bbox
+viewer. **Recommendation: peaks.js** (BBC R&D) over wavesurfer.js, because:
+
+- It is **annotation-first** — labeled time **segments** + **points** are the core
+  primitives (BBC built it for spoken-word *archive* annotation), which is our exact
+  use: speaker turns, ASR chunks, human-labeled regions.
+- It supports **precomputed waveform data** — so we add a **`waveform` silver stage**
+  (bronze audio → min/max peaks) and stream compact peaks (Arrow), instead of
+  decoding gigabytes of archival audio in the browser. This is the audio parallel of
+  the `htr` stage producing bbox rows.
+- Temporal annotations reuse the SAME annotator service + model as spatial ones —
+  a "region with a label", geometry = `start/end` (time) instead of `x/y/w/h`
+  (space). One annotation table, one save → `merge_insert` path.
+
+wavesurfer.js is the alternative if you want its spectrogram/minimap plugins and the
+files are short enough to decode client-side. (A third option — a PixiJS-native
+waveform on the same Arrow engine — unifies everything but is more to build; defer.)
+
 ## 5. Compute mapping (this closes the loop with the earlier corrections)
 
 - **bronze** = raw media Lance tables you send in (page images, audio, video, maps).
@@ -136,6 +156,28 @@ profiling shows PixiJS instancing can't hold the point count you need (millions)
 
 So HTR/OCR is not a special pipeline — it's `bronze image → htr stage → annotations
 (silver) → viewer/annotator services`, the identical machinery as audio→chunks.
+
+## 5a. Increment 1 — DONE (engine vendored, toolchain unified)
+
+Landed in this repo (`frontend/`), all gates green:
+- **ra-anno's engine folded in** — `src/lib/engine/` (25 files, 5,117 lines): the
+  PixiJS plugins (Image/ArrowData/Interaction), the tool suite
+  (rect/polygon/point/line/pencil/lasso/brush + magnetic/scissors edge-snap), the
+  editors, and `AnnotationStore`. Deps added: `pixi.js`, `flatbush`,
+  `@techstark/opencv-js@5.0.0-release.1`.
+- **Vendored at upstream strictness** — the engine's 120 diffs were all from our two
+  extra flags (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) that
+  ra-anno wasn't written for. Rather than rewrite 5k lines of upstream geometry code
+  (permanent merge friction), it's checked via `tsconfig.engine.json` at `strict`
+  minus those two; our own code keeps them. `bun run check:engine` → 0.
+- **Toolchain: oxlint + oxfmt** replace eslint + prettier (9 deps + 3 configs
+  removed). oxlint runs `typescript`+`oxc` as errors (unicorn deferred — it wanted a
+  repo-wide refactor), vendored engine ignored. `check:ts` repointed to the correct
+  `tsconfig.tsgo.json` (tsgo can't read `.svelte`).
+- **Bun** confirmed (adapter-bun); ra-anno's Deno mention dropped.
+
+Deferred to increment 2: wire `PixiCanvas.svelte` + an annotation route, connect it
+to a real Lance `annotations` table, and add peaks.js for the audio lane.
 
 ## 6. Open decisions (call these before building)
 

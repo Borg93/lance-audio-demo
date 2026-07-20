@@ -15,5 +15,16 @@
     "module": "esnext",
     "target": "esnext",
     "types": ["bun-types", "@webgpu/types"]
-  }
+  },
+  "//": "The vendored ra-anno engine (src/lib/engine) is excluded here and checked at upstream strictness via tsconfig.engine.json (bun run check:engine) — see that file. This exclude REPLACES SvelteKit's, so its service-worker + node_modules excludes are reproduced below.",
+  "exclude": [
+    "node_modules/**",
+    "src/service-worker.js",
+    "src/service-worker/**/*.js",
+    "src/service-worker.ts",
+    "src/service-worker/**/*.ts",
+    "src/service-worker.d.ts",
+    "src/service-worker/**/*.d.ts",
+    "src/lib/engine/**/*"
+  ]
 }
