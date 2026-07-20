@@ -9,7 +9,6 @@
     "preview": "vite preview --port 4173 --host 127.0.0.1",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:ts": "tsgo --noEmit -p tsconfig.tsgo.json",
-    "check:engine": "tsgo --noEmit -p tsconfig.engine.json",
     "test": "vitest run",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",

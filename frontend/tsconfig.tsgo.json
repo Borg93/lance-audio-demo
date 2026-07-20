@@ -1,9 +1,11 @@
 {
-  "//": "TypeScript 7 (tsgo) type-checks the pure-TS descriptor + logic layer. Files that import *.svelte need svelte2tsx's module augmentation (svelte-check owns those); tsgo covers the schema-agnostic core where the strictest typing matters.",
+  "//": "TypeScript 7 (tsgo) type-checks the pure-TS descriptor + logic layer at MAXIMUM strictness. svelte-check (tsconfig.json) runs the whole app — incl. the vendored ra-anno engine — at plain `strict`; the two extra flags below (noUncheckedIndexedAccess, exactOptionalPropertyTypes) that the engine wasn't written for stay ON here, over the schema-agnostic core where subtle index/optional bugs actually matter. tsgo also can't resolve *.svelte imports, so svelte-check owns those.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["@webgpu/types"],
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true
   },
   "include": [
     "src/lib/descriptor.ts",

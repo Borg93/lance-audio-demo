@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _include_groups(app: FastAPI) -> None:
+    from backend.media_api.annotate import router as annotate_router
     from backend.media_api.atlas import router as atlas_router
     from backend.media_api.datasets import router as datasets_router
     from backend.media_api.diarization import router as diarization_router
@@ -85,6 +86,7 @@ def _include_groups(app: FastAPI) -> None:
         topics_router,
         graph_router,
         search_router,
+        annotate_router,
     ):
         app.include_router(router)
 
