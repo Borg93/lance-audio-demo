@@ -64,15 +64,27 @@ class Settings(BaseSettings):
     # native-namespace transport. Host-agnostic + retry-friendly so the catalog path
     # drops into a Dapr service-invocation / Ray-Serve-fronted catalog unchanged.
     read_backend: str = Field(default="direct", alias="MEDIA_READ_BACKEND")
+    write_backend: str = Field(default="direct", alias="MEDIA_WRITE_BACKEND")
     catalog_uri: str | None = Field(default=None, alias="MEDIA_CATALOG_URI")
     catalog_delimiter: str = Field(default="$", alias="MEDIA_CATALOG_DELIMITER")
     catalog_token: str | None = Field(default=None, alias="MEDIA_CATALOG_TOKEN")
 
-    @field_validator("read_backend")
+    # OpenLineage emission on annotation writes (pre-merge; lance-ns's mover emits at
+    # merge). "stdout"/"log" write a spec-2-0-2 RunEvent per save; "none" disables.
+    lineage_sink: str = Field(default="log", alias="MEDIA_LINEAGE_SINK")
+
+    @field_validator("read_backend", "write_backend")
     @classmethod
-    def _check_read_backend(cls, v: str) -> str:
+    def _check_backend(cls, v: str) -> str:
         if v not in {"direct", "catalog"}:
-            raise ValueError(f"MEDIA_READ_BACKEND must be 'direct' or 'catalog', got {v!r}")
+            raise ValueError(f"read/write backend must be 'direct' or 'catalog', got {v!r}")
+        return v
+
+    @field_validator("lineage_sink")
+    @classmethod
+    def _check_lineage_sink(cls, v: str) -> str:
+        if v not in {"stdout", "log", "none"}:
+            raise ValueError(f"MEDIA_LINEAGE_SINK must be stdout|log|none, got {v!r}")
         return v
 
     @property

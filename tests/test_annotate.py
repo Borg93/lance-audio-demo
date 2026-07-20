@@ -153,3 +153,35 @@ def test_save_edit_insert_delete_round_trip(tmp_path: Path) -> None:
     final = lance.dataset(uri)
     assert {r["id"] for r in final.to_table().to_pylist()} == {"a", "c"}
     assert final.version == v0 + 2
+
+
+def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:
+    from backend.lancekit.lineage_emit import build_save_event
+
+    uri = str(tmp_path / "annotations.lance")
+    lance.write_dataset(
+        pa.Table.from_pylist(
+            [{"doc_id": "d1", "speech_id": 0, "chunk_id": 19, "id": "a", "status": "accepted"}],
+            schema=_full_schema(),
+        ),
+        uri,
+    )
+    ev = build_save_event(
+        ds=lance.dataset(uri), table_uri=uri, table_name="annotations", unit_key="d1/0/19"
+    )
+    # spec-2-0-2 RunEvent shape
+    assert ev["eventType"] == "COMPLETE"
+    assert ev["schemaURL"].endswith("2-0-2/OpenLineage.json#/$defs/RunEvent")
+    assert ev["producer"].endswith("rmedia")  # our emitter, drop-in with lance-ns constants
+    assert ev["job"]["name"] == "annotate.merge_insert"
+    assert ev["run"]["runId"]  # deterministic uuid5
+    # media unit in, annotations table out
+    assert ev["inputs"] == [{"namespace": "media", "name": "d1/0/19"}]
+    out = ev["outputs"][0]
+    assert out["namespace"] == "media" and out["name"] == "annotations"
+    facets = out["facets"]
+    assert {"schema", "outputStatistics", "columnLineage", "dataSource"} <= facets.keys()
+    # the schema facet carries the annotation columns; columnLineage is non-empty
+    names = {f["name"] for f in facets["schema"]["fields"]}
+    assert {"id", "status", "polygon", "x"} <= names
+    assert facets["columnLineage"]

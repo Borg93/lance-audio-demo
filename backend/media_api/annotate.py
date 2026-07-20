@@ -17,6 +17,9 @@ from pydantic import BaseModel, Field
 from backend.core.exceptions import ConflictError, NotFoundError
 from backend.deps import StateDep
 from backend.lancekit.descriptor import Declared
+from backend.lancekit.lineage_emit import emit_save
+from backend.lancekit.reader import open_reader
+from backend.lancekit.writer import open_writer
 from backend.media_api.media import DatasetParam, chunk_key_filter, table_dataset, validate_doc_key
 from backend.state import dataset_handle
 
@@ -184,7 +187,12 @@ def annotations(
             headers={"Cache-Control": "no-store", "X-Annotations-Version": "0"},
         )
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
-    table = ds.to_table(filter=where)
+    # Reads flow through the reader seam (direct default = byte-identical; catalog /query
+    # at merge) — open_reader was built for exactly this.
+    reader = open_reader(
+        dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
+    )
+    table = reader.to_table(filter=where)
     # The loaded Lance version — the client echoes it on Save for optimistic concurrency.
     return Response(
         content=_ipc_stream(table),
@@ -235,18 +243,34 @@ def save_annotations(
         parts.append(_new_rows(body.inserts, ident, current.schema))
     delta = pa.concat_tables(parts)
 
+    # Writes flow through the writer seam (direct default = byte-identical; catalog
+    # merge_insert/delete at merge, which yields OpenFGA + OpenLineage for free).
+    writer = open_writer(
+        dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
+    )
     touched = 0
     if delta.num_rows:
-        ds.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(delta)
+        writer.merge_upsert(delta, "id")
         touched += delta.num_rows
     if body.deletes:
         quoted = ", ".join(_sql_quote(d) for d in body.deletes)
-        ds.delete(f"id IN ({quoted})")
+        writer.delete(f"id IN ({quoted})")
         touched += len(body.deletes)
 
     if touched == 0:
         return SaveResult(saved=0, version=int(ds.version))
-    new_version = int(table_dataset(handle, ANNOTATIONS_TABLE).version)
+
+    fresh = table_dataset(handle, ANNOTATIONS_TABLE)
+    new_version = int(fresh.version)
+    # Pre-merge OpenLineage: emit a spec-2-0-2 RunEvent for the write (at merge the
+    # catalog mover emits it instead). Sink from settings (log|stdout|none).
+    emit_save(
+        ds=fresh,
+        table_uri=handle.table_uri(ANNOTATIONS_TABLE),
+        table_name=ANNOTATIONS_TABLE,
+        unit_key=f"{doc_id}/{speech_id}/{chunk_id}",
+        sink=state.settings.lineage_sink,
+    )
     logger.info(
         "saved %s→ v%d (%d edit+insert, %d delete)",
         doc_id,
