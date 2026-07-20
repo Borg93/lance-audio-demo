@@ -1,31 +1,23 @@
 <script lang="ts">
-  // Increment-2 wire: the ra-anno PixiJS engine, mounted and fed REAL Lance
-  // annotations over Arrow IPC. A frame image (chunk_frames) is the backdrop; the
-  // annotations table (backend /api/annotations → Arrow IPC) draws on top.
-  import PixiCanvas from '$lib/viewer/PixiCanvas.svelte';
-  import { tableFromIPC } from 'apache-arrow';
-  import type { PixiContext } from '$lib/engine';
+  // The annotator shell — decoupled from any specific viewer. It resolves a
+  // MediaUnit and renders whatever viewer the registry maps its kind to (image =
+  // PixiJS canvas today; audio/video = scaffolded stubs). Adding a modality never
+  // touches this route. (RA_ANNO_MERGE.md §5c–5d.)
+  import { mediaKindOf, viewerFor } from '$lib/viewer/registry';
+  import type { MediaUnit } from '$lib/viewer/types';
 
-  // A real doc/frame that has seeded Lance annotations (doc/speech/chunk keys).
+  // Demo unit: the seeded image doc. In the app this comes from the descriptor
+  // (`document.mime` → kind) + the selected doc/frame — same shape, resolved upstream.
   const KEY = 'fe00cd746463ad2c/0/19';
+  const unit: MediaUnit = {
+    kind: mediaKindOf('image/jpeg'),
+    key: KEY,
+    imageUrl: `/api/chunk-frame/${KEY}`,
+    annotationsUrl: `/api/annotations/${KEY}`,
+  };
+  const Viewer = viewerFor(unit.kind);
 
   let status = $state('loading…');
-  let count = $state(0);
-
-  async function onready(ctx: PixiContext): Promise<void> {
-    try {
-      await ctx.plugins.image.load(`/api/chunk-frame/${KEY}`);
-      const res = await fetch(`/api/annotations/${KEY}`);
-      if (!res.ok) throw new Error(`annotations HTTP ${res.status}`);
-      const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
-      ctx.plugins.arrow.load(table);
-      ctx.plugins.arrow.sync();
-      count = table.numRows;
-      status = `${count} annotations from Lance`;
-    } catch (e) {
-      status = `failed: ${e instanceof Error ? e.message : String(e)}`;
-    }
-  }
 </script>
 
 <div class="relative h-screen w-screen">
@@ -33,7 +25,7 @@
     class="absolute left-3 top-3 z-10 rounded bg-black/70 px-2 py-1 font-mono text-xs text-white"
     data-testid="annotate-status"
   >
-    annotate · {status}
+    annotate · {unit.kind} · {status}
   </div>
-  <PixiCanvas {onready} />
+  <Viewer {unit} onload={(n) => (status = `${n} annotations from Lance`)} />
 </div>
