@@ -20,14 +20,14 @@
  * feeds `setFilteredFromHits` and reads `selectedIds`.
  */
 
-import type { Hit, AtlasPoints, AtlasSpace } from '$lib/api';
-import { activeView } from '$lib/descriptor';
-import { hitKey } from '$lib/utils';
+import type { Hit, AtlasPoints, AtlasSpace } from "$lib/api";
+import { activeView } from "$lib/descriptor";
+import { hitKey } from "$lib/utils";
 
 /** Colour channel for the scatter (legend + per-point recolour). `cluster` and
  *  `none` are special; any other value is a declared atlas-channel name read
  *  from the descriptor (`activeView().atlasChannels(space)`). */
-export type ColorBy = 'cluster' | 'none' | (string & {});
+export type ColorBy = "cluster" | "none" | (string & {});
 
 /** Build a `descriptor-identity → point index` map once per loaded space. The
  *  key is the joined identity key fields — the doc key resolved through the
@@ -52,10 +52,10 @@ export function buildKeyIndex(pts: AtlasPoints): Map<string, number> {
         }
         parts.push(d);
       } else {
-        parts.push(String(pts.keys[field]?.[i] ?? ''));
+        parts.push(String(pts.keys[field]?.[i] ?? ""));
       }
     }
-    if (ok) map.set(parts.join('|'), i);
+    if (ok) map.set(parts.join("|"), i);
   }
   return map;
 }
@@ -79,9 +79,9 @@ class CrossFilter {
   /** Point indices of the current search+facet results; null ⇒ no active filter. */
   filteredIds = $state.raw<Set<number> | null>(null);
   /** Which projection the map is showing; the page may read it to fetch per space. */
-  space = $state<AtlasSpace>('text');
+  space = $state<AtlasSpace>("text");
   /** Colour channel for the scatter. */
-  colorBy = $state<ColorBy>('cluster');
+  colorBy = $state<ColorBy>("cluster");
   /** Per-colour-mode hidden codes (a code only means something within its own
    *  colour channel). Keyed by ColorBy; recoloured to background on the map. */
   hiddenByMode = $state.raw<Map<ColorBy, Set<number>>>(new Map());

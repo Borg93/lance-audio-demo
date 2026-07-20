@@ -11,8 +11,8 @@
  * chunk; engines that ignore the END fragment are stopped by the timeupdate
  * guard below. Mirrors the `voiceSearch` singleton pattern.
  */
-import { SvelteSet } from 'svelte/reactivity';
-import { activeView } from '$lib/descriptor';
+import { SvelteSet } from "svelte/reactivity";
+import { activeView } from "$lib/descriptor";
 
 /** Grace past the clip end before the manual stop kicks in — engines that DO
  *  honor the end fragment pause themselves first and never reach it. */
@@ -57,11 +57,11 @@ class AudioPreviewStore {
     // end. Build the doc's media URL through the descriptor's doc key.
     const view = activeView();
     const src = view.mediaUrl({ [view.docKeyField]: docId });
-    el.src = `${src}#t=${start}${end > start ? `,${end}` : ''}`;
+    el.src = `${src}#t=${start}${end > start ? `,${end}` : ""}`;
     this.playing = key;
     void el.play().catch((err: unknown) => {
       // Quickly switching to another row aborts this play() — not a failure.
-      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (err instanceof DOMException && err.name === "AbortError") return;
       if (this.playing === key) this.playing = null;
       this.#failedDocs.add(docId);
     });
@@ -69,22 +69,22 @@ class AudioPreviewStore {
 
   #create(): HTMLAudioElement {
     const el = new Audio();
-    el.preload = 'none';
+    el.preload = "none";
     // ANY pause — manual toggle, natural end, the timeupdate guard — clears
     // the playing row. `paused` flips false the moment a new play() starts,
     // so a late pause event from a superseded source can't clear the new row.
-    el.addEventListener('pause', () => {
+    el.addEventListener("pause", () => {
       if (el.paused) this.playing = null;
     });
-    el.addEventListener('ended', () => {
+    el.addEventListener("ended", () => {
       this.playing = null;
     });
-    el.addEventListener('error', () => {
+    el.addEventListener("error", () => {
       // Fires only for the CURRENT source (a superseded load aborts silently).
       if (this.#docId) this.#failedDocs.add(this.#docId);
       this.playing = null;
     });
-    el.addEventListener('timeupdate', () => {
+    el.addEventListener("timeupdate", () => {
       // Engines that ignore the end fragment would play through the clip.
       if (el.currentTime >= this.#end + END_SLACK_S) el.pause();
     });

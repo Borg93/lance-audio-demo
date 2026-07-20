@@ -31,7 +31,7 @@ export function hslToRgb(h: number, s: number, l: number): Rgb {
 
 /** `#rgb` / `#rrggbb` → byte RGB (black on a malformed value). */
 export function hexToRgb(hex: string): Rgb {
-  let h = hex.trim().replace('#', '');
+  let h = hex.trim().replace("#", "");
   if (h.length === 3) h = h[0]! + h[0]! + h[1]! + h[1]! + h[2]! + h[2]!;
   const n = Number.parseInt(h, 16);
   if (!Number.isFinite(n)) return { r: 0, g: 0, b: 0 };

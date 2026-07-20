@@ -9,7 +9,7 @@
  */
 
 /** Media modality of a unit to annotate — the sole per-modality fork point. */
-export type MediaKind = 'image' | 'audio' | 'video';
+export type MediaKind = "image" | "audio" | "video";
 
 /** Everything a viewer needs to render + annotate one unit, resolved from the
  *  descriptor upstream so the viewer itself is decoupled from routing/data. */
@@ -40,7 +40,7 @@ export interface ViewerProps {
  *  (frontend/src/lib/engine/schema.ts): bbox, oriented box, polygon, HTR baseline,
  *  line, point, and raster MASK. */
 export interface SpatialGeom {
-  shape_type: 'rectangle' | 'rotation' | 'polygon' | 'baseline' | 'line' | 'point' | 'mask';
+  shape_type: "rectangle" | "rotation" | "polygon" | "baseline" | "line" | "point" | "mask";
   x: number;
   y: number;
   width: number;

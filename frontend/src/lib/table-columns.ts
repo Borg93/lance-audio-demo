@@ -18,7 +18,7 @@
  * All storage access is best-effort (private mode / quota → fall back to
  * defaults, never throw).
  */
-import * as v from 'valibot';
+import * as v from "valibot";
 
 const SavedColsSchema = v.object({ cols: v.array(v.string()), known: v.array(v.string()) });
 

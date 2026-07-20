@@ -4,17 +4,17 @@
  * without) WorkflowGraph's internals. It reads topology + config and writes
  * results back through the narrow `RunDeps` seam; it never touches the class.
  */
-import type { Edge, Node } from '@xyflow/svelte';
-import { relevanceOf, search, type Hit, type SearchSpec } from '$lib/api';
-import { hitKey } from '$lib/utils';
-import { chunkScopeClause, dedupeHits, videoScopeClause } from './scope';
+import type { Edge, Node } from "@xyflow/svelte";
+import { relevanceOf, search, type Hit, type SearchSpec } from "$lib/api";
+import { hitKey } from "$lib/utils";
+import { chunkScopeClause, dedupeHits, videoScopeClause } from "./scope";
 import {
   RERANK_TOP_N,
   type NodeConfig,
   type NodeKind,
   type NodeOutput,
   type NodeRuntime,
-} from './types';
+} from "./types";
 
 /** Everything the executor needs from the graph — a narrow interface so the
  *  store stays in control of state while the algorithm lives here. */
@@ -105,8 +105,7 @@ export async function runSubgraph(
     // it was computed from the predecessor's previous output. `order` is
     // topological, so every pred's run/reuse decision is already made.
     const predRecomputed = preds.some((p) => ranSet.has(p));
-    const cached =
-      id === targetId || opts.fresh || predRecomputed ? null : deps.cachedOutput(id);
+    const cached = id === targetId || opts.fresh || predRecomputed ? null : deps.cachedOutput(id);
     if (cached) {
       outputs.set(id, Promise.resolve(cached));
       continue;
@@ -119,7 +118,7 @@ export async function runSubgraph(
   return { error: null, ran };
 }
 
-const CYCLE_ERROR = 'The graph has a cycle — remove a connection and run again.';
+const CYCLE_ERROR = "The graph has a cycle — remove a connection and run again.";
 
 /** target → [sources], restricted to `ids` (drops edges touching unknown nodes). */
 function incomingMap(edges: Edge[], ids: Set<string>): Map<string, string[]> {
@@ -194,7 +193,7 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
   // An upstream failure blocks this node (and, via the flag, everything after
   // it) — even through a disabled node, which only bypasses its OWN work.
   if (predOutputs.some((o) => o.failed)) {
-    deps.patchRuntime(id, { status: 'error', error: 'Skipped — an upstream node failed.' });
+    deps.patchRuntime(id, { status: "error", error: "Skipped — an upstream node failed." });
     return { spec: {}, hits: null, failed: true };
   }
 
@@ -223,22 +222,22 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
 
   // Disabled node: bypass it — forward the scope, contribute nothing.
   if (!cfg.enabled) {
-    deps.patchRuntime(id, { status: 'idle', hits: scope, count: scope?.length ?? null });
+    deps.patchRuntime(id, { status: "idle", hits: scope, count: scope?.length ?? null });
     return { spec: {}, hits: scope };
   }
 
   try {
     switch (kind) {
-      case 'query': {
+      case "query": {
         const q = cfg.q.trim();
-        deps.patchRuntime(id, { status: q ? 'done' : 'idle' });
+        deps.patchRuntime(id, { status: q ? "done" : "idle" });
         return { spec: q ? { q } : {}, hits: null };
       }
-      case 'image': {
-        deps.patchRuntime(id, { status: cfg.image ? 'done' : 'idle' });
+      case "image": {
+        deps.patchRuntime(id, { status: cfg.image ? "done" : "idle" });
         return { spec: cfg.image ? { image: cfg.image } : {}, hits: null };
       }
-      case 'filter': {
+      case "filter": {
         const spec: Partial<SearchSpec> = {};
         if (cfg.where.trim()) spec.where = cfg.where.trim();
         // Structured facets keyed by descriptor filterable field name.
@@ -248,10 +247,10 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
           if (v) filters[field] = v;
         }
         if (Object.keys(filters).length) spec.filters = filters;
-        deps.patchRuntime(id, { status: Object.keys(spec).length ? 'done' : 'idle' });
+        deps.patchRuntime(id, { status: Object.keys(spec).length ? "done" : "idle" });
         return { spec, hits: null };
       }
-      case 'atlas': {
+      case "atlas": {
         // Emit the selection the user CAPTURED in the Atlas modal viewer
         // (stored on the node's config), NOT the live global crossFilter — so
         // the /atlas page and the workflow no longer share live map state. An
@@ -259,16 +258,16 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
         const captured = cfg.capturedAtlasSelection;
         const hits = captured && captured.length ? captured : null;
         deps.patchRuntime(id, {
-          status: hits ? 'done' : 'idle',
+          status: hits ? "done" : "idle",
           hits,
           count: hits?.length ?? null,
         });
         return { spec: {}, hits };
       }
-      case 'combine': {
+      case "combine": {
         let combined: Hit[] = [];
         if (sourceHitSets.length) {
-          if (cfg.combineMode === 'intersect') {
+          if (cfg.combineMode === "intersect") {
             const keySets = sourceHitSets.map((s) => new Set(s.map(hitKey)));
             combined = dedupeHits(
               sourceHitSets[0]!.filter((h) => keySets.every((ks) => ks.has(hitKey(h)))),
@@ -278,24 +277,24 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
           }
         }
         deps.patchRuntime(id, {
-          status: sourceHitSets.length ? 'done' : 'idle',
+          status: sourceHitSets.length ? "done" : "idle",
           hits: combined,
           count: combined.length,
         });
         return { spec: {}, hits: combined.length ? combined : null };
       }
-      case 'tagger': {
+      case "tagger": {
         // Stamp this node's tags onto every passing chunk (shared store), then
         // forward them unchanged. Inline tags on the same chunks survive too.
         if (scope) deps.tagHits(scope, cfg.tags);
         deps.patchRuntime(id, {
-          status: scope ? 'done' : 'idle',
+          status: scope ? "done" : "idle",
           hits: scope,
           count: scope?.length ?? null,
         });
         return { spec: {}, hits: scope };
       }
-      case 'search': {
+      case "search": {
         // Query is a connected Query node if wired, else this node's inline field.
         const q = inSpec.q?.trim() || cfg.q.trim();
         const image = inSpec.image ?? null;
@@ -308,14 +307,14 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
           // Nothing to search for — pass the scope through so a half-configured
           // node never breaks the chain.
           deps.patchRuntime(id, {
-            status: 'idle',
+            status: "idle",
             hits: scope,
             count: scope?.length ?? null,
             droppedInputs,
           });
           return { spec: {}, hits: scope };
         }
-        deps.patchRuntime(id, { status: 'running' });
+        deps.patchRuntime(id, { status: "running" });
 
         const spec: SearchSpec = { q, n: cfg.n, mode: cfg.mode };
         if (cfg.rerank) {
@@ -334,17 +333,17 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
         let scopeCapped = false;
         if (scope?.length) {
           const sc =
-            cfg.refineScope === 'chunk' ? chunkScopeClause(scope) : videoScopeClause(scope);
+            cfg.refineScope === "chunk" ? chunkScopeClause(scope) : videoScopeClause(scope);
           if (sc) {
             wheres.push(sc.clause);
             scopeCapped = sc.capped;
-            if (cfg.refineScope === 'chunk') scopedChunks = sc.count;
+            if (cfg.refineScope === "chunk") scopedChunks = sc.count;
             else scopedDocs = sc.count;
           }
         }
         // Parenthesize each clause: a user filter like `a = 1 OR b = 2` must not
         // let OR-precedence swallow the ANDed scope clause.
-        if (wheres.length) spec.where = wheres.map((w) => `(${w})`).join(' AND ');
+        if (wheres.length) spec.where = wheres.map((w) => `(${w})`).join(" AND ");
 
         const t0 = performance.now();
         let hits = await search(spec);
@@ -359,7 +358,7 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
           });
         }
         deps.patchRuntime(id, {
-          status: 'done',
+          status: "done",
           hits,
           count: hits.length,
           ms,
@@ -372,10 +371,10 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
       }
       // Sinks: collect the incoming hits and surface them (Results renders them;
       // Export downloads them). Neither contributes a spec.
-      case 'results':
-      case 'export': {
+      case "results":
+      case "export": {
         deps.patchRuntime(id, {
-          status: scope ? 'done' : 'idle',
+          status: scope ? "done" : "idle",
           hits: scope,
           count: scope?.length ?? null,
         });
@@ -389,7 +388,7 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    deps.patchRuntime(id, { status: 'error', error: msg });
+    deps.patchRuntime(id, { status: "error", error: msg });
     return { spec: {}, hits: null, failed: true };
   }
 }

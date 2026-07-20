@@ -4,19 +4,19 @@
  * persistence schema can both import them without an import cycle (the graph
  * re-exports the public ones, so components keep importing from graph.svelte).
  */
-import type { Hit, SearchMode, SearchSpec } from '$lib/api';
+import type { Hit, SearchMode, SearchSpec } from "$lib/api";
 
 /** The pipeline stages, as a runtime list (drives the persistence schema). */
 export const NODE_KINDS = [
-  'query',
-  'image',
-  'filter',
-  'atlas',
-  'search',
-  'combine',
-  'tagger',
-  'results',
-  'export',
+  "query",
+  "image",
+  "filter",
+  "atlas",
+  "search",
+  "combine",
+  "tagger",
+  "results",
+  "export",
 ] as const;
 /** A node's `type` (used to pick its component) is its kind. */
 export type NodeKind = (typeof NODE_KINDS)[number];
@@ -26,7 +26,7 @@ export function isNodeKind(v: string | undefined): v is NodeKind {
   return v !== undefined && (NODE_KINDS as readonly string[]).includes(v);
 }
 
-export type RunStatus = 'idle' | 'running' | 'done' | 'error';
+export type RunStatus = "idle" | "running" | "done" | "error";
 
 /** Head size the cross-encoder reranker re-scores when a Search has rerank on.
  *  One source of truth so the executor spec and the Inspector badge can't drift. */
@@ -35,8 +35,8 @@ export const RERANK_TOP_N = 20;
 /** The Search node's two target ports: general upstream (query / filter /
  *  results scope) vs the image input. Shared by the SearchNode handles, the
  *  connection validation, and the persistence migration. */
-export const SEARCH_IN_HANDLE = 'in';
-export const SEARCH_IMAGE_HANDLE = 'image';
+export const SEARCH_IN_HANDLE = "in";
+export const SEARCH_IMAGE_HANDLE = "image";
 
 /** A Search node's result count (`n`): default + allowed range. One source of
  *  truth for the default config, the persistence clamp, and the SearchNode input. */
@@ -45,10 +45,10 @@ export const MIN_N = 1;
 export const MAX_N = 100;
 
 /** How a Combine node merges its incoming result sets. */
-export type CombineMode = 'union' | 'intersect';
+export type CombineMode = "union" | "intersect";
 
 /** Granularity of a Search's refinement by an upstream result set. */
-export type RefineScope = 'video' | 'chunk';
+export type RefineScope = "video" | "chunk";
 
 /** Per-node user input. One flat shape covers every kind (each node UI only
  *  edits the fields it cares about) — simpler than a discriminated union for a
@@ -82,7 +82,7 @@ export interface NodeConfig {
   tags: string[];
   /** export: download format + which columns to include. `null` = every column
    *  the active dataset offers (resolved from the descriptor at export time). */
-  exportFormat: 'json' | 'csv';
+  exportFormat: "json" | "csv";
   exportColumns: string[] | null;
   /** atlas: the exact hit set the user captured in the Atlas modal viewer
    *  (lasso/box/legend selection). `null` until a selection is confirmed; the

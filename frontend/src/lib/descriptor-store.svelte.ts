@@ -9,8 +9,8 @@
  * endpoint's db path.
  */
 
-import { getDatasetView, getHealth } from '$lib/api';
-import { setActiveView, type DatasetView } from '$lib/descriptor';
+import { getDatasetView, getHealth } from "$lib/api";
+import { setActiveView, type DatasetView } from "$lib/descriptor";
 
 class DescriptorStore {
   view = $state<DatasetView | null>(null);
@@ -18,8 +18,8 @@ class DescriptorStore {
 
   /** The dataset id from `?dataset=`, or null for the default DB. */
   private paramId(): string | null {
-    if (typeof location === 'undefined') return null;
-    return new URLSearchParams(location.search).get('dataset');
+    if (typeof location === "undefined") return null;
+    return new URLSearchParams(location.search).get("dataset");
   }
 
   async load(): Promise<void> {
@@ -32,7 +32,11 @@ class DescriptorStore {
         isDefault = false;
       } else {
         const health = await getHealth();
-        id = health.db.path.replace(/\.lance$/, '').split('/').pop() ?? '';
+        id =
+          health.db.path
+            .replace(/\.lance$/, "")
+            .split("/")
+            .pop() ?? "";
         isDefault = true;
       }
       const view = await getDatasetView(id, isDefault);
@@ -40,7 +44,7 @@ class DescriptorStore {
       this.view = view;
       // Test hook: expose the active dataset id + identity so an e2e check can
       // prove which dataset the same build is currently rendering.
-      if (typeof window !== 'undefined') {
+      if (typeof window !== "undefined") {
         (window as unknown as { __activeDataset?: unknown }).__activeDataset = {
           id: view.id,
           keyFields: view.keyFields,

@@ -9,8 +9,8 @@
  * `$lib/descriptor`), which every renderer reads instead of hardcoding fields.
  */
 
-import { tableFromIPC, type Vector } from 'apache-arrow';
-import * as v from 'valibot';
+import { tableFromIPC, type Vector } from "apache-arrow";
+import * as v from "valibot";
 
 import {
   activeView,
@@ -20,10 +20,10 @@ import {
   type Row,
   RowSchema,
   type SearchMode,
-} from '$lib/descriptor';
+} from "$lib/descriptor";
 
-export type { Alignment, Row, SearchMode } from '$lib/descriptor';
-export { activeView } from '$lib/descriptor';
+export type { Alignment, Row, SearchMode } from "$lib/descriptor";
+export { activeView } from "$lib/descriptor";
 
 /** Legacy alias — a search/browse result row. Field access goes through the
  *  active {@link DatasetView}; this stays for import compatibility. */
@@ -39,15 +39,15 @@ const COSINE_DISTANCE_MAX = 2;
  *  always better; `null` when the hit carries no ranking signal. */
 export function relevanceOf(hit: Hit, mode?: SearchMode): number | null {
   switch (mode) {
-    case 'fts':
-    case 'scene_fts':
+    case "fts":
+    case "scene_fts":
       return hit._score ?? null;
-    case 'semantic':
-    case 'visual':
+    case "semantic":
+    case "visual":
       return hit._distance != null ? COSINE_DISTANCE_MAX - hit._distance : null;
-    case 'hybrid':
+    case "hybrid":
       return hit._relevance_score ?? null;
-    case 'scene':
+    case "scene":
       return null;
     default:
       if (hit._relevance_score != null) return hit._relevance_score;
@@ -94,7 +94,7 @@ export class ApiError extends Error {
     public readonly detail: string,
   ) {
     super(`api ${status}: ${detail}`);
-    this.name = 'ApiError';
+    this.name = "ApiError";
   }
 }
 
@@ -130,40 +130,40 @@ function appendCommonSearchParams(
   out: { append(name: string, value: string): void },
   spec: SearchSpec,
 ): void {
-  if (spec.rerank) out.append('rerank', 'true');
-  if (spec.rerank && spec.rerankN !== undefined) out.append('rerank_n', String(spec.rerankN));
-  if (spec.weight !== undefined) out.append('weight', String(spec.weight));
-  if (spec.qVec) out.append('q_vec', spec.qVec);
-  if (spec.where) out.append('where', spec.where);
-  if (spec.prefilter === false) out.append('prefilter', 'false');
+  if (spec.rerank) out.append("rerank", "true");
+  if (spec.rerank && spec.rerankN !== undefined) out.append("rerank_n", String(spec.rerankN));
+  if (spec.weight !== undefined) out.append("weight", String(spec.weight));
+  if (spec.qVec) out.append("q_vec", spec.qVec);
+  if (spec.where) out.append("where", spec.where);
+  if (spec.prefilter === false) out.append("prefilter", "false");
   // Descriptor-declared filterable fields, marshalled by their own names.
   for (const [field, value] of Object.entries(spec.filters ?? {})) {
     if (value) out.append(field, value);
   }
-  if (spec.topic) out.append('topic', spec.topic);
+  if (spec.topic) out.append("topic", spec.topic);
   const ds = datasetParam(spec);
-  if (ds) out.append('dataset', ds);
+  if (ds) out.append("dataset", ds);
 }
 
 /** Run a search. POST + multipart when an image is attached; GET otherwise. */
 export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): Promise<Row[]> {
   const n = String(spec.n ?? 30);
-  const mode = spec.mode ?? 'fts';
+  const mode = spec.mode ?? "fts";
 
   if (spec.image) {
     const fd = new FormData();
-    fd.append('image', spec.image);
-    if (spec.q) fd.append('q', spec.q);
-    fd.append('n', n);
-    fd.append('mode', mode);
+    fd.append("image", spec.image);
+    if (spec.q) fd.append("q", spec.q);
+    fd.append("n", n);
+    fd.append("mode", mode);
     appendCommonSearchParams(fd, spec);
-    const r = await fetcher('/api/search', { method: 'POST', body: fd });
+    const r = await fetcher("/api/search", { method: "POST", body: fd });
     return asJson(r, HitsArraySchema);
   }
 
   const params = new URLSearchParams({ q: spec.q, n, mode });
-  if (spec.fuzziness) params.append('fuzziness', String(spec.fuzziness));
-  if (spec.phrase) params.append('phrase', 'true');
+  if (spec.fuzziness) params.append("fuzziness", String(spec.fuzziness));
+  if (spec.phrase) params.append("phrase", "true");
   appendCommonSearchParams(params, spec);
   const r = await fetcher(`/api/search?${params}`);
   return asJson(r, HitsArraySchema);
@@ -172,7 +172,7 @@ export async function search(spec: SearchSpec, fetcher: typeof fetch = fetch): P
 /** `?dataset=` suffix for a bare GET URL (empty for the default dataset). */
 function datasetSuffix(): string {
   const ds = activeView().datasetParam();
-  return ds ? `?dataset=${encodeURIComponent(ds)}` : '';
+  return ds ? `?dataset=${encodeURIComponent(ds)}` : "";
 }
 
 const ChunkAlignmentsSchema = v.object({ alignments: v.array(AlignmentSchema) });
@@ -184,7 +184,7 @@ export async function getChunkAlignments(
   keys: (string | number)[],
   fetcher: typeof fetch = fetch,
 ): Promise<Alignment[]> {
-  const path = keys.map((k) => encodeURIComponent(String(k))).join('/');
+  const path = keys.map((k) => encodeURIComponent(String(k))).join("/");
   const r = await fetcher(`/api/chunk-alignments/${path}${datasetSuffix()}`);
   const data = await asJson(r, ChunkAlignmentsSchema);
   return data.alignments;
@@ -275,7 +275,7 @@ const HealthSchema = v.object({
 export type Health = v.InferOutput<typeof HealthSchema>;
 
 export async function getHealth(fetcher: typeof fetch = fetch): Promise<Health> {
-  const r = await fetcher('/api/health');
+  const r = await fetcher("/api/health");
   return asJson(r, HealthSchema);
 }
 
@@ -296,7 +296,7 @@ export async function listDocuments(
   fetcher: typeof fetch = fetch,
 ): Promise<DocumentsResponse> {
   const suffix = activeView().datasetParam();
-  const ds = suffix ? `&dataset=${encodeURIComponent(suffix)}` : '';
+  const ds = suffix ? `&dataset=${encodeURIComponent(suffix)}` : "";
   const r = await fetcher(`/api/documents?page=${page}&per_page=${perPage}${ds}`);
   return asJson(r, DocumentsResponseSchema);
 }
@@ -315,11 +315,11 @@ import {
   DatasetDescriptorSchema,
   DatasetsResponseSchema,
   DatasetView as DatasetViewClass,
-} from '$lib/descriptor';
+} from "$lib/descriptor";
 
 /** List the datasets the backend serves (id + table stats + capabilities). */
 export async function listDatasets(fetcher: typeof fetch = fetch) {
-  const r = await fetcher('/api/datasets');
+  const r = await fetcher("/api/datasets");
   return asJson(r, DatasetsResponseSchema).then((d) => d.datasets);
 }
 
@@ -361,8 +361,11 @@ export async function getAtlasStatus(
   fetcher: typeof fetch = fetch,
 ): Promise<AtlasStatus> {
   const ds = activeView().datasetParam();
-  const q = ds ? `&dataset=${encodeURIComponent(ds)}` : '';
-  return asJson(await fetcher(`/api/atlas/status?space=${encodeURIComponent(space)}${q}`), AtlasStatusSchema);
+  const q = ds ? `&dataset=${encodeURIComponent(ds)}` : "";
+  return asJson(
+    await fetcher(`/api/atlas/status?space=${encodeURIComponent(space)}${q}`),
+    AtlasStatusSchema,
+  );
 }
 
 /** A factorized (codes, labels) pair from one Arrow DICTIONARY column. */
@@ -454,7 +457,7 @@ export async function getAtlasPoints(
 ): Promise<AtlasPoints> {
   const view = activeView();
   const ds = view.datasetParam();
-  const dsq = ds ? `&dataset=${encodeURIComponent(ds)}` : '';
+  const dsq = ds ? `&dataset=${encodeURIComponent(ds)}` : "";
   const r = await fetcher(`/api/atlas/points?space=${encodeURIComponent(space)}&v=6${dsq}`);
   if (!r.ok) throw await apiErrorFrom(r);
 
@@ -462,15 +465,15 @@ export async function getAtlasPoints(
   const table = tableFromIPC(new Uint8Array(buf));
   const md = table.schema.metadata;
 
-  const count = Number(md.get('count') ?? table.numRows);
-  const spaceMeta = md.get('space');
-  const docFilesMeta = md.get('docFiles');
+  const count = Number(md.get("count") ?? table.numRows);
+  const spaceMeta = md.get("space");
+  const docFilesMeta = md.get("docFiles");
 
-  const doc = dictColumn(table.getChild('doc'));
-  if (!doc) throw new ApiError(500, 'malformed /api/atlas/points payload (no doc column)');
+  const doc = dictColumn(table.getChild("doc"));
+  if (!doc) throw new ApiError(500, "malformed /api/atlas/points payload (no doc column)");
 
-  const xBits = u16Column(table.getChild('x'));
-  const yBits = u16Column(table.getChild('y'));
+  const xBits = u16Column(table.getChild("x"));
+  const yBits = u16Column(table.getChild("y"));
 
   // Non-doc identity key columns, by field name.
   const keys: Record<string, number[]> = {};
@@ -500,13 +503,13 @@ export async function getAtlasPoints(
   };
   if (spaceMeta) data.space = spaceMeta;
   if (docFilesMeta) data.docFiles = v.parse(v.array(v.string()), JSON.parse(docFilesMeta));
-  const rowid = table.getChild('rowid');
+  const rowid = table.getChild("rowid");
   if (rowid) data.rowid = numberColumn(rowid);
-  const cluster = table.getChild('cluster');
+  const cluster = table.getChild("cluster");
   if (cluster) data.cluster = int32Column(cluster);
 
   if (!Number.isFinite(data.count) || data.x.length !== data.count) {
-    throw new ApiError(500, 'malformed /api/atlas/points payload');
+    throw new ApiError(500, "malformed /api/atlas/points payload");
   }
   return data;
 }
@@ -516,18 +519,21 @@ export async function getAtlasChunk(
   keys: (string | number)[],
   fetcher: typeof fetch = fetch,
 ): Promise<Row> {
-  const path = keys.map((k) => encodeURIComponent(String(k))).join('/');
+  const path = keys.map((k) => encodeURIComponent(String(k))).join("/");
   const r = await fetcher(`/api/atlas/chunk/${path}${datasetSuffix()}`);
   return asJson(r, RowSchema);
 }
 
 /** Full rows for a selection, addressed by stable Lance `_rowid`. */
-export async function getAtlasChunks(rowids: number[], fetcher: typeof fetch = fetch): Promise<Row[]> {
+export async function getAtlasChunks(
+  rowids: number[],
+  fetcher: typeof fetch = fetch,
+): Promise<Row[]> {
   const ds = activeView().datasetParam();
-  const url = ds ? `/api/atlas/chunks?dataset=${encodeURIComponent(ds)}` : '/api/atlas/chunks';
+  const url = ds ? `/api/atlas/chunks?dataset=${encodeURIComponent(ds)}` : "/api/atlas/chunks";
   const r = await fetcher(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rowids }),
   });
   return asJson(r, HitsArraySchema);
@@ -598,10 +604,10 @@ export async function runGraphCypher(
   fetcher: typeof fetch = fetch,
 ): Promise<GraphCypherResponse> {
   const ds = activeView().datasetParam();
-  const url = ds ? `/api/graph/cypher?dataset=${encodeURIComponent(ds)}` : '/api/graph/cypher';
+  const url = ds ? `/api/graph/cypher?dataset=${encodeURIComponent(ds)}` : "/api/graph/cypher";
   const r = await fetcher(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, limit }),
   });
   return asJson(r, GraphCypherResponseSchema);
@@ -627,7 +633,7 @@ export async function searchGraphEntities(
   fetcher: typeof fetch = fetch,
 ): Promise<GraphSearchResponse> {
   const ds = activeView().datasetParam();
-  const dsq = ds ? `&dataset=${encodeURIComponent(ds)}` : '';
+  const dsq = ds ? `&dataset=${encodeURIComponent(ds)}` : "";
   return asJson(
     await fetcher(`/api/graph/search?q=${encodeURIComponent(q)}${dsq}`),
     GraphSearchResponseSchema,
@@ -658,7 +664,7 @@ const GraphNeighborSchema = v.object({
   entity_id: v.string(),
   name: v.string(),
   entity_type: v.string(),
-  direction: v.picklist(['out', 'in']),
+  direction: v.picklist(["out", "in"]),
   description: v.string(),
 });
 export type GraphNeighbor = v.InferOutput<typeof GraphNeighborSchema>;
@@ -721,10 +727,10 @@ export async function getGraphSubgraph(
   const params = new URLSearchParams({ limit: String(limit) });
   if (entityId !== undefined) {
     if (!isEntityId(entityId)) throw new ApiError(400, `invalid entity id: ${entityId}`);
-    params.set('entity_id', entityId);
+    params.set("entity_id", entityId);
   }
   const ds = activeView().datasetParam();
-  if (ds) params.set('dataset', ds);
+  if (ds) params.set("dataset", ds);
   return asJson(await fetcher(`/api/graph/subgraph?${params}`), GraphSubgraphResponseSchema);
 }
 
@@ -743,7 +749,8 @@ export async function getVoiceStatus(fetcher: typeof fetch = fetch): Promise<Voi
 /** A voice-ranked hit: the matched row (renders as a normal result card) plus
  *  the matched speaker turn. The row envelope is a {@link Row}; the turn fields
  *  are the voice capability's own contract. */
-export const VoiceHitSchema = v.intersect([RowSchema,
+export const VoiceHitSchema = v.intersect([
+  RowSchema,
   v.object({
     speaker_label: v.string(),
     turn_id: v.pipe(v.number(), v.integer()),
@@ -790,13 +797,14 @@ export async function voiceSimilar(
   fetcher: typeof fetch = fetch,
 ): Promise<VoiceSimilarResponse> {
   const params = new URLSearchParams({ doc_id: anchor.docId });
-  if ('turnId' in anchor) params.set('turn_id', String(anchor.turnId));
-  else if ('speaker' in anchor) params.set('speaker', anchor.speaker);
-  else params.set('t', String(anchor.t));
-  if (opts.n !== undefined) params.set('n', String(opts.n));
-  if (opts.excludeSameDoc !== undefined) params.set('exclude_same_doc', String(opts.excludeSameDoc));
+  if ("turnId" in anchor) params.set("turn_id", String(anchor.turnId));
+  else if ("speaker" in anchor) params.set("speaker", anchor.speaker);
+  else params.set("t", String(anchor.t));
+  if (opts.n !== undefined) params.set("n", String(opts.n));
+  if (opts.excludeSameDoc !== undefined)
+    params.set("exclude_same_doc", String(opts.excludeSameDoc));
   const ds = activeView().datasetParam();
-  if (ds) params.set('dataset', ds);
+  if (ds) params.set("dataset", ds);
   return asJson(await fetcher(`/api/voice/similar?${params}`), VoiceSimilarResponseSchema);
 }
 
@@ -806,26 +814,26 @@ export async function voiceSimilarUpload(
   fetcher: typeof fetch = fetch,
 ): Promise<VoiceSimilarResponse> {
   const params = new URLSearchParams();
-  if (opts.n !== undefined) params.set('n', String(opts.n));
+  if (opts.n !== undefined) params.set("n", String(opts.n));
   const ds = activeView().datasetParam();
-  if (ds) params.set('dataset', ds);
+  if (ds) params.set("dataset", ds);
   const fd = new FormData();
-  fd.append('file', file);
-  const url = params.size > 0 ? `/api/voice/similar?${params}` : '/api/voice/similar';
-  const r = await fetcher(url, { method: 'POST', body: fd });
+  fd.append("file", file);
+  const url = params.size > 0 ? `/api/voice/similar?${params}` : "/api/voice/similar";
+  const r = await fetcher(url, { method: "POST", body: fd });
   return asJson(r, VoiceSimilarResponseSchema);
 }
 
-export type VoiceBand = 'strong' | 'possible';
+export type VoiceBand = "strong" | "possible";
 
 export function voiceBandOf(turnScore: number): VoiceBand | null {
-  if (turnScore >= 0.7) return 'strong';
-  if (turnScore >= 0.6) return 'possible';
+  if (turnScore >= 0.7) return "strong";
+  if (turnScore >= 0.6) return "possible";
   return null;
 }
 
 /** Narrow a Row to a VoiceHit so shared result components render the speaker
  *  chip only for voice-mode hits. Structural check (validated at fetch). */
 export function isVoiceHit(hit: Row): hit is VoiceHit {
-  return 'turn_score' in hit && 'speaker_label' in hit;
+  return "turn_score" in hit && "speaker_label" in hit;
 }

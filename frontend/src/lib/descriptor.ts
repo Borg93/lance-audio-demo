@@ -12,7 +12,7 @@
  * rows through it instead of hardcoding field names.
  */
 
-import * as v from 'valibot';
+import * as v from "valibot";
 
 // ─────────────────────────────────────────────────────────────────────
 // Descriptor envelope (mirrors backend/lancekit/descriptor.py)
@@ -34,14 +34,16 @@ const TableInfoSchema = v.object({
   row_count: int(),
   version: int(),
   columns: v.array(ColumnInfoSchema),
-  indexes: v.array(v.object({ name: v.string(), index_type: v.string(), columns: v.array(v.string()) })),
+  indexes: v.array(
+    v.object({ name: v.string(), index_type: v.string(), columns: v.array(v.string()) }),
+  ),
 });
 export type TableInfo = v.InferOutput<typeof TableInfoSchema>;
 
 const IdentitySchema = v.object({
   key_fields: v.pipe(v.array(v.string()), v.minLength(1)),
-  doc_key: v.optional(v.string(), 'doc_id'),
-  doc_key_pattern: v.optional(v.string(), '.*'),
+  doc_key: v.optional(v.string(), "doc_id"),
+  doc_key_pattern: v.optional(v.string(), ".*"),
 });
 
 const DocumentBindingSchema = v.object({
@@ -74,7 +76,13 @@ const VectorBindingSchema = v.object({
 const SearchSchema = v.object({
   row_table: v.string(),
   fts: v.optional(
-    v.nullable(v.object({ table: v.string(), column: v.string(), language: v.optional(v.string(), 'English') })),
+    v.nullable(
+      v.object({
+        table: v.string(),
+        column: v.string(),
+        language: v.optional(v.string(), "English"),
+      }),
+    ),
     null,
   ),
   vectors: v.optional(v.record(v.string(), VectorBindingSchema), {}),
@@ -163,13 +171,13 @@ export type Row = v.InferOutput<typeof RowSchema> & Record<string, unknown>;
  *  keeps the type open so a dataset can declare a vector space under ANY key
  *  (e.g. `audio`) and have it flow through as a mode without a type edit. */
 export type SearchMode =
-  | 'fts'
-  | 'semantic'
-  | 'visual'
-  | 'scene'
-  | 'scene_fts'
-  | 'hybrid'
-  | 'all'
+  | "fts"
+  | "semantic"
+  | "visual"
+  | "scene"
+  | "scene_fts"
+  | "hybrid"
+  | "all"
   | (string & {});
 
 /** Generic column categories, derived from the LANCE/Arrow type (never a corpus
@@ -177,13 +185,13 @@ export type SearchMode =
  *  any-future embedding are ONE category. Drives type-appropriate UI (filters,
  *  search) without naming what a column means. */
 export type ColumnCategory =
-  | 'embedding'
-  | 'blob'
-  | 'numerical'
-  | 'categorical'
-  | 'temporal'
-  | 'text'
-  | 'other';
+  | "embedding"
+  | "blob"
+  | "numerical"
+  | "categorical"
+  | "temporal"
+  | "text"
+  | "other";
 
 // `half_?float` catches both pyarrow's `halffloat` (float16) and a `half_float`
 // spelling; the `\b` keeps `int`/`float` from matching inside longer words.
@@ -194,17 +202,17 @@ const _TEMPORAL_RE = /\b(timestamp|date\d*|time\d*|duration|interval)\b/;
  *  string columns that carry an FTS index (→ `text`, i.e. full-text searchable);
  *  every other string/bool is `categorical`. */
 export function categoryOf(col: ColumnInfo, ftsColumns?: ReadonlySet<string>): ColumnCategory {
-  if (col.vector_dim != null) return 'embedding'; // fixed_size_list<float> — uniform, any modality
-  if (col.is_blob) return 'blob'; // lance.blob.v2 — media bytes
+  if (col.vector_dim != null) return "embedding"; // fixed_size_list<float> — uniform, any modality
+  if (col.is_blob) return "blob"; // lance.blob.v2 — media bytes
   const t = col.arrow_type.toLowerCase();
-  if (ftsColumns?.has(col.name) && (t.includes('string') || t.includes('utf8'))) return 'text';
+  if (ftsColumns?.has(col.name) && (t.includes("string") || t.includes("utf8"))) return "text";
   // A dictionary type names an integer INDEX type (`dictionary<…, indices=int32>`),
   // so it must be classified before the numeric test or it'd read as 'numerical'.
-  if (t.includes('dictionary')) return 'categorical';
-  if (_NUMERIC_RE.test(t)) return 'numerical';
-  if (_TEMPORAL_RE.test(t)) return 'temporal';
-  if (t.includes('string') || t.includes('utf8') || t.includes('bool')) return 'categorical';
-  return 'other';
+  if (t.includes("dictionary")) return "categorical";
+  if (_NUMERIC_RE.test(t)) return "numerical";
+  if (_TEMPORAL_RE.test(t)) return "temporal";
+  if (t.includes("string") || t.includes("utf8") || t.includes("bool")) return "categorical";
+  return "other";
 }
 
 /** One declared embedding space, treated uniformly regardless of what it embeds.
@@ -231,7 +239,7 @@ function str(value: unknown): string | null {
 }
 
 function num(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export class DatasetView {
@@ -256,16 +264,16 @@ export class DatasetView {
 
   /** Stable per-row identity key (the descriptor's key fields joined). */
   rowKey(row: Row): string {
-    return this.keyFields.map((k) => String(row[k] ?? '')).join('|');
+    return this.keyFields.map((k) => String(row[k] ?? "")).join("|");
   }
 
   docId(row: Row): string {
-    return String(row[this.docKeyField] ?? '');
+    return String(row[this.docKeyField] ?? "");
   }
 
   /** The path segments a media route takes (doc key first, then the rest). */
   keyPath(row: Row): string[] {
-    return this.keyFields.map((k) => encodeURIComponent(String(row[k] ?? '')));
+    return this.keyFields.map((k) => encodeURIComponent(String(row[k] ?? "")));
   }
 
   // ── display ───────────────────────────────────────────────────────
@@ -283,7 +291,7 @@ export class DatasetView {
   }
 
   body(row: Row): string {
-    return this.bodyField ? (str(row[this.bodyField]) ?? '') : '';
+    return this.bodyField ? (str(row[this.bodyField]) ?? "") : "";
   }
 
   get captionField(): string | null {
@@ -323,7 +331,7 @@ export class DatasetView {
   }
 
   duration(row: Row): number | null {
-    const d = num(row['duration']);
+    const d = num(row["duration"]);
     if (d !== null) return d;
     const t = this.time(row);
     return t ? t.end - t.start : null;
@@ -383,17 +391,17 @@ export class DatasetView {
     // served by its own capability, not this box, and the backend would 400 a
     // text query against it — so it's not offered as a mode.
     const queryable = this.vectorSpaces.filter(
-      (s) => s.encoder === 'text' || s.encoder === 'image',
+      (s) => s.encoder === "text" || s.encoder === "image",
     );
     const modes: SearchMode[] = [];
-    if (search.fts != null) modes.push('fts');
+    if (search.fts != null) modes.push("fts");
     for (const s of queryable) modes.push(s.key);
     for (const s of queryable) if (s.captionSource) modes.push(`${s.key}_fts`);
     // Hybrid fuses FTS + a text vector on ONE table, so it needs a text-encoder
     // space on the row table; offer it only when that exists.
-    const hasRowTextSpace = queryable.some((s) => s.encoder === 'text' && s.onRowTable);
-    if (search.fts != null && hasRowTextSpace) modes.push('hybrid');
-    if (modes.length > 1) modes.push('all');
+    const hasRowTextSpace = queryable.some((s) => s.encoder === "text" && s.onRowTable);
+    if (search.fts != null && hasRowTextSpace) modes.push("hybrid");
+    if (modes.length > 1) modes.push("all");
     return modes;
   }
 
@@ -404,15 +412,15 @@ export class DatasetView {
   /** One comparable relevance number (higher = better), or null if unranked. */
   relevanceOf(row: Row, mode?: SearchMode): number | null {
     switch (mode) {
-      case 'fts':
-      case 'scene_fts':
+      case "fts":
+      case "scene_fts":
         return row._score ?? null;
-      case 'semantic':
-      case 'visual':
+      case "semantic":
+      case "visual":
         return row._distance != null ? COSINE_DISTANCE_MAX - row._distance : null;
-      case 'hybrid':
+      case "hybrid":
         return row._relevance_score ?? null;
-      case 'scene':
+      case "scene":
         return null;
       default:
         if (row._relevance_score != null) return row._relevance_score;
@@ -432,16 +440,16 @@ export class DatasetView {
   }
 
   mediaUrl(row: Row): string {
-    return `/api/media/${encodeURIComponent(this.docId(row))}${this.datasetQuery('?')}`;
+    return `/api/media/${encodeURIComponent(this.docId(row))}${this.datasetQuery("?")}`;
   }
 
   thumbnailUrl(row: Row): string {
-    return `/api/thumbnail/${encodeURIComponent(this.docId(row))}${this.datasetQuery('?')}`;
+    return `/api/thumbnail/${encodeURIComponent(this.docId(row))}${this.datasetQuery("?")}`;
   }
 
   /** Per-row frame image (route arity = identity key fields). */
   frameUrl(row: Row): string {
-    return `/api/chunk-frame/${this.keyPath(row).join('/')}${this.datasetQuery('?')}`;
+    return `/api/chunk-frame/${this.keyPath(row).join("/")}${this.datasetQuery("?")}`;
   }
 
   // ── capabilities ──────────────────────────────────────────────────
@@ -472,8 +480,8 @@ export class DatasetView {
     return this;
   }
 
-  private datasetQuery(prefix: '?' | '&'): string {
-    return this.isDefault ? '' : `${prefix}dataset=${encodeURIComponent(this.id)}`;
+  private datasetQuery(prefix: "?" | "&"): string {
+    return this.isDefault ? "" : `${prefix}dataset=${encodeURIComponent(this.id)}`;
   }
 
   datasetParam(): string | null {
@@ -500,6 +508,6 @@ export function activeViewOrNull(): DatasetView | null {
 /** The active dataset view. Throws if the descriptor hasn't loaded yet — call
  *  sites run after the app-root descriptor fetch resolves. */
 export function activeView(): DatasetView {
-  if (_active === null) throw new Error('dataset descriptor not loaded');
+  if (_active === null) throw new Error("dataset descriptor not loaded");
   return _active;
 }

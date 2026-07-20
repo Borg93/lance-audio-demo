@@ -1,16 +1,16 @@
-import Root from './sidebar.svelte';
-import Provider from './sidebar-provider.svelte';
-import Trigger from './sidebar-trigger.svelte';
-import Rail from './sidebar-rail.svelte';
-import Inset from './sidebar-inset.svelte';
-import MenuButton from './sidebar-menu-button.svelte';
+import Root from "./sidebar.svelte";
+import Provider from "./sidebar-provider.svelte";
+import Trigger from "./sidebar-trigger.svelte";
+import Rail from "./sidebar-rail.svelte";
+import Inset from "./sidebar-inset.svelte";
+import MenuButton from "./sidebar-menu-button.svelte";
 
-export { useSidebar, setSidebar, type SidebarStateProps } from './context.svelte.js';
+export { useSidebar, setSidebar, type SidebarStateProps } from "./context.svelte.js";
 export {
   sidebarMenuButtonVariants,
   type SidebarMenuButtonSize,
   type SidebarMenuButtonVariant,
-} from './sidebar-menu-button.svelte';
+} from "./sidebar-menu-button.svelte";
 
 // Structural wrappers (header / content / footer / group / menu / menu-item)
 // are plain `data-slot` elements inlined where they're used — they were

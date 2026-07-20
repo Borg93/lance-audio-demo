@@ -15,8 +15,8 @@
  * override) — same values, mirrored placement; reconcile at merge time.
  * ──────────────────────────────────────────────────────────────────── */
 
-@import 'tailwindcss';
-@import 'tw-animate-css';
+@import "tailwindcss";
+@import "tw-animate-css";
 
 /* Tailwind 4 + Vite auto-discovery isn't reliable for .svelte under Bun;
  * point it at the source roots explicitly (paths relative to this file). */
@@ -43,9 +43,9 @@
   /* raudio-specific: warm amber for search-match underline + karaoke cursor. */
   --highlight: #b07d12;
 
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-serif: 'Lora', Georgia, 'Times New Roman', serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-serif: "Lora", Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
   /* shadcn semantic mapping → shared tokens above (live var() refs, so the
    * .dark overrides below cascade through automatically). */
@@ -169,7 +169,7 @@
     line-height: 1.5;
     color: var(--foreground);
     background: var(--background);
-    font-feature-settings: 'ss01', 'cv11';
+    font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -216,8 +216,8 @@ svg {
 
 /* bits-ui Popover.Content bleeds opacity during enter/exit animations; pin
  * popovers to a solid surface + visible border so they never render faint. */
-[data-popover-content][data-state='open'],
-[data-popover-content][data-state='closed'] {
+[data-popover-content][data-state="open"],
+[data-popover-content][data-state="closed"] {
   background-color: var(--color-card) !important;
   opacity: 1 !important;
   box-shadow:

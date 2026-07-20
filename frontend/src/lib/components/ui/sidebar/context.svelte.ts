@@ -1,4 +1,4 @@
-import { getContext, setContext } from 'svelte';
+import { getContext, setContext } from "svelte";
 
 type Getter<T> = () => T;
 
@@ -16,7 +16,7 @@ class SidebarState {
   readonly props: SidebarStateProps;
   open = $derived.by(() => this.props.open());
   setOpen: (open: boolean) => void;
-  state = $derived.by(() => (this.open ? 'expanded' : 'collapsed'));
+  state = $derived.by(() => (this.open ? "expanded" : "collapsed"));
 
   constructor(props: SidebarStateProps) {
     this.setOpen = props.setOpen;
@@ -26,7 +26,7 @@ class SidebarState {
   toggle = () => this.setOpen(!this.open);
 }
 
-const SYMBOL_KEY = 'scn-sidebar';
+const SYMBOL_KEY = "scn-sidebar";
 
 export function setSidebar(props: SidebarStateProps): SidebarState {
   return setContext(Symbol.for(SYMBOL_KEY), new SidebarState(props));

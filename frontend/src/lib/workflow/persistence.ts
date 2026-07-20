@@ -4,42 +4,42 @@
  * data via `v.fallback`. Kept separate from the runtime store so the schema set
  * is easy to find and evolve. `safeParseGraph` is the one entry point.
  */
-import * as v from 'valibot';
-import type { SearchMode } from '$lib/api';
-import { DEFAULT_N, MAX_N, MIN_N, NODE_KINDS } from './types';
+import * as v from "valibot";
+import type { SearchMode } from "$lib/api";
+import { DEFAULT_N, MAX_N, MIN_N, NODE_KINDS } from "./types";
 
 // SearchMode is a plain union in the descriptor (no schema is exported), so
 // mirror its members here to parse a persisted `mode`, healing anything unknown
 // to 'fts'. `satisfies` keeps this list a subset of the SearchMode union.
 const MODE_VALUES = [
-  'fts',
-  'semantic',
-  'visual',
-  'scene',
-  'scene_fts',
-  'hybrid',
-  'all',
+  "fts",
+  "semantic",
+  "visual",
+  "scene",
+  "scene_fts",
+  "hybrid",
+  "all",
 ] as const satisfies readonly SearchMode[];
 const SearchModeSchema = v.picklist(MODE_VALUES);
 
 /** Per-node config as stored (no image File). Every field self-heals to a sane
  *  default on bad/old data via `v.fallback`, and `n` is clamped to [1, 100]. */
 const ConfigSchema = v.object({
-  q: v.fallback(v.string(), ''),
-  imageName: v.fallback(v.string(), ''),
-  where: v.fallback(v.string(), ''),
+  q: v.fallback(v.string(), ""),
+  imageName: v.fallback(v.string(), ""),
+  where: v.fallback(v.string(), ""),
   filters: v.fallback(v.record(v.string(), v.string()), () => ({})),
-  mode: v.fallback(SearchModeSchema, 'fts'),
+  mode: v.fallback(SearchModeSchema, "fts"),
   n: v.pipe(
     v.fallback(v.number(), DEFAULT_N),
     v.transform((n) => Math.max(MIN_N, Math.min(MAX_N, Math.round(n)))),
   ),
   rerank: v.fallback(v.boolean(), false),
   minScore: v.fallback(v.nullable(v.number()), null),
-  refineScope: v.fallback(v.picklist(['video', 'chunk']), 'video'),
-  combineMode: v.fallback(v.picklist(['union', 'intersect']), 'union'),
+  refineScope: v.fallback(v.picklist(["video", "chunk"]), "video"),
+  combineMode: v.fallback(v.picklist(["union", "intersect"]), "union"),
   tags: v.fallback(v.array(v.string()), () => []),
-  exportFormat: v.fallback(v.picklist(['json', 'csv']), 'csv'),
+  exportFormat: v.fallback(v.picklist(["json", "csv"]), "csv"),
   // `null` = every column the active dataset offers; stale field names in a
   // persisted array self-heal at export time (orderColumns drops unknowns).
   exportColumns: v.fallback(v.nullable(v.array(v.string())), null),
@@ -49,7 +49,7 @@ const ConfigSchema = v.object({
   // user re-opens the modal to re-select). TODO: persist a minimal identity-key
   // set + rehydrate via /api/atlas/chunks if needed.
   capturedAtlasSelection: v.fallback(v.null_(), null),
-  label: v.fallback(v.string(), ''),
+  label: v.fallback(v.string(), ""),
   enabled: v.fallback(v.boolean(), true),
 });
 

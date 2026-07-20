@@ -8,15 +8,15 @@
  * recorded, so the cache must not be served (this catches in-place `bind:`
  * config mutations that never pass through the store's setConfig).
  */
-import type { Edge } from '@xyflow/svelte';
-import { hitKey } from '$lib/utils';
-import type { NodeConfig } from './types';
+import type { Edge } from "@xyflow/svelte";
+import { hitKey } from "$lib/utils";
+import type { NodeConfig } from "./types";
 
 /** Structured filters as a stable, order-independent list of non-empty entries
  *  (a Record's key order would otherwise leak into the fingerprint). */
 function stableFilters(filters: Record<string, string>): [string, string][] {
   return Object.entries(filters)
-    .filter(([, value]) => value !== '')
+    .filter(([, value]) => value !== "")
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
@@ -26,7 +26,7 @@ function stableFilters(filters: Record<string, string>): [string, string][] {
 export function nodeFingerprint(id: string, config: NodeConfig, edges: Edge[]): string {
   const preds = edges
     .filter((e) => e.target === id)
-    .map((e) => `${e.source}#${e.targetHandle ?? ''}`)
+    .map((e) => `${e.source}#${e.targetHandle ?? ""}`)
     .sort();
   return JSON.stringify({
     preds,

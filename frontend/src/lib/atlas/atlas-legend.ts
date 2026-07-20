@@ -7,8 +7,8 @@
  * SAME `hueCss` hues the WebGPU scatter uses, so a swatch can never disagree
  * with its points. Every function here is single-responsibility + unit-testable.
  */
-import { hueCss } from './atlas-colors';
-import type { ColorBy } from './cross-filter.svelte';
+import { hueCss } from "./atlas-colors";
+import type { ColorBy } from "./cross-filter.svelte";
 
 export type ClusterLegendRow = { id: number; color: string; count: number; frac: number };
 export type CategoryLegendRow = {
@@ -82,7 +82,7 @@ export function buildClusterLegend(
     .map(([id, count]) => {
       const rank = slotOf.get(id) ?? -1;
       const color =
-        rank < 0 ? (isDark ? '#71717a' : '#a1a1aa') : hueCss(rank + 1, distinct + 1, isDark);
+        rank < 0 ? (isDark ? "#71717a" : "#a1a1aa") : hueCss(rank + 1, distinct + 1, isDark);
       return { id, color, count, frac: count / max };
     })
     .sort((a, b) => b.count - a.count);
@@ -115,20 +115,20 @@ export function buildCategoryLegend(
   if (!channel) return [];
   const { codes, labels } = channel;
   const distinct = Math.min(maxDistinct, labels.length);
-  const grey = isDark ? '#71717a' : '#a1a1aa';
-  const noiseCss = isDark ? '#52525b' : '#cccccc';
+  const grey = isDark ? "#71717a" : "#a1a1aa";
+  const noiseCss = isDark ? "#52525b" : "#cccccc";
   const counts = tally(codes, visible);
   const max = maxCount(counts.values());
   return [...counts.entries()]
     .map(([code, count]) => {
-      const raw = labels[code] ?? '';
-      const empty = raw === '';
+      const raw = labels[code] ?? "";
+      const empty = raw === "";
       return {
         code,
         count,
         empty,
         frac: count / max,
-        label: empty ? '(ej klustrad)' : raw,
+        label: empty ? "(ej klustrad)" : raw,
         color: empty ? noiseCss : code < distinct ? hueCss(code + 1, distinct + 1, isDark) : grey,
       };
     })
@@ -143,11 +143,11 @@ export function channelLabel(name: string): string {
     .split(/[_\s]+/)
     .filter((w) => w.length > 0)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
+    .join(" ");
 }
 
 /** The legend panel's title for the active categorical colour mode — the
  *  humanized channel name (empty for the special `cluster`/`none` modes). */
 export function categoryTitle(colorBy: ColorBy): string {
-  return colorBy === 'cluster' || colorBy === 'none' ? '' : channelLabel(colorBy);
+  return colorBy === "cluster" || colorBy === "none" ? "" : channelLabel(colorBy);
 }

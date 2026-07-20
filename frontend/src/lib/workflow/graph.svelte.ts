@@ -23,15 +23,15 @@
  * autosaved to localStorage and rehydrated on load.
  */
 
-import type { Edge, Node } from '@xyflow/svelte';
-import { browser } from '$app/environment';
-import { type Hit, type SearchMode } from '$lib/api';
-import { nodeFingerprint } from './fingerprint';
-import { WorkflowTags } from './tags.svelte';
-import { UndoHistory } from './history.svelte';
-import { autoLayout } from './layout';
-import { runGraph, runSubgraph, type RunDeps } from './executor';
-import { dedupeHits } from './scope';
+import type { Edge, Node } from "@xyflow/svelte";
+import { browser } from "$app/environment";
+import { type Hit, type SearchMode } from "$lib/api";
+import { nodeFingerprint } from "./fingerprint";
+import { WorkflowTags } from "./tags.svelte";
+import { UndoHistory } from "./history.svelte";
+import { autoLayout } from "./layout";
+import { runGraph, runSubgraph, type RunDeps } from "./executor";
+import { dedupeHits } from "./scope";
 import {
   DEFAULT_N,
   isNodeKind,
@@ -48,14 +48,14 @@ import {
   type NodeRuntime,
   type RefineScope,
   type RunStatus,
-} from './types';
-import { safeParseGraph, type PersistedConfig, type PersistedGraph } from './persistence';
+} from "./types";
+import { safeParseGraph, type PersistedConfig, type PersistedGraph } from "./persistence";
 
 // Re-export the public vocabulary so components keep importing it from here.
 export { DEFAULT_N, isNodeKind, MAX_N, MIN_N, NODE_KINDS, RERANK_TOP_N };
 export type { NodeKind, RunStatus, CombineMode, RefineScope, NodeConfig, NodeRuntime };
 
-const STORAGE_KEY = 'raudio-workflow-graph-v1';
+const STORAGE_KEY = "raudio-workflow-graph-v1";
 
 /** Max undo/redo depth — bounds memory; older snapshots fall off the stack. */
 const HISTORY_LIMIT = 50;
@@ -65,65 +65,65 @@ const DUPLICATE_OFFSET_PX = 48;
 const PASTE_OFFSET_PX = 32;
 
 export const SEARCH_MODES: { value: SearchMode; label: string }[] = [
-  { value: 'fts', label: 'Keyword (FTS)' },
-  { value: 'semantic', label: 'Meaning (vector)' },
-  { value: 'hybrid', label: 'Hybrid (FTS + vector)' },
-  { value: 'visual', label: 'Image (frame vector)' },
-  { value: 'scene', label: 'Scene (caption vector)' },
-  { value: 'scene_fts', label: 'Scene (caption keyword)' },
-  { value: 'all', label: 'All judges (RRF)' },
+  { value: "fts", label: "Keyword (FTS)" },
+  { value: "semantic", label: "Meaning (vector)" },
+  { value: "hybrid", label: "Hybrid (FTS + vector)" },
+  { value: "visual", label: "Image (frame vector)" },
+  { value: "scene", label: "Scene (caption vector)" },
+  { value: "scene_fts", label: "Scene (caption keyword)" },
+  { value: "all", label: "All judges (RRF)" },
 ];
 
 export const modeLabel = (mode: SearchMode): string =>
   SEARCH_MODES.find((m) => m.value === mode)?.label ?? mode;
 
 const KIND_LABEL: Record<NodeKind, string> = {
-  query: 'Text query',
-  image: 'Image',
-  filter: 'Filter',
-  atlas: 'Atlas selection',
-  search: 'Search',
-  combine: 'Combine',
-  tagger: 'Tagger',
-  results: 'Results',
-  export: 'Export',
+  query: "Text query",
+  image: "Image",
+  filter: "Filter",
+  atlas: "Atlas selection",
+  search: "Search",
+  combine: "Combine",
+  tagger: "Tagger",
+  results: "Results",
+  export: "Export",
 };
 
 export const nodeLabel = (kind: NodeKind): string => KIND_LABEL[kind];
 
 /** Run-status → Tailwind dot colour. Shared by NodeShell and the Inspector. */
 export const STATUS_DOT: Record<RunStatus, string> = {
-  idle: 'bg-muted-foreground/40',
-  running: 'bg-primary animate-pulse',
-  done: 'bg-emerald-500',
-  error: 'bg-destructive',
+  idle: "bg-muted-foreground/40",
+  running: "bg-primary animate-pulse",
+  done: "bg-emerald-500",
+  error: "bg-destructive",
 };
 
 function defaultConfig(): NodeConfig {
   return {
-    q: '',
+    q: "",
     image: null,
-    imageName: '',
-    where: '',
+    imageName: "",
+    where: "",
     filters: {},
-    mode: 'fts',
+    mode: "fts",
     n: DEFAULT_N,
     rerank: false,
     minScore: null,
-    refineScope: 'video',
-    combineMode: 'union',
+    refineScope: "video",
+    combineMode: "union",
     tags: [],
-    exportFormat: 'csv',
+    exportFormat: "csv",
     exportColumns: null,
     capturedAtlasSelection: null,
-    label: '',
+    label: "",
     enabled: true,
   };
 }
 
 function blankRuntime(): NodeRuntime {
   return {
-    status: 'idle',
+    status: "idle",
     error: null,
     hits: null,
     count: null,
@@ -180,7 +180,7 @@ class WorkflowGraph {
   /** Undo/redo stacks (snapshot strings) — its own focused store. */
   private undoHistory = new UndoHistory(HISTORY_LIMIT);
   /** Last snapshot pushed to history, so the debounced checkpoint can diff. */
-  private lastCheckpoint = '';
+  private lastCheckpoint = "";
   /** Copy/paste buffer of detached nodes + a paste counter (cascade offset). */
   private clipboard: ClipboardNode[] = [];
   private pasteCount = 0;
@@ -217,20 +217,20 @@ class WorkflowGraph {
     const query = (mode: SearchMode, q: string): NodeConfig => ({ ...defaultConfig(), mode, q });
     this.config = {
       image: defaultConfig(),
-      'search-visual': query('visual', ''),
-      'search-scene': query('scene', 'talarstol'),
-      'search-said': query('fts', 'skatt'),
+      "search-visual": query("visual", ""),
+      "search-scene": query("scene", "talarstol"),
+      "search-said": query("fts", "skatt"),
       results: defaultConfig(),
     };
     this.runtime = Object.fromEntries(Object.keys(this.config).map((id) => [id, blankRuntime()]));
     this.tags.reset();
     this.undoHistory.clear();
     this.nodes = [
-      { id: 'image', type: 'image', position: { x: -60, y: 60 }, data: {} },
-      { id: 'search-visual', type: 'search', position: { x: 240, y: 40 }, data: {} },
-      { id: 'search-scene', type: 'search', position: { x: 560, y: 100 }, data: {} },
-      { id: 'search-said', type: 'search', position: { x: 880, y: 160 }, data: {} },
-      { id: 'results', type: 'results', position: { x: 1200, y: 100 }, data: {} },
+      { id: "image", type: "image", position: { x: -60, y: 60 }, data: {} },
+      { id: "search-visual", type: "search", position: { x: 240, y: 40 }, data: {} },
+      { id: "search-scene", type: "search", position: { x: 560, y: 100 }, data: {} },
+      { id: "search-said", type: "search", position: { x: 880, y: 160 }, data: {} },
+      { id: "results", type: "results", position: { x: 1200, y: 100 }, data: {} },
     ];
     // No `animated` here — edge animation is now run-driven (the canvas pulses
     // edges feeding a running node), so seeding it would just be stripped.
@@ -238,27 +238,27 @@ class WorkflowGraph {
     // edge without one wouldn't attach).
     this.edges = [
       {
-        id: 'e-img',
-        source: 'image',
-        target: 'search-visual',
+        id: "e-img",
+        source: "image",
+        target: "search-visual",
         targetHandle: SEARCH_IMAGE_HANDLE,
-        label: 'image',
+        label: "image",
       },
       {
-        id: 'e-v-scene',
-        source: 'search-visual',
-        target: 'search-scene',
+        id: "e-v-scene",
+        source: "search-visual",
+        target: "search-scene",
         targetHandle: SEARCH_IN_HANDLE,
-        label: 'refine',
+        label: "refine",
       },
       {
-        id: 'e-scene-said',
-        source: 'search-scene',
-        target: 'search-said',
+        id: "e-scene-said",
+        source: "search-scene",
+        target: "search-said",
         targetHandle: SEARCH_IN_HANDLE,
-        label: 'refine',
+        label: "refine",
       },
-      { id: 'e-said-res', source: 'search-said', target: 'results' },
+      { id: "e-said-res", source: "search-said", target: "results" },
     ];
     this.seq = 0;
     this.running = false;
@@ -273,7 +273,7 @@ class WorkflowGraph {
 
   /** Add a fresh node of `kind` at `position`; returns its id. */
   addNode(kind: NodeKind, position: { x: number; y: number }): string {
-    if (this.running) return '';
+    if (this.running) return "";
     const id = `${kind}-${++this.seq}`;
     this.config = { ...this.config, [id]: defaultConfig() };
     this.runtime = { ...this.runtime, [id]: blankRuntime() };
@@ -293,7 +293,7 @@ class WorkflowGraph {
       : { x: 0, y: 0 };
     this.config = {
       ...this.config,
-      [newId]: { ...src, image: null, label: src.label ? `${src.label} copy` : '' },
+      [newId]: { ...src, image: null, label: src.label ? `${src.label} copy` : "" },
     };
     this.runtime = { ...this.runtime, [newId]: blankRuntime() };
     this.nodes = [...this.nodes, { id: newId, type: kind, position: pos, data: {} }];
@@ -351,18 +351,18 @@ class WorkflowGraph {
     if (!source || !target) return null; // not over a real target yet
     if (source === target) return "A node can't connect to itself";
     if (this.edges.some((e) => e.source === source && e.target === target))
-      return 'Those nodes are already connected';
-    if (this.reaches(this.edges, target, source)) return 'That would create a loop';
+      return "Those nodes are already connected";
+    if (this.reaches(this.edges, target, source)) return "That would create a loop";
     // The Search node's image port only takes an Image node — and vice versa,
     // an Image feeding a Search must use that port (the general port would
     // silently merge it anyway, but the wire should show what it carries).
     const targetHandle = connection.targetHandle ?? null;
     const sourceKind = this.kindOf(source);
-    if (targetHandle === SEARCH_IMAGE_HANDLE && sourceKind !== 'image')
-      return 'Only an Image node can feed the image input';
+    if (targetHandle === SEARCH_IMAGE_HANDLE && sourceKind !== "image")
+      return "Only an Image node can feed the image input";
     if (
-      sourceKind === 'image' &&
-      this.kindOf(target) === 'search' &&
+      sourceKind === "image" &&
+      this.kindOf(target) === "search" &&
       targetHandle !== SEARCH_IMAGE_HANDLE
     )
       return "Wire the image into the Search node's image port (lower one)";
@@ -432,7 +432,7 @@ class WorkflowGraph {
    *  state so the whole settled change — structural OR config edits OR a move —
    *  becomes one undo step. Nothing is lost between checkpoints. */
   checkpoint(json: string): void {
-    if (this.lastCheckpoint === '') {
+    if (this.lastCheckpoint === "") {
       this.lastCheckpoint = json; // first call establishes the baseline
       return;
     }
@@ -661,8 +661,8 @@ class WorkflowGraph {
       id: e.id,
       source: e.source,
       target: e.target,
-      ...(typeof e.targetHandle === 'string' ? { targetHandle: e.targetHandle } : {}),
-      ...(typeof e.label === 'string' ? { label: e.label } : {}),
+      ...(typeof e.targetHandle === "string" ? { targetHandle: e.targetHandle } : {}),
+      ...(typeof e.label === "string" ? { label: e.label } : {}),
     }));
     const config: Record<string, PersistedConfig> = {};
     for (const [id, c] of Object.entries(this.config)) {
@@ -673,7 +673,7 @@ class WorkflowGraph {
         filters: c.filters,
         // A generic (any-key) mode narrows to the persisted set here; an unknown
         // key self-heals to 'fts' on reload (persistence.ts picklist fallback).
-        mode: c.mode as PersistedConfig['mode'],
+        mode: c.mode as PersistedConfig["mode"],
         n: c.n,
         rerank: c.rerank,
         minScore: c.minScore,
@@ -735,14 +735,14 @@ class WorkflowGraph {
     // Without one the edge wouldn't attach: every Search handle has an id.
     const searchPort = (e: { source: string; targetHandle?: string | undefined }): string =>
       e.targetHandle ??
-      (kindById.get(e.source) === 'image' ? SEARCH_IMAGE_HANDLE : SEARCH_IN_HANDLE);
+      (kindById.get(e.source) === "image" ? SEARCH_IMAGE_HANDLE : SEARCH_IN_HANDLE);
     const edges: Edge[] = parsed.edges
       .filter((e) => ids.has(e.source) && ids.has(e.target)) // drop dangling edges
       .map((e) => ({
         id: e.id,
         source: e.source,
         target: e.target,
-        ...(kindById.get(e.target) === 'search' ? { targetHandle: searchPort(e) } : {}),
+        ...(kindById.get(e.target) === "search" ? { targetHandle: searchPort(e) } : {}),
         ...(e.label ? { label: e.label } : {}),
       }));
     const config: Record<string, NodeConfig> = {};
@@ -835,7 +835,7 @@ class WorkflowGraph {
       }
       for (const d of staleIds) {
         const rt = this.runtime[d];
-        if (rt && (rt.status !== 'idle' || rt.output)) this.patchRuntime(d, { stale: true });
+        if (rt && (rt.status !== "idle" || rt.output)) this.patchRuntime(d, { stale: true });
       }
     } finally {
       this.running = false;

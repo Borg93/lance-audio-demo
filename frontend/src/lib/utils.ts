@@ -1,6 +1,6 @@
-import { type ClassValue, clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-import { activeView, type Row } from '$lib/descriptor';
+import { type ClassValue, clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
+import { activeView, type Row } from "$lib/descriptor";
 
 /** shadcn-svelte's standard `cn` helper: clsx for conditionals, twMerge for conflicts. */
 export function cn(...inputs: ClassValue[]): string {
@@ -9,8 +9,8 @@ export function cn(...inputs: ClassValue[]): string {
 
 // Type helpers expected by shadcn-svelte v1.2+ generated components (shared
 // with the sibling apps so UI primitives stay copy-paste compatible).
-export type WithoutChild<T> = T extends { child?: unknown } ? Omit<T, 'child'> : T;
-export type WithoutChildren<T> = T extends { children?: unknown } ? Omit<T, 'children'> : T;
+export type WithoutChild<T> = T extends { child?: unknown } ? Omit<T, "child"> : T;
+export type WithoutChildren<T> = T extends { children?: unknown } ? Omit<T, "children"> : T;
 export type WithoutChildrenOrChild<T> = WithoutChildren<WithoutChild<T>>;
 export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & { ref?: U | null };
 
@@ -20,21 +20,21 @@ export function fmtTime(s: number): string {
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const sec = total % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
+  const pad = (n: number) => String(n).padStart(2, "0");
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
 }
 
 /** Escape HTML special characters for safe innerHTML interpolation. */
 function escapeHtml(s: string | null | undefined): string {
-  return String(s ?? '').replace(
+  return String(s ?? "").replace(
     /[&<>]/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] ?? c,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] ?? c,
   );
 }
 
 /** Lowercased content words from a Tantivy-style query. */
 export function queryTerms(q: string): string[] {
-  const stop = new Set(['and', 'or', 'not', 'near']);
+  const stop = new Set(["and", "or", "not", "near"]);
   // `\w` excludes Unicode letters (ö/å/ä) even with /u — must use \p{L}.
   return (q.match(/[\p{L}\p{N}_]+/gu) ?? [])
     .map((t) => t.toLowerCase())
@@ -52,8 +52,8 @@ export const hitKey = (h: Row): string => activeView().rowKey(h);
  */
 export function makeHighlighter(terms: string[]): (text: string) => string {
   if (terms.length === 0) return escapeHtml;
-  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const re = new RegExp(`(${pattern})`, 'giu');
+  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const re = new RegExp(`(${pattern})`, "giu");
   return (text) =>
     escapeHtml(text).replace(
       re,

@@ -3,9 +3,9 @@
  * "WHERE" a refining Search runs under) plus hit de-duplication. No state, no
  * runes — just functions over `Hit[]`, so they're trivial to test and reuse.
  */
-import { activeView, type Row } from '$lib/descriptor';
-import type { Hit } from '$lib/api';
-import { hitKey } from '$lib/utils';
+import { activeView, type Row } from "$lib/descriptor";
+import type { Hit } from "$lib/api";
+import { hitKey } from "$lib/utils";
 
 /** Cap on the distinct videos a video-level refine scopes to: the `doc_id IN (…)`
  *  clause keeps at most this many (highest-ranked first), so a large upstream set
@@ -43,7 +43,7 @@ export function dedupeHits(hits: Hit[]): Hit[] {
 
 /** SQL literal for a key value — quoted for strings, bare for numbers. */
 function keyLiteral(value: unknown): string {
-  return typeof value === 'number' ? String(value) : sqlQuote(String(value ?? ''));
+  return typeof value === "number" ? String(value) : sqlQuote(String(value ?? ""));
 }
 
 /** `<docKey> IN (…)` over the distinct documents behind `hits` (capped at
@@ -52,11 +52,11 @@ function keyLiteral(value: unknown): string {
 export function videoScopeClause(hits: Hit[]): ScopeClause | null {
   const view = activeView();
   const docKey = view.docKeyField;
-  const all = [...new Set(hits.map((h) => String((h as Row)[docKey] ?? '')))];
+  const all = [...new Set(hits.map((h) => String((h as Row)[docKey] ?? "")))];
   const docs = all.slice(0, MAX_SCOPE_DOCS);
   if (!docs.length) return null;
   return {
-    clause: `${docKey} IN (${docs.map(sqlQuote).join(', ')})`,
+    clause: `${docKey} IN (${docs.map(sqlQuote).join(", ")})`,
     count: docs.length,
     capped: all.length > docs.length,
   };
@@ -74,10 +74,10 @@ export function chunkScopeClause(hits: Hit[]): ScopeClause | null {
   const terms = picked.map((h) => {
     const row = h as Row;
     const conds = keyFields.map((k) => `${k} = ${keyLiteral(row[k])}`);
-    return `(${conds.join(' AND ')})`;
+    return `(${conds.join(" AND ")})`;
   });
   return {
-    clause: `(${terms.join(' OR ')})`,
+    clause: `(${terms.join(" OR ")})`,
     count: picked.length,
     capped: uniq.length > picked.length,
   };
