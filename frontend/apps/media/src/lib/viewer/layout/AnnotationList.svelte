@@ -11,6 +11,13 @@
 
   let filter = $state('');
 
+  // m:ss for a segment's time range (audio/video rows); null when it has no time span.
+  function timeRange(tStart: number | null, tEnd: number | null): string | null {
+    if (tStart == null || tEnd == null || tEnd <= tStart) return null;
+    const at = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+    return `${at(tStart)}–${at(tEnd)}`;
+  }
+
   // The review order lives on the controller (shared with accept-and-advance); the
   // list only adds its text filter on top.
   const queue = $derived(
@@ -30,6 +37,7 @@
 
   <ul class="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
     {#each queue as r (r.index)}
+      {@const range = timeRange(r.tStart, r.tEnd)}
       <li>
         <button
           class={cn(
@@ -52,6 +60,11 @@
                 </span>
               {/if}
             </span>
+            {#if range}
+              <span class="block font-mono text-[10px] text-muted-foreground tabular-nums" title="segment time">
+                {range}
+              </span>
+            {/if}
             {#if r.text}
               <span class="block truncate text-[11px] text-muted-foreground">{r.text}</span>
             {/if}
