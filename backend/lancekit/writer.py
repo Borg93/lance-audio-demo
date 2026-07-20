@@ -10,8 +10,10 @@ makes the merge a config flip (``MEDIA_WRITE_BACKEND``), not a rewrite.
 Host-agnostic + retry-friendly by construction (base URL from settings, urllib3
 ``Retry``) so the catalog path drops into a Dapr service-invocation unchanged.
 
-Scope: the two ops ``annotate.py``'s Save performs — a merge UPSERT (update
-matched + insert unmatched, keyed by ``id``) and a delete-by-predicate.
+Scope: the ops ``annotate.py``'s writes perform — a merge UPSERT (update matched +
+insert unmatched, keyed by ``id``), an INSERT-ONLY merge (insert unmatched, leave
+matched untouched — used for tags so a re-save never clobbers a human's review), and
+a delete-by-predicate.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ class TableWriter(Protocol):
     the table for the new version (mirroring today's code)."""
 
     def merge_upsert(self, delta: pa.Table, on: str) -> None: ...
+    def merge_insert_only(self, delta: pa.Table, on: str) -> None: ...
     def delete(self, predicate: str) -> None: ...
 
 
@@ -47,6 +50,11 @@ class LanceTableWriter:
             delta
         )
 
+    def merge_insert_only(self, delta: pa.Table, on: str) -> None:
+        # Insert unmatched rows only — matched rows (same key) are left AS-IS, so a
+        # re-save preserves any human review already made to an existing row.
+        self._ds.merge_insert(on).when_not_matched_insert_all().execute(delta)
+
     def delete(self, predicate: str) -> None:
         self._ds.delete(predicate)
 
@@ -57,6 +65,7 @@ class CatalogWriteTransport(Protocol):
     (:class:`LocalCatalogWriteTransport`) unchanged."""
 
     def merge_upsert(self, delta: pa.Table, on: str) -> None: ...
+    def merge_insert_only(self, delta: pa.Table, on: str) -> None: ...
     def delete(self, predicate: str) -> None: ...
 
 
@@ -70,6 +79,9 @@ class CatalogTableWriter:
 
     def merge_upsert(self, delta: pa.Table, on: str) -> None:
         self._transport.merge_upsert(delta, on)
+
+    def merge_insert_only(self, delta: pa.Table, on: str) -> None:
+        self._transport.merge_insert_only(delta, on)
 
     def delete(self, predicate: str) -> None:
         self._transport.delete(predicate)
@@ -88,6 +100,9 @@ class LocalCatalogWriteTransport:
         self._ds.merge_insert(on).when_matched_update_all().when_not_matched_insert_all().execute(
             delta
         )
+
+    def merge_insert_only(self, delta: pa.Table, on: str) -> None:
+        self._ds.merge_insert(on).when_not_matched_insert_all().execute(delta)
 
     def delete(self, predicate: str) -> None:
         self._ds.delete(predicate)
@@ -132,6 +147,21 @@ class RestCatalogWriteTransport:
             bytes(sink.getvalue()),
             delimiter=self._delimiter,
             when_matched_update_all=True,
+            when_not_matched_insert_all=True,
+        )
+
+    def merge_insert_only(self, delta: pa.Table, on: str) -> None:
+        import pyarrow as pa_
+
+        sink = pa_.BufferOutputStream()
+        with pa_.ipc.new_file(sink, delta.schema) as writer:
+            writer.write_table(delta)
+        self._api.merge_insert_into_table(
+            self._id_str,
+            on,
+            bytes(sink.getvalue()),
+            delimiter=self._delimiter,
+            when_matched_update_all=False,
             when_not_matched_insert_all=True,
         )
 

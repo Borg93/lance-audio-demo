@@ -216,6 +216,26 @@ def test_tag_rows_stamp_identity_shape_and_author() -> None:
     assert r["id"] == tag_id("d1", [0, 19], "speech")  # deterministic id
 
 
+def test_tag_rows_dedupes_duplicate_labels() -> None:
+    # A batch may repeat a chunk+label; Lance merge_insert would insert both identical-id
+    # rows, so _tag_rows must dedup (else idempotency breaks — review-workflow finding).
+    tbl = _tag_rows(
+        [
+            TagWrite(doc_id="d1", keys=[0, 19], labels=["cat", "cat"]),
+            TagWrite(doc_id="d1", keys=[0, 19], labels=["cat"]),
+        ],
+        _MEDIA_DECLARED,
+        "gabriel",
+        _full_schema(),
+    )
+    assert tbl.num_rows == 1  # one row for the single distinct (chunk, label)
+
+
+def _insert_only(ds: lance.LanceDataset, delta: pa.Table) -> None:
+    """The tag write's semantic: insert unmatched only (matched rows left as-is)."""
+    ds.merge_insert("id").when_not_matched_insert_all().execute(delta)
+
+
 def test_tag_merge_insert_is_multi_unit_one_version_and_shape_safe(tmp_path: Path) -> None:
     schema = _full_schema()
     ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}
@@ -228,7 +248,7 @@ def test_tag_merge_insert_is_multi_unit_one_version_and_shape_safe(tmp_path: Pat
     ds = lance.dataset(uri)
     v0 = ds.version
 
-    # tag TWO different chunks in ONE merge_insert
+    # tag TWO different chunks in ONE insert-only merge
     delta = _tag_rows(
         [
             TagWrite(doc_id="d1", keys=[0, 19], labels=["speech"]),
@@ -238,7 +258,7 @@ def test_tag_merge_insert_is_multi_unit_one_version_and_shape_safe(tmp_path: Pat
         "gabriel",
         schema,
     )
-    ds.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(delta)
+    _insert_only(ds, delta)
     after = lance.dataset(uri)
     got = {r["id"]: r for r in after.to_table().to_pylist()}
     assert got["a1"]["x"] == 5.0  # drawn shape untouched — a tag: id never matches it
@@ -248,8 +268,34 @@ def test_tag_merge_insert_is_multi_unit_one_version_and_shape_safe(tmp_path: Pat
 
     # idempotent: re-applying the same tags adds no rows
     before = after.count_rows()
-    after.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(delta)
+    _insert_only(after, delta)
     assert lance.dataset(uri).count_rows() == before
+
+
+def test_tag_resave_preserves_human_review(tmp_path: Path) -> None:
+    # A reviewer edits a tag row (rejects it); a later re-save of the SAME tag must NOT
+    # reset it to the workflow default (the insert-only semantic — review-workflow finding).
+    schema = _full_schema()
+    ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}
+    uri = str(tmp_path / "annotations.lance")
+    tid = tag_id("d1", [0, 19], "speech")
+    # the tag exists and a human has REJECTED it + renamed the label
+    lance.write_dataset(
+        pa.Table.from_pylist(
+            [{**ident, "id": tid, "shape_type": "tag", "label": "speech-edited", "status": "rejected"}],
+            schema=schema,
+        ),
+        uri,
+    )
+    ds = lance.dataset(uri)
+
+    # re-save the workflow tag (label="speech", status="accepted") via insert-only
+    delta = _tag_rows([TagWrite(doc_id="d1", keys=[0, 19], labels=["speech"])], _MEDIA_DECLARED, "x", schema)
+    _insert_only(ds, delta)
+
+    row = {r["id"]: r for r in lance.dataset(uri).to_table().to_pylist()}[tid]
+    assert row["status"] == "rejected"  # human review preserved, NOT reset to "accepted"
+    assert row["label"] == "speech-edited"  # human rename preserved
 
 
 def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:

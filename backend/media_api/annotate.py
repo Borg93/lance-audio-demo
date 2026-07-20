@@ -227,16 +227,20 @@ def _tag_rows(
     """Full annotation rows for chunk tags — the tag↔annotation unification: per-row
     identity stamped, ``shape_type='tag'``, label carried, human provenance + server
     author, geometry/temporal zeroed; unlisted columns fall to null via the schema.
-    Same schema ⇒ merge_insert inserts/replaces by the deterministic id."""
-    rows: list[dict[str, object]] = []
+    Same schema ⇒ merge_insert inserts by the deterministic id. Rows are DEDUPED by id
+    (a batch may repeat a chunk+label): Lance merge_insert does not dedupe duplicate
+    source keys, so two identical-id rows would both insert — dedup here prevents that."""
+    by_id: dict[str, dict[str, object]] = {}
     for w in adds:
         doc = validate_doc_key(declared, w.doc_id)
         ident = identity_values(declared, doc, w.keys)
         for label in w.labels:
-            rows.append(
+            tid = tag_id(doc, w.keys, label)
+            by_id.setdefault(  # first wins — every row for a given id is identical anyway
+                tid,
                 {
                     **ident,
-                    "id": tag_id(doc, w.keys, label),
+                    "id": tid,
                     "shape_type": "tag",
                     "x": 0.0,
                     "y": 0.0,
@@ -253,9 +257,9 @@ def _tag_rows(
                     "source": "human",
                     "reviewer": author,
                     "mask": "",
-                }
+                },
             )
-    return pa.Table.from_pylist(rows, schema=schema)
+    return pa.Table.from_pylist(list(by_id.values()), schema=schema)
 
 
 @router.get("/annotations/{doc_id}/{speech_id}/{chunk_id}")
@@ -418,7 +422,10 @@ def add_tags(
     )
     touched = 0
     if delta.num_rows:
-        writer.merge_upsert(delta, "id")
+        # INSERT-ONLY (not upsert): a tag that already exists is left untouched, so a
+        # re-save never clobbers a reviewer's edits to that tag row (status/label/group).
+        # Re-tagging stays idempotent; humans own the row once it exists.
+        writer.merge_insert_only(delta, "id")
         touched += delta.num_rows
 
     remove_ids = [

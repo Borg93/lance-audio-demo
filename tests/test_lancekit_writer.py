@@ -68,6 +68,29 @@ def test_catalog_write_matches_direct(two: tuple[lance.LanceDataset, lance.Lance
     assert "b" not in t1  # deleted
 
 
+def test_merge_insert_only_leaves_matched_rows_untouched(
+    two: tuple[lance.LanceDataset, lance.LanceDataset, str, str],
+) -> None:
+    # Insert-only: unmatched rows insert; matched rows are LEFT AS-IS (tags rely on this
+    # so a re-save never clobbers a reviewer's edit). Direct + catalog agree.
+    ds1, ds2, u1, u2 = two
+    direct = LanceTableWriter(ds1)
+    catalog = CatalogTableWriter(LocalCatalogWriteTransport(ds2), ["ns", "t"])
+
+    # `a` already exists (status="prediction"); `d` is new. Insert-only must NOT touch `a`.
+    delta = pa.table(
+        {"id": ["a", "d"], "status": ["accepted", "accepted"], "x": pa.array([9.0, 4.0], pa.float32())}
+    )
+    direct.merge_insert_only(delta, "id")
+    catalog.merge_insert_only(delta, "id")
+
+    t1 = {r["id"]: r for r in lance.dataset(u1).to_table().to_pylist()}
+    t2 = {r["id"]: r for r in lance.dataset(u2).to_table().to_pylist()}
+    assert t1 == t2  # parity
+    assert t1["a"]["status"] == "prediction" and t1["a"]["x"] == 1.0  # matched row untouched
+    assert t1["d"]["x"] == 4.0  # unmatched row inserted
+
+
 def test_open_writer_flag_selects_backend(
     two: tuple[lance.LanceDataset, lance.LanceDataset, str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
