@@ -50,6 +50,18 @@
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
     const k = e.key.toLowerCase();
+    // Undo/redo first — Ctrl/Cmd combos never fall through to tool hotkeys.
+    if (e.ctrlKey || e.metaKey) {
+      if (k === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) controller.redo();
+        else controller.undo();
+      } else if (k === 'y') {
+        e.preventDefault();
+        controller.redo();
+      }
+      return;
+    }
     const tool = TOOL_KEYS[k];
     if (tool) {
       // drawing tools require edit mode

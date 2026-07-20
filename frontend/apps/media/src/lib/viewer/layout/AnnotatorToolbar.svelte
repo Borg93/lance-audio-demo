@@ -16,6 +16,8 @@
     Trash2,
     Spline,
     Eraser,
+    Undo2,
+    Redo2,
   } from 'lucide-svelte';
   import { Button } from '$lib/components/ui';
   import { cn } from '$lib/utils';
@@ -80,6 +82,28 @@
       <Eraser class="size-4" />
     </Button>
   {/if}
+
+  <div class="my-1 h-px w-6 bg-border"></div>
+
+  <!-- Undo / redo (field edits: relabel / accept / reject / text) -->
+  <Button
+    variant="ghost"
+    size="icon-sm"
+    title="Undo (Ctrl+Z)"
+    disabled={!controller.canUndo}
+    onclick={() => controller.undo()}
+  >
+    <Undo2 class="size-4" />
+  </Button>
+  <Button
+    variant="ghost"
+    size="icon-sm"
+    title="Redo (Ctrl+Shift+Z)"
+    disabled={!controller.canRedo}
+    onclick={() => controller.redo()}
+  >
+    <Redo2 class="size-4" />
+  </Button>
 
   <div class="my-1 h-px w-6 bg-border"></div>
 

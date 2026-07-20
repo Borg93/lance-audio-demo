@@ -48,6 +48,15 @@ export interface AnnoRow {
 /** Fields the sidebar can edit inline. */
 export type EditableField = "label" | "status" | "group" | "text";
 
+/** One reversible field edit (relabel / status / text / group) — the unit of
+ *  undo/redo. `before`/`after` are the effective (overlay-aware) string values. */
+interface FieldEdit {
+  index: number;
+  field: EditableField;
+  before: string;
+  after: string;
+}
+
 const STRING_FIELD_CANDIDATES = ["label", "status", "source", "group", "reviewer"];
 
 /** #rrggbb ⇄ 0xRRGGBB — self-contained so the panel needs no engine color util. */
@@ -69,7 +78,6 @@ export class AnnotatorController {
   selectedIndex = $state<number | null>(null);
   readonly selectedSet = new SvelteSet<number>();
   zoomPercent = $state(1);
-  dirty = $state(false);
   count = $state(0);
   brushOptions = $state<BrushOptions>({
     radius: 20,
@@ -88,6 +96,12 @@ export class AnnotatorController {
   // canvas is updated separately via arrow.setFieldOverride). SvelteMap ⇒ edits
   // re-derive `rows` with no manual version counter.
   private readonly _overrides = new SvelteMap<string, string>();
+
+  // Undo/redo of field edits (the review operations: relabel / accept / reject /
+  // text). Geometry dirtiness is tracked separately (the engine owns geometry).
+  private _undo = $state<FieldEdit[]>([]);
+  private _redo = $state<FieldEdit[]>([]);
+  private _geoDirty = $state(false);
 
   private _detachViewport: (() => void) | null = null;
 
@@ -148,6 +162,10 @@ export class AnnotatorController {
   });
 
   readonly canDraw = $derived(this.mode === "edit");
+  readonly canUndo = $derived(this._undo.length > 0);
+  readonly canRedo = $derived(this._redo.length > 0);
+  /** Unsaved-edits flag: any pending field edit OR a geometry edit on the canvas. */
+  readonly dirty = $derived(this._undo.length > 0 || this._geoDirty);
 
   // ── engine lifecycle ──
 
@@ -166,11 +184,11 @@ export class AnnotatorController {
       this._mirrorSelection(im.getSelectedSet());
     };
     im.onDirtyChange = (hasDirty) => {
-      if (hasDirty) this.dirty = true;
+      if (hasDirty) this._geoDirty = true;
     };
     im.onCommit = () => {
       this.count = ctx.plugins.arrow.getNumRows();
-      this.dirty = true;
+      this._geoDirty = true;
     };
 
     // chain (never overwrite) the image viewport hook PixiCanvas installed, so
@@ -220,22 +238,52 @@ export class AnnotatorController {
   deleteSelected(): void {
     if (this.selectedIndex == null) return;
     this.ctx?.plugins.interaction.handleKeyDown("Delete");
-    this.dirty = true;
+    this._geoDirty = true;
     this.select(null);
   }
   convertToPolygon(): void {
-    if (this.ctx?.plugins.interaction.convertToPolygon()) this.dirty = true;
+    if (this.ctx?.plugins.interaction.convertToPolygon()) this._geoDirty = true;
   }
 
-  // ── inline field edits (canvas + overlay) ──
+  // ── inline field edits (canvas + overlay) + undo/redo ──
   updateField(index: number, field: EditableField, value: string): void {
-    this._overrides.set(`${index}:${field}`, value);
-    this.ctx?.plugins.arrow.setFieldOverride(index, field, value);
-    this.ctx?.plugins.arrow.sync();
-    this.dirty = true;
+    const t = this.table;
+    if (!t) return;
+    const before = this._field(t, field, index) ?? "";
+    if (before === value) return;
+    this._undo = [...this._undo, { index, field, before, after: value }];
+    this._redo = [];
+    this._setField(index, field, value);
   }
   setStatus(index: number, status: string): void {
     this.updateField(index, "status", status);
+  }
+
+  /** Revert the last field edit (canvas + overlay), then re-select it. */
+  undo(): void {
+    const op = this._undo.at(-1);
+    if (!op) return;
+    this._undo = this._undo.slice(0, -1);
+    this._redo = [...this._redo, op];
+    this._setField(op.index, op.field, op.before);
+    this.select(op.index);
+  }
+  /** Re-apply the last undone field edit. */
+  redo(): void {
+    const op = this._redo.at(-1);
+    if (!op) return;
+    this._redo = this._redo.slice(0, -1);
+    this._undo = [...this._undo, op];
+    this._setField(op.index, op.field, op.after);
+    this.select(op.index);
+  }
+
+  /** Apply a field value to BOTH the WebGPU canvas (arrow.setFieldOverride →
+   *  re-render) and the sidebar overlay. The single write path for edit/undo/redo. */
+  private _setField(index: number, field: EditableField, value: string): void {
+    this._overrides.set(`${index}:${field}`, value);
+    this.ctx?.plugins.arrow.setFieldOverride(index, field, value);
+    this.ctx?.plugins.arrow.sync();
   }
 
   // ── zoom ──
