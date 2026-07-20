@@ -102,7 +102,7 @@ def project_atlas_columns(
     if source_column not in ds.schema.names:
         raise ValueError(
             f"'{source_column}' column missing — run "
-            f"`raudio feature {source_column}` (or `frame_embedding` for the visual space) first"
+            f"`rmedia feature {source_column}` (or `frame_embedding` for the visual space) first"
         )
 
     targets = [x_col, y_col] + ([cluster_col] if with_clusters else [])
@@ -255,5 +255,5 @@ def _attach_column_by_row_id(
 
 _ATLAS_INSTALL_HINT = (
     "The Atlas projection needs the `atlas` extra (EVōC). Install with "
-    "`uv sync --extra atlas` (or `pip install 'raudio[atlas]'`)."
+    "`uv sync --extra atlas` (or `pip install 'rmedia[atlas]'`)."
 )

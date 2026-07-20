@@ -1,9 +1,9 @@
 """Thin wrapper around ``easytranscriber.pipelines.pipeline`` that produces the
-JSON files ``raudio ingest`` reads.
+JSON files ``rmedia ingest`` reads.
 
-Exposed as ``raudio transcribe …`` via :mod:`rmedia.cli`. ``easytranscriber``
+Exposed as ``rmedia transcribe …`` via :mod:`rmedia.cli`. ``easytranscriber``
 (and ``easyaligner``) are core dependencies but heavy (torch + pyannote), so we
-import them lazily — keeping ``raudio --help`` and FTS-only use light — and
+import them lazily — keeping ``rmedia --help`` and FTS-only use light — and
 surface a clear error if the environment is somehow missing them.
 """
 
@@ -117,5 +117,5 @@ def run_transcribe(
 
     out_dir = output_root / "alignments"
     logger.info("done — alignment JSONs written to %s/", out_dir)
-    logger.info("  next: raudio ingest %s/*.json", out_dir)
+    logger.info("  next: rmedia ingest %s/*.json", out_dir)
     return out_dir

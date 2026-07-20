@@ -4,5 +4,5 @@
 vector, string, struct — via ``add_columns`` without rewriting base data).
 :mod:`rmedia.features.columns` defines the concrete feature columns
 (text/frame embeddings, summaries, captions) and the ``FEATURES`` registry the
-``raudio feature <name>`` CLI drives.
+``rmedia feature <name>`` CLI drives.
 """

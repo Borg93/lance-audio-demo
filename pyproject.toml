@@ -29,7 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Client-side multimodal extra. Used by:
-#   - the `raudio feature text_embedding|frame_embedding` + `extract-chunk-frames` commands
+#   - the `rmedia feature text_embedding|frame_embedding` + `extract-chunk-frames` commands
 #   - the FastAPI backend at query time (lazy-imported in src/rmedia/clients/embedding.py)
 # Talks HTTP to a vLLM server; doesn't run a model in-process, so no GPU is
 # required to install this extra and no torch conflict with our cu128 pin.
@@ -40,7 +40,7 @@ multimodal = [
     "tqdm>=4.66",
 ]
 
-# Embedding-Atlas projection extra. Used by `raudio feature atlas` to compute the
+# Embedding-Atlas projection extra. Used by `rmedia feature atlas` to compute the
 # 2-D map (EVōC node embedding) + cluster columns from the stored text_embedding.
 # EVōC is CPU-only (numba / scikit-learn / tbb) with no torch dependency, so it
 # installs cleanly alongside our cu128 pin. Lazy-imported in features/projection.py.
@@ -56,18 +56,17 @@ atlas = [
 # project resolvable and isolates the vLLM dependency tree.
 
 # The console script and `python -m rmedia` share one entry point
-# (rmedia/__main__.py:main — the writing-python cli.md convention). `raudio`
-# stays as a deprecated alias through the shim package until Phase 2 (P2.8).
+# (rmedia/__main__.py:main — the writing-python cli.md convention). The legacy
+# `raudio` alias + its shim package were removed in the lance-media rename.
 [project.scripts]
 rmedia = "rmedia.__main__:main"
-raudio = "raudio.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/rmedia", "src/raudio", "backend"]
+packages = ["src/rmedia", "backend"]
 # Co-locate the vLLM reranker chat template with the only Python module that
 # orchestrates the reranker (src/rmedia/retrieval/search.py). Hatchling otherwise
 # excludes non-.py files from the wheel.

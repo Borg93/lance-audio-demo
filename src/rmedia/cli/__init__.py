@@ -1,8 +1,8 @@
-"""CLI for raudio — built with Typer.
+"""CLI for rmedia — built with Typer.
 
 Exposes the full pipeline as subcommands: ``transcribe``, ``detect-language``,
 ``ingest``, ``reindex-fts``, ``search``, ``serve``, ``feature``, ``thumbnail``,
-``download``, ``extract-chunk-frames``, ``compact``. Run ``raudio --help`` for
+``download``, ``extract-chunk-frames``, ``compact``. Run ``rmedia --help`` for
 the authoritative list.
 
 The Typer ``app`` lives in :mod:`._app` (underscored: a plain ``app.py`` would

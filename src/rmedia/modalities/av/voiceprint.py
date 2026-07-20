@@ -1,6 +1,6 @@
 """In-process speaker-embedding (voiceprint) extraction → ``speaker_embeddings.lance``.
 
-Used by ``raudio embed-speaker-turns`` to embed each diarized turn's voice with
+Used by ``rmedia embed-speaker-turns`` to embed each diarized turn's voice with
 pyannote community-1's **internal** WeSpeaker-ResNet34 encoder (256-d), loaded
 standalone via ``Model.from_pretrained(..., subfolder="embedding")``. The raw
 model outputs are *not* unit-norm; everything this module returns is
@@ -331,7 +331,7 @@ def embed_videos(
     iterator = progress(videos) if progress is not None else videos
     for doc_id, src in iterator:
         try:
-            with tempfile.TemporaryDirectory(prefix="raudio-voice-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="rmedia-voice-") as tmp:
                 wav = Path(tmp) / "audio_16k_mono.wav"
                 extract_wav_16k_mono(src, wav, timeout=ffmpeg_timeout)
                 kept, embeddings = encoder.embed_turns(
@@ -368,14 +368,14 @@ def build_speakers(db: lancedb.DBConnection, db_path: Path) -> tuple[int, int]:
     if "speaker_embeddings" not in db.list_tables().tables:
         raise ValueError(
             f"Table 'speaker_embeddings' not found in {db_path} — run "
-            "`raudio embed-speaker-turns` first (and `raudio merge-speaker-embeddings` "
+            "`rmedia embed-speaker-turns` first (and `rmedia merge-speaker-embeddings` "
             "if it ran sharded)."
         )
 
     ds = lance.dataset(str(db_path / "speaker_embeddings.lance"))
     tbl = ds.to_table(columns=["doc_id", "speaker_label", "duration", "embedding"])
     if tbl.num_rows == 0:
-        raise ValueError("speaker_embeddings is empty — run `raudio embed-speaker-turns` first.")
+        raise ValueError("speaker_embeddings is empty — run `rmedia embed-speaker-turns` first.")
 
     doc_ids = tbl["doc_id"].to_pylist()
     labels = tbl["speaker_label"].to_pylist()

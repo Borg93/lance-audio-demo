@@ -266,7 +266,7 @@ def cmd_embed_speaker_turns(
     existing_tables = db.list_tables().tables
     if "speaker_turns" not in existing_tables:
         _die(
-            f"Table 'speaker_turns' not found in {cfg.db} — run `raudio extract-speaker-turns` "
+            f"Table 'speaker_turns' not found in {cfg.db} — run `rmedia extract-speaker-turns` "
             "or `rmedia pipeline run diarize` first."
         )
 

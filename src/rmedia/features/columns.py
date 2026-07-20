@@ -3,7 +3,7 @@
 Each :class:`Feature` maps a name to a ``run`` that builds the production model
 client from a server URL and calls the matching client-injectable column builder
 in :mod:`rmedia.features.embed_columns` (the seam tests drive with an offline
-fake). The ``raudio feature <name>`` CLI is a thin loop over this dict, so adding
+fake). The ``rmedia feature <name>`` CLI is a thin loop over this dict, so adding
 a column is one entry here. The column constants and builder functions are
 re-exported below so existing ``rmedia.features.columns`` imports keep working.
 """
@@ -71,7 +71,7 @@ __all__ = [
 
 
 class FeatureRunOptions(BaseModel):
-    """Knobs the ``raudio feature <name>`` CLI passes into a feature's ``run``."""
+    """Knobs the ``rmedia feature <name>`` CLI passes into a feature's ``run``."""
 
     url: str | None = None  # model server base URL; None → the feature's own default
     # Generative-feature overrides (caption): None → the client's own default
@@ -269,8 +269,8 @@ def _run_atlas_visual(
     frames_path = db_path / "chunk_frames.lance"
     if not frames_path.exists():
         raise ValueError(
-            "chunk_frames table missing — run `raudio extract-chunk-frames` "
-            "and `raudio feature frame_embedding` before the visual atlas."
+            "chunk_frames table missing — run `rmedia extract-chunk-frames` "
+            "and `rmedia feature frame_embedding` before the visual atlas."
         )
     chunk_frame_embedding_column(
         chunks_path,
@@ -306,8 +306,8 @@ def _run_atlas_caption(
     frames_path = db_path / "chunk_frames.lance"
     if not frames_path.exists():
         raise ValueError(
-            "chunk_frames table missing — run `raudio feature caption` and "
-            "`raudio feature caption_embedding` before the caption atlas."
+            "chunk_frames table missing — run `rmedia feature caption` and "
+            "`rmedia feature caption_embedding` before the caption atlas."
         )
     chunk_frame_embedding_column(
         chunks_path,
@@ -331,7 +331,7 @@ def _run_topics(
 ) -> int:
     """Toponymy topic layers — runs in an ISOLATED uv env (scripts/build_topics.py).
 
-    Toponymy pins ``transformers<5``; rather than dragging that into the raudio
+    Toponymy pins ``transformers<5``; rather than dragging that into the rmedia
     project we shell out to a PEP-723 script whose deps resolve in their own
     sealed env (same isolation rationale as the vLLM servers). The worker reads
     ``chunks.text``/``text_embedding``/``atlas_x``/``atlas_y`` and writes the

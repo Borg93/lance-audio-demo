@@ -181,7 +181,7 @@ def embed_caption_column(
     2048-d space, so a text query can retrieve frames by *what the scene depicts*
     (``mode=scene``), complementing the raw image-similarity ``frame_embedding``.
     Reads the existing ``caption`` column — it never re-reads or re-extracts the
-    frame JPEGs. Run ``raudio feature caption`` first.
+    frame JPEGs. Run ``rmedia feature caption`` first.
     """
     import lance
 
@@ -189,7 +189,7 @@ def embed_caption_column(
     if CAPTION_COLUMN not in ds.schema.names:
         raise ValueError(
             f"'{CAPTION_COLUMN}' column missing on {frames_path} — run "
-            f"`raudio feature caption` before `caption_embedding`."
+            f"`rmedia feature caption` before `caption_embedding`."
         )
 
     def compute(batch: pa.RecordBatch) -> pa.Array:
@@ -232,7 +232,7 @@ def chunk_frame_embedding_column(
 
     Returns the number of chunk rows that received a vector (a chunk with no
     matching representative frame stays ``NULL``). Raises if ``chunk_frames``
-    lacks ``column`` (run the matching ``raudio feature`` step first).
+    lacks ``column`` (run the matching ``rmedia feature`` step first).
     """
     import lance
 
@@ -240,7 +240,7 @@ def chunk_frame_embedding_column(
     if column not in frames_ds.schema.names:
         raise ValueError(
             f"'{column}' column missing on {frames_path} — run the matching "
-            f"`raudio feature {column}` step before the chunk-level join."
+            f"`rmedia feature {column}` step before the chunk-level join."
         )
 
     chunks_ds = lance.dataset(str(chunks_path))

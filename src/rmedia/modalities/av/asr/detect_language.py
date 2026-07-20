@@ -18,7 +18,7 @@ with the correct wav2vec2 emissions model.
 **Never** pass a language-fine-tuned Whisper (``KBLab/kb-whisper-large``) —
 those over-predict their training language (every file comes back as `sv`).
 
-Exposed as ``raudio detect-language …`` via :mod:`rmedia.cli`.
+Exposed as ``rmedia detect-language …`` via :mod:`rmedia.cli`.
 """
 
 from __future__ import annotations
@@ -225,7 +225,7 @@ def detect_and_sort(
         for lang in sorted({v[0] for v in results.values()}):
             if lang in DEFAULT_EMISSIONS_MODEL:
                 logger.info(
-                    f"  next: raudio transcribe --audio-dir {audio_dir}/{lang} "
+                    f"  next: rmedia transcribe --audio-dir {audio_dir}/{lang} "
                     f"--language {lang} --output-root output/{lang}"
                 )
             else:

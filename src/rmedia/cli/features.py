@@ -95,7 +95,7 @@ def cmd_feature(
     if feature.table == "chunks":
         _require_table(lancedb.connect(str(cfg.db)), "chunks", cfg.db)
     elif not (cfg.db / f"{feature.table}.lance").exists():
-        _die(f"Table '{feature.table}' missing — run `raudio extract-chunk-frames` first.")
+        _die(f"Table '{feature.table}' missing — run `rmedia extract-chunk-frames` first.")
 
     # model_validate (not kwargs) so `space` is validated against its Literal at
     # runtime — a bad `--space` fails loudly here instead of silently routing.

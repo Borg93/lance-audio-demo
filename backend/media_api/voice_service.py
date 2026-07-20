@@ -207,7 +207,7 @@ def _require_bindings(handle: DatasetHandle) -> VoiceBindings:
     bindings = resolve_bindings(handle)
     if bindings is None:
         raise ServiceUnavailableError(
-            "voice embeddings not built yet — run `raudio embed-speaker-turns`"
+            "voice embeddings not built yet — run `rmedia embed-speaker-turns`"
         )
     return bindings
 
@@ -277,7 +277,7 @@ def _resolve_speaker_anchor(
     speakers_tbl: Any | None, doc_id: str, speaker: str, embedding_column: str
 ) -> tuple[list[float], VoiceAnchor]:
     if speakers_tbl is None:
-        raise ServiceUnavailableError("speakers table not built yet — run `raudio build-speakers`")
+        raise ServiceUnavailableError("speakers table not built yet — run `rmedia build-speakers`")
     rows = _anchor_rows(
         speakers_tbl, f"{_TURN_DOC} = '{doc_id}' AND {_TURN_SPEAKER} = '{_sql_quote(speaker)}'"
     )
@@ -532,7 +532,7 @@ def speaker_identity(handle: DatasetHandle, *, doc_id: str, speaker: str) -> Voi
     """
     speakers_name = _capability_table(handle.descriptor.declared, "speakers")
     if not _table_exists(handle, speakers_name):
-        raise ServiceUnavailableError("speakers table not built yet — run `raudio build-speakers`")
+        raise ServiceUnavailableError("speakers table not built yet — run `rmedia build-speakers`")
     speakers_tbl: Any = handle.db.open_table(str(speakers_name))
     ds = speakers_tbl.to_lance()
     has_cluster = _SPEAKER_CLUSTER in speakers_tbl.schema.names

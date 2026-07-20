@@ -1,4 +1,4 @@
-"""``python -m raudio`` entry point (same CLI as the ``raudio`` console script)."""
+"""``python -m rmedia`` entry point (same CLI as the ``rmedia`` console script)."""
 
 import sys
 

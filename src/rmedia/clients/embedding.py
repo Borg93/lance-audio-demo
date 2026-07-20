@@ -6,7 +6,7 @@ cross-encoder reranker, lives in :mod:`rmedia.clients.reranker`.
 
 The model is Qwen3-VL-Embedding-2B, served by a long-running vLLM HTTP server
 (`make embed-server`) so it loads once and stays warm across the feature CLI
-(`raudio feature text_embedding` / `frame_embedding`) and the backend.
+(`rmedia feature text_embedding` / `frame_embedding`) and the backend.
 """
 
 from __future__ import annotations

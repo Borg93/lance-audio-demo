@@ -1,4 +1,4 @@
-"""Domain errors for the raudio library.
+"""Domain errors for the rmedia library.
 
 Library code raises :class:`RaudioError` (never ``SystemExit`` — exiting the
 process is the CLI's decision, and a raised exit kills embedding callers and

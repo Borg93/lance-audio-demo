@@ -2,7 +2,7 @@
 normalization and image → data-URL encoding. No network, no model state.
 
 Imported lazily (only when a client actually runs), so its numpy/Pillow deps
-stay behind the ``[multimodal]`` extra and never load during `raudio --help`.
+stay behind the ``[multimodal]`` extra and never load during `rmedia --help`.
 """
 
 from __future__ import annotations

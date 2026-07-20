@@ -1,6 +1,6 @@
 """Generate JPEG thumbnails for media files via ffmpeg.
 
-Exposed as ``raudio thumbnail``. For each video/audio file under
+Exposed as ``rmedia thumbnail``. For each video/audio file under
 ``--input-dir`` we extract a single frame at ``--at`` seconds (default 5s)
 and write it to ``<output_dir>/<stem>.jpg``. Existing files are skipped, so
 the command is idempotent/resumable.

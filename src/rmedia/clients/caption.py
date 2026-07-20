@@ -8,7 +8,7 @@ description becomes vector-searchable (mode ``scene``).
 
 Defaults target **Gemma 4** served by vLLM on port 8003 with an OpenAI-style
 chat-completions API, producing **Swedish** captions for the Riksarkivet corpus.
-Model / URL / instruction are overridable via the ``raudio feature caption``
+Model / URL / instruction are overridable via the ``rmedia feature caption``
 CLI flags or the ``RAUDIO_CAPTION_*`` env vars, so the same client can drive a
 different VLM (e.g. ``Qwen/Qwen3-VL-Instruct-2B``) or language without code edits.
 """

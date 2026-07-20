@@ -1,4 +1,4 @@
-"""End-to-end smoke test of the whole raudio pipeline on a tiny real sample.
+"""End-to-end smoke test of the whole rmedia pipeline on a tiny real sample.
 
 Drives the actual CLI through every stage — ingest → embed-chunks →
 extract-chunk-frames → embed-chunk-frames — into a throwaway temp DB (your real
@@ -28,12 +28,12 @@ AUDIO_ROOT = Path("input/sv-test")
 
 
 def _run(*args: str) -> None:
-    """Invoke the raudio CLI in-process-venv; abort the smoke on non-zero exit."""
+    """Invoke the rmedia CLI in-process-venv; abort the smoke on non-zero exit."""
     cmd = [sys.executable, "-m", "rmedia.cli", *args]
-    print(f"\n$ raudio {' '.join(args)}")
+    print(f"\n$ rmedia {' '.join(args)}")
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
-        raise SystemExit(f"stage failed (exit {result.returncode}): raudio {' '.join(args)}")
+        raise SystemExit(f"stage failed (exit {result.returncode}): rmedia {' '.join(args)}")
 
 
 def _pick_stems(n: int) -> list[str]:

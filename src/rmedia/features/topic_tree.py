@@ -7,7 +7,7 @@ as a single-row ``topics`` Lance table whose ``hierarchy`` column is Lance JSONB
 file: the tree lives in the dataset, the backend reads one row, the LayerChart
 ``<Treemap>`` renders it.
 
-Pure Lance + stdlib (no Toponymy), so it runs in the normal raudio env — called by
+Pure Lance + stdlib (no Toponymy), so it runs in the normal rmedia env — called by
 ``feature topics`` after the isolated worker writes the columns, and runnable
 standalone to backfill an existing build:
 
@@ -87,7 +87,7 @@ def build_topic_tree(db_path: str | Path) -> int:
     """Write/refresh the ``topics`` table (one row: ``hierarchy`` JSONB + ``layers``).
 
     Returns the number of chunks folded into the tree. Raises if no ``topic_l*``
-    columns exist yet (run ``raudio feature topics`` first).
+    columns exist yet (run ``rmedia feature topics`` first).
     """
     import lance
     import pyarrow as pa
@@ -99,7 +99,7 @@ def build_topic_tree(db_path: str | Path) -> int:
     layer_cols = topic_layer_columns(chunks.schema.names)
     if not layer_cols:
         raise ValueError(
-            f"no topic_l* columns on {db_path}/chunks.lance — run `raudio feature topics` first."
+            f"no topic_l* columns on {db_path}/chunks.lance — run `rmedia feature topics` first."
         )
 
     rows = chunks.to_table(columns=layer_cols).to_pylist()

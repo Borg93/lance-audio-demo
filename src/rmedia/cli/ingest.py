@@ -56,7 +56,7 @@ def cmd_ingest(
         typer.Option(
             "--thumbnail-dir",
             help=(
-                "Directory of {stem}.jpg thumbnails (see `raudio thumbnail`). "
+                "Directory of {stem}.jpg thumbnails (see `rmedia thumbnail`). "
                 "If set, each document row stores the path to its thumbnail; "
                 "the viewer can then serve them for a gallery."
             ),

@@ -1,6 +1,6 @@
 """In-process speaker diarization → ``speaker_turns.lance``.
 
-Used by ``raudio extract-speaker-turns`` to run pyannote's
+Used by ``rmedia extract-speaker-turns`` to run pyannote's
 ``speaker-diarization-community-1`` pipeline over each source video and write
 its speaker turns to a separate append-only Lance table
 (:data:`rmedia.model.schema.SPEAKER_TURNS_SCHEMA`). Kept separate from ``chunks``
@@ -121,7 +121,7 @@ class Diarizer:
         Transcodes ``source`` to a temp 16 kHz mono WAV, runs the pipeline, and
         deletes the WAV before returning.
         """
-        with tempfile.TemporaryDirectory(prefix="raudio-diar-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="rmedia-diar-") as tmp:
             wav = Path(tmp) / "audio_16k_mono.wav"
             extract_wav_16k_mono(source, wav, timeout=ffmpeg_timeout)
             out = self._pipe(str(wav))

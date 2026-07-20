@@ -82,7 +82,7 @@ MODEL     ?= KBLab/kb-whisper-large
 VAD       ?= pyannote
 DEVICE    ?= cuda
 transcribe:           ## Run easytranscriber → writes output/alignments/*.json.
-	uv run raudio transcribe \
+	uv run rmedia transcribe \
 		--audio-dir $(AUDIO_DIR) \
 		--language  $(LANGUAGE) \
 		--model     $(MODEL) \
@@ -90,19 +90,19 @@ transcribe:           ## Run easytranscriber → writes output/alignments/*.json
 		--device    $(DEVICE)
 
 detect-language:      ## Sort $(AUDIO_DIR)/*.{mp4,wav,…} into $(AUDIO_DIR)/<lang>/ subfolders.
-	uv run raudio detect-language --audio-dir $(AUDIO_DIR) --device $(DEVICE)
+	uv run rmedia detect-language --audio-dir $(AUDIO_DIR) --device $(DEVICE)
 
 # ─── Download from the Riksarkivet CSV (resumable, concurrent) ──────────────
 download:             ## Bulk-download videos listed in $(METADATA_CSV) → $(AUDIO_DIR).
-	uv run raudio download --csv $(METADATA_CSV) --output-dir $(AUDIO_DIR) --concurrency 6
+	uv run rmedia download --csv $(METADATA_CSV) --output-dir $(AUDIO_DIR) --concurrency 6
 
 # ─── Thumbnails (ffmpeg frame extraction) ───────────────────────────────────
 thumbnail:            ## Render one JPEG per video under $(AUDIO_DIR) → $(THUMBNAILS_DIR).
-	uv run raudio thumbnail --input-dir $(AUDIO_DIR) --output-dir $(THUMBNAILS_DIR)
+	uv run rmedia thumbnail --input-dir $(AUDIO_DIR) --output-dir $(THUMBNAILS_DIR)
 
 # ─── Ingest ─────────────────────────────────────────────────────────────────
 ingest:               ## Ingest $(SAMPLE) into $(DB) (append).
-	uv run raudio --db $(DB) --table $(TABLE) ingest $(SAMPLE)
+	uv run rmedia --db $(DB) --table $(TABLE) ingest $(SAMPLE)
 
 reingest: clean-db ingest  ## Nuke the DB first, then ingest — safe to re-run.
 
@@ -112,7 +112,7 @@ reingest: clean-db ingest  ## Nuke the DB first, then ingest — safe to re-run.
 #   make ingest-with-media AUDIO_ROOT=./examples
 ingest-with-media:    ## Ingest $(SAMPLE) AND embed source media in the `documents` table.
 	@test -n "$(AUDIO_ROOT)" || (echo "Set AUDIO_ROOT=/path/to/media-dir"; exit 2)
-	uv run raudio --db $(DB) --table $(TABLE) ingest --audio-root $(AUDIO_ROOT) $(SAMPLE)
+	uv run rmedia --db $(DB) --table $(TABLE) ingest --audio-root $(AUDIO_ROOT) $(SAMPLE)
 
 # ─── Full-corpus ingest (metadata CSV + thumbnails + Swedish FTS) ───────────
 # Every row's media_uri is set from --audio-root (→ file:///abs/path/...mp4)
@@ -123,7 +123,7 @@ MEDIA_BASE_URI ?=
 ingest-full:          ## Ingest all $(ALIGNMENTS)/*.json with metadata + thumbnails + Swedish FTS.
 	@test -d "$(ALIGNMENTS)" || (echo "$(ALIGNMENTS) does not exist — run `make transcribe` first."; exit 2)
 	@test -f "$(METADATA_CSV)" || (echo "$(METADATA_CSV) not found"; exit 2)
-	uv run raudio --db $(DB) --table $(TABLE) ingest \
+	uv run rmedia --db $(DB) --table $(TABLE) ingest \
 		$(ALIGNMENTS)/*.json \
 		--metadata-csv $(METADATA_CSV) \
 		$(if $(wildcard $(THUMBNAILS_DIR)),--thumbnail-dir $(THUMBNAILS_DIR),) \
@@ -133,7 +133,7 @@ ingest-full:          ## Ingest all $(ALIGNMENTS)/*.json with metadata + thumbna
 # ─── Rebuild only the FTS index (no re-ingest) ──────────────────────────────
 FTS_LANGUAGE ?= Swedish
 reindex-fts:          ## Rebuild the FTS index with a different language/config (fast).
-	uv run raudio --db $(DB) --table $(TABLE) reindex-fts --language $(FTS_LANGUAGE)
+	uv run rmedia --db $(DB) --table $(TABLE) reindex-fts --language $(FTS_LANGUAGE)
 
 # ─── Full pipeline on a single GPU ──────────────────────────────────────────
 # Steps: transcribe → thumbnail → ingest-full. Assumes $(AUDIO_DIR) already
@@ -141,7 +141,7 @@ reindex-fts:          ## Rebuild the FTS index with a different language/config 
 # silero VAD for reproducibility — override to use pyannote.
 pipeline:             ## Transcribe + thumbnail + ingest for $(LANGUAGE) on GPU $(GPU).
 	@echo "── 1/3 transcribe ──────────────────────────────────────────────"
-	CUDA_VISIBLE_DEVICES=$(GPU) uv run raudio transcribe \
+	CUDA_VISIBLE_DEVICES=$(GPU) uv run rmedia transcribe \
 		--audio-dir $(AUDIO_DIR) --language $(LANGUAGE) --vad $(VAD) \
 		--output-root $(OUTPUT_ROOT)
 	@echo "── 2/3 thumbnails ──────────────────────────────────────────────"
@@ -167,7 +167,7 @@ pipeline-sharded: shards  ## Transcribe all $(SHARDS) shards in parallel (one GP
 	@echo "Launching $(SHARDS) transcribe processes (one per GPU)."
 	@echo "Watch progress with: tail -f $(OUTPUT_ROOT)/shard{0..$$(($(SHARDS)-1))}.log"
 	@for i in $$(seq 0 $$(($(SHARDS)-1))); do \
-		CUDA_VISIBLE_DEVICES=$$i nohup uv run raudio transcribe \
+		CUDA_VISIBLE_DEVICES=$$i nohup uv run rmedia transcribe \
 			--audio-dir $(AUDIO_DIR)/shard$$i --language $(LANGUAGE) --vad $(VAD) \
 			--output-root $(OUTPUT_ROOT) \
 			> $(OUTPUT_ROOT)/shard$$i.log 2>&1 & \
@@ -189,7 +189,7 @@ BACKEND_PORT ?= 8000
 FRONTEND_PORT ?= 5274
 
 backend:              ## Run the FastAPI backend (Lance reads, /api/*).
-	uv run raudio --db $(DB) serve --host $(BACKEND_HOST) --port $(BACKEND_PORT)
+	uv run rmedia --db $(DB) serve --host $(BACKEND_HOST) --port $(BACKEND_PORT)
 
 FRONTEND_DIR    ?= ./frontend
 FRONTEND_BUILD  ?= $(FRONTEND_DIR)/build
@@ -236,7 +236,7 @@ EMBED_MEM_FRAC  ?= 0.45
 RERANK_MEM_FRAC ?= 0.45
 
 # Caption model — a generative VLM (Gemma 4) you ALREADY run locally on :8003.
-# raudio is only a CLIENT of it: `raudio feature caption` POSTs frames to this
+# raudio is only a CLIENT of it: `rmedia feature caption` POSTs frames to this
 # URL. We do NOT start the server (no Make target spins one up) — point these at
 # wherever your Gemma serves. The client also honours RAUDIO_CAPTION_URL/MODEL.
 CAPTION_URL      ?= http://127.0.0.1:8003
@@ -379,13 +379,13 @@ embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ i
 	uv run --extra multimodal raudio --db $(DB) feature frame_embedding --url $(EMBED_URL)
 
 speaker-turns:        ## Diarize each video → speaker_turns.lance (who-spoke-when; needs pyannote + cached HF token).
-	uv run raudio --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+	uv run rmedia --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
 
 embed-speaker-turns:  ## Per-turn WeSpeaker 256-d voiceprints → speaker_embeddings.lance (GPU; shardable).
-	uv run raudio --db $(DB) embed-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+	uv run rmedia --db $(DB) embed-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
 
 build-speakers:       ## Duration-weighted centroid per (doc, label) → speakers.lance.
-	uv run raudio --db $(DB) build-speakers
+	uv run rmedia --db $(DB) build-speakers
 
 cluster-speakers:     ## Seeded EVōC over speakers → speaker_cluster (cross-video identities; needs atlas extra).
 	uv run --extra atlas raudio --db $(DB) cluster-speakers --seed 42 --validate
@@ -414,7 +414,7 @@ atlas-caption:        ## Caption EVōC map (atlas_cap_*) from caption_embedding.
 atlas-all: atlas atlas-visual atlas-caption  ## All three atlas projections.
 
 topics:               ## Build Swedish topic layers (Toponymy, isolated env; needs atlas map + Gemma :8003 + embed :8001).
-	uv run raudio --db $(DB) feature topics
+	uv run rmedia --db $(DB) feature topics
 
 # ─── Complete feature DAG (everything the serving DB carries) ─────────────────
 # The full multimodal + atlas + topics chain in dependency order. Assumes
@@ -460,7 +460,7 @@ features-all-ray:     ## features-all via the Ray Data pipeline (rmedia pipeline
 	$(MAKE) compact
 
 compact:               ## Compact $(TABLE)'s fragments + rebuild its indexes (run after bulk writes; TABLE=chunk_frames for frames).
-	uv run raudio --db $(DB) --table $(TABLE) compact
+	uv run rmedia --db $(DB) --table $(TABLE) compact
 	@echo "── multimodal indexing complete ────────────────────────────────"
 
 E2E_DOCS        ?= 2
@@ -528,7 +528,7 @@ hf-download-all:      ## Pull Lance + videos + alignments + thumbnails to local.
 # ─── Search ─────────────────────────────────────────────────────────────────
 search:               ## FTS query. Usage: make search Q='best of times'
 	@test -n "$(Q)" || (echo "Set Q=...  (e.g. make search Q='best of times')"; exit 2)
-	uv run raudio --db $(DB) --table $(TABLE) search '$(Q)'
+	uv run rmedia --db $(DB) --table $(TABLE) search '$(Q)'
 
 query: search         ## Alias for `make search`.
 
@@ -539,17 +539,17 @@ query: search         ## Alias for `make search`.
 demo: install reingest  ## Full end-to-end smoke: install + reingest + 3 queries.
 	@echo ""
 	@echo "── query 1 ── 'best of times' ──────────────────────────────────"
-	uv run raudio --db $(DB) --table $(TABLE) search 'best of times'
+	uv run rmedia --db $(DB) --table $(TABLE) search 'best of times'
 	@echo ""
 	@echo "── query 2 ── exact phrase '\"spring of hope\"' ─────────────────"
-	uv run raudio --db $(DB) --table $(TABLE) search '"spring of hope"'
+	uv run rmedia --db $(DB) --table $(TABLE) search '"spring of hope"'
 	@echo ""
 	@echo "── query 3 ── boolean 'wisdom OR foolishness' ──────────────────"
-	uv run raudio --db $(DB) --table $(TABLE) search 'wisdom OR foolishness' -n 3
+	uv run rmedia --db $(DB) --table $(TABLE) search 'wisdom OR foolishness' -n 3
 
 # ─── REPL ───────────────────────────────────────────────────────────────────
 shell:                ## Drop into a Python REPL with raudio imported as `la`.
-	uv run python -ic "import raudio as la; print('raudio loaded as `la`')"
+	uv run python -ic "import rmedia as lm; print('rmedia loaded as `lm`')"
 
 # ─── Cleanup ────────────────────────────────────────────────────────────────
 clean-db:             ## Delete the Lance database only.

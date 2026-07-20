@@ -1,4 +1,4 @@
-"""PyArrow schemas for the Lance tables that `raudio` produces.
+"""PyArrow schemas for the Lance tables that `rmedia` produces.
 
 * :data:`CHUNK_SCHEMA` — one row per :class:`AudioChunk`. Holds the ``text``
   column the Tantivy FTS index is built on. The ``text_embedding`` vector is
@@ -123,7 +123,7 @@ CHUNK_STORAGE_VERSION: Final = "2.2"
 # bytes), and a Python reader uses `ds.take_blobs("media_blob", ...)` to
 # transparently fetch + range-read the underlying objects.
 #   file:///abs/path/input/T0001417_00001.mp4    ← local dev
-#   hf://buckets/you/raudio-videos/T0001417_00001.mp4
+#   hf://buckets/you/rmedia-videos/T0001417_00001.mp4
 #   s3://bucket/videos/T0001417_00001.mp4
 # Writes use `blob_array([uri, …])`. Requires data_storage_version="2.2".
 
@@ -204,7 +204,7 @@ CHUNK_FRAMES_STORAGE_VERSION: Final = "2.2"
 # the per-video enumerate index of the turn (turns sorted by `start`).
 # `speaker_label` is pyannote's local label ("SPEAKER_00", "SPEAKER_01", …) —
 # stable only *within* a single video, never across videos. `start`/`end` are
-# ABSOLUTE video seconds. Built offline by `raudio extract-speaker-turns`; read
+# ABSOLUTE video seconds. Built offline by `rmedia extract-speaker-turns`; read
 # on demand by the backend (`GET /api/diarization/{doc_id}`). Kept separate from
 # `chunks` for the same reason `chunk_frames` is: avoid `merge_insert` against
 # the wide `chunks` schema, and one video's turns are produced as a unit.
@@ -233,7 +233,7 @@ SPEAKER_TURNS_STORAGE_VERSION: Final = "2.2"
 # normalizes before storing so cosine kNN is well-defined). `speaker_label` /
 # `start` / `end` / `duration` are denormalised from speaker_turns so a voice
 # kNN hit resolves to its turn without a join. Built offline by
-# `raudio embed-speaker-turns`; queried by the backend's voice-similarity kNN.
+# `rmedia embed-speaker-turns`; queried by the backend's voice-similarity kNN.
 
 #: Output dimension of pyannote community-1's internal WeSpeaker-ResNet34
 #: speaker-embedding model. Deliberately a separate constant from EMBED_DIM
@@ -265,7 +265,7 @@ SPEAKER_EMBEDDINGS_STORAGE_VERSION: Final = "2.2"
 # diarization speaker. `speaker_cluster` defaults to -1; a later global
 # clustering pass fills it to assign cross-video identities, and
 # `speaker_name` stays NULL until that pass (or a human) names the cluster.
-# Tiny (a few rows per video), so `raudio build-speakers` rebuilds it
+# Tiny (a few rows per video), so `rmedia build-speakers` rebuilds it
 # wholesale (overwrite) from `speaker_embeddings` each run.
 
 SPEAKERS_SCHEMA: pa.Schema = pa.schema(

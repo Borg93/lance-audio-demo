@@ -1,4 +1,4 @@
-"""Global speaker clustering + eval helpers for ``raudio cluster-speakers``.
+"""Global speaker clustering + eval helpers for ``rmedia cluster-speakers``.
 
 Fits :class:`evoc.EVoC` over the per-speaker voiceprints in ``speakers.lance`` and
 rewrites the table's ``speaker_cluster`` column. The written assignment is NOT
@@ -237,18 +237,18 @@ def cluster_speakers(
 
     if "speakers" not in db.list_tables().tables:
         raise ValueError(
-            f"Table 'speakers' not found in {db_path} — run `raudio build-speakers` first."
+            f"Table 'speakers' not found in {db_path} — run `rmedia build-speakers` first."
         )
 
     speakers_path = db_path / "speakers.lance"
     tbl = lance.dataset(str(speakers_path)).to_table()
     if tbl.num_rows == 0:
-        raise ValueError("speakers is empty — run `raudio build-speakers` first.")
+        raise ValueError("speakers is empty — run `rmedia build-speakers` first.")
     emb = tbl["embedding"].combine_chunks()
     if emb.null_count > 0:
         raise ValueError(
             f"speakers.embedding has {emb.null_count} NULL row(s) — "
-            "rebuild with `raudio build-speakers` first."
+            "rebuild with `rmedia build-speakers` first."
         )
     matrix = (
         emb.flatten().to_numpy(zero_copy_only=False).reshape(-1, VOICE_EMBED_DIM).astype(np.float32)

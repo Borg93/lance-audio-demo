@@ -1,6 +1,6 @@
 """Single-frame ffmpeg extraction for chunk-level visual indexing.
 
-Used by ``raudio extract-chunk-frames`` to grab one representative JPEG per
+Used by ``rmedia extract-chunk-frames`` to grab one representative JPEG per
 transcript chunk at ``chunk.start``. This module only *produces* the JPEG
 bytes (piped from ffmpeg over stdout — no temp files, no manifest CSV); the
 CLI then writes them into the separate append-only ``chunk_frames`` Lance
