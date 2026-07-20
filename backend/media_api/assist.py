@@ -1,0 +1,121 @@
+"""Interactive AI-assist — a model prediction for the annotator (prompt/draw → shapes).
+
+The NARROW interactive exception (bulk auto-labeling belongs in batch derivers). A
+prompt — text for GroundingDINO, a box/point for SAM — runs a model and returns shapes
+as `status="prediction"`, `source="model:<name>"` rows the annotator renders optimistically
+and the reviewer accepts/rejects like any prediction. So interactive assist and batch
+auto-label share the SAME provenance + review path.
+
+Routes to a model server (``MEDIA_ASSIST_URL``) when set; else a deterministic MOCK so
+the round-trip is wired + testable in-repo (drop-in for a real server, exactly like the
+catalog transport). Shapes are in IMAGE coordinates — the annotator's own space.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
+
+from backend.core.exceptions import ServiceUnavailableError
+from backend.deps import StateDep
+from backend.media_api.media import DatasetParam, validate_doc_key
+from backend.state import dataset_handle
+
+if TYPE_CHECKING:
+    from backend.state import AppState
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api", tags=["assist"])
+
+
+class Region(BaseModel):
+    """The drawn box the assist runs within (image coords). Omitted ⇒ whole image."""
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class AssistRequest(BaseModel):
+    producer: str = "grounding-dino"
+    prompt: str | None = None
+    region: Region | None = None
+
+
+class AssistShape(BaseModel):
+    shape_type: str = "rectangle"
+    x: float
+    y: float
+    width: float
+    height: float
+    polygon: list[float] = Field(default_factory=list)
+    label: str = ""
+    confidence: float = 0.0
+
+
+class AssistResult(BaseModel):
+    """Predicted shapes + the provenance stamp (source) the annotator writes."""
+
+    shapes: list[AssistShape]
+    source: str
+
+
+@router.post("/assist/{doc_id}/{speech_id}/{chunk_id}")
+def assist(
+    state: StateDep,
+    doc_id: str,
+    speech_id: int,
+    chunk_id: int,
+    body: AssistRequest,
+    dataset: DatasetParam = None,
+) -> AssistResult:
+    """Run an interactive producer over one media unit and return predicted shapes."""
+    handle = dataset_handle(state, dataset)
+    doc_id = validate_doc_key(handle.descriptor.declared, doc_id)
+    source = f"model:{body.producer}"
+    url = state.settings.assist_url
+    shapes = (
+        _remote(state, url, (doc_id, speech_id, chunk_id), body) if url else _mock(body)
+    )
+    logger.info("assist %s '%s' → %d shape(s)", body.producer, body.prompt or "", len(shapes))
+    return AssistResult(shapes=shapes, source=source)
+
+
+def _mock(body: AssistRequest) -> list[AssistShape]:
+    """Deterministic stand-in for a model server: a box at the drawn region (or a
+    default), labeled with the prompt — enough to prove the round-trip end to end."""
+    label = (body.prompt or "region").strip()
+    r = body.region
+    if r is not None:
+        return [
+            AssistShape(
+                shape_type="rectangle", x=r.x, y=r.y, width=r.width, height=r.height,
+                label=label, confidence=0.7,
+            )
+        ]
+    return [AssistShape(shape_type="rectangle", x=100.0, y=100.0, width=200.0, height=80.0, label=label, confidence=0.7)]
+
+
+def _remote(
+    state: AppState, url: str, key: tuple[str, int, int], body: AssistRequest
+) -> list[AssistShape]:
+    """Proxy to the model endpoint — a Ray Serve deployment (GroundingDINO/SAM) per the
+    merge runtime stack. WIRED, not exercised in-repo: posts the chunk-frame image URL +
+    prompt + region and expects ``{shapes: [...]}``."""
+    doc_id, speech_id, chunk_id = key
+    http = state.http
+    if http is None:
+        raise ServiceUnavailableError("assist: HTTP client unavailable")
+    payload = {
+        "image_url": f"/api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}",
+        "prompt": body.prompt,
+        "region": body.region.model_dump() if body.region else None,
+    }
+    resp = http.post(url, json=payload, timeout=30.0)
+    resp.raise_for_status()
+    return [AssistShape.model_validate(s) for s in resp.json().get("shapes", [])]

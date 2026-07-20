@@ -79,6 +79,18 @@ interface InsertRow {
   source: string;
 }
 
+/** A predicted shape from the AI-assist endpoint (backend AssistShape). */
+interface AssistShape {
+  shape_type?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  polygon?: number[];
+  label?: string;
+  confidence?: number;
+}
+
 const STRING_FIELD_CANDIDATES = ["label", "status", "source", "group", "reviewer"];
 
 /** #rrggbb ⇄ 0xRRGGBB — self-contained so the panel needs no engine color util. */
@@ -267,27 +279,7 @@ export class AnnotatorController {
       this._geoEdits.set(index, geo);
       this._geoDirty = true;
     };
-    im.onCommit = (shape) => {
-      const row = this._buildInsert(shape);
-      this._inserts = [...this._inserts, row];
-      const t = this.table;
-      if (t) {
-        // Optimistic render: append the drawn shape AT THE END (index = numRows, so
-        // the index-keyed overlay/selection stay valid) and re-render the WebGPU
-        // canvas. save()+_reload() later replace it with the server-canonical row.
-        const next = t.concat(
-          buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]),
-        );
-        ctx.plugins.arrow.load(next);
-        ctx.plugins.arrow.sync();
-        this.table = next;
-        this.count = next.numRows;
-        this._reapplyOverrides(); // sync() re-materialized caches → re-apply field patches
-      } else {
-        this.count = ctx.plugins.arrow.getNumRows() + this._inserts.length;
-      }
-      this._geoDirty = true;
-    };
+    im.onCommit = (shape) => this._appendInsert(this._buildInsert(shape));
 
     // chain (never overwrite) the image viewport hook PixiCanvas installed, so
     // zoomPercent tracks wheel-zoom + pan + our zoom buttons alike.
@@ -368,6 +360,72 @@ export class AnnotatorController {
     this.ctx?.plugins.interaction.handleKeyDown("Delete");
     this._geoDirty = true;
     this.select(null);
+  }
+
+  /** Queue a new row for Save AND render it optimistically — append AT THE END
+   *  (index = numRows, so the index-keyed overlay/selection stay valid), re-render the
+   *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
+   *  Shared by manual draws (onCommit) and AI-assist predictions. */
+  private _appendInsert(row: InsertRow): void {
+    this._inserts = [...this._inserts, row];
+    const t = this.table;
+    const arrow = this.ctx?.plugins.arrow;
+    if (t && arrow) {
+      const next = t.concat(buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]));
+      arrow.load(next);
+      arrow.sync();
+      this.table = next;
+      this.count = next.numRows;
+      this._reapplyOverrides();
+    } else {
+      this.count = (this.table?.numRows ?? 0) + this._inserts.length;
+    }
+    this._geoDirty = true;
+  }
+
+  /** Interactive AI-assist (the ra-atr "draw/prompt → shapes" loop): run a producer
+   *  over this unit and drop the predicted shapes on the canvas as `status=prediction`,
+   *  `source=model:…` — reviewed/accepted like any prediction, persisted on Save. */
+  async assist(
+    prompt: string,
+    region?: { x: number; y: number; width: number; height: number },
+  ): Promise<void> {
+    const url = this._saveUrl;
+    if (!url || !prompt.trim() || this.saving) return;
+    const assistUrl = url.replace("/api/annotations/", "/api/assist/");
+    this.saving = true;
+    this.saveError = null;
+    try {
+      const res = await fetch(assistUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ producer: "grounding-dino", prompt, region: region ?? null }),
+      });
+      if (!res.ok) throw new Error(`assist failed (HTTP ${res.status})`);
+      const result = (await res.json()) as { shapes: AssistShape[]; source: string };
+      for (const s of result.shapes) {
+        this._appendInsert({
+          id: crypto.randomUUID(),
+          shape_type: s.shape_type ?? "rectangle",
+          x: s.x,
+          y: s.y,
+          width: s.width,
+          height: s.height,
+          rotation: 0,
+          polygon: s.polygon ?? [],
+          mask: "",
+          label: s.label ?? prompt,
+          text: "",
+          group: "",
+          status: "prediction",
+          source: result.source ?? "model:grounding-dino",
+        });
+      }
+    } catch (e) {
+      this.saveError = e instanceof Error ? e.message : String(e);
+    } finally {
+      this.saving = false;
+    }
   }
 
   /** Map a committed engine shape → the queued insert row (backend NewAnnotation). */

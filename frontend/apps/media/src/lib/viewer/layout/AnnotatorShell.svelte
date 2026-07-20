@@ -12,6 +12,7 @@
   import AnnotationSidebar from './AnnotationSidebar.svelte';
   import ZoomControls from './ZoomControls.svelte';
   import PageNav from './PageNav.svelte';
+  import AiAssistBar from './AiAssistBar.svelte';
   import type { Tool } from '$lib/engine';
 
   let { unit }: { unit: MediaUnit } = $props();
@@ -101,6 +102,9 @@
             annotate · {unit.kind} · {status}
           </div>
           <Viewer {unit} {controller} onload={(n) => (status = `${n} annotations from Lance`)} />
+          {#if controller.canDraw}
+            <AiAssistBar {controller} />
+          {/if}
           <PageNav {pages} current={pageIndex} onNavigate={navigate} />
           <ZoomControls {controller} />
         </div>

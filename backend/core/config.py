@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     # merge). "stdout"/"log" write a spec-2-0-2 RunEvent per save; "none" disables.
     lineage_sink: str = Field(default="log", alias="MEDIA_LINEAGE_SINK")
 
+    # Interactive AI-assist model endpoint — a Ray Serve deployment (GroundingDINO/SAM),
+    # per the merge runtime stack (models = Ray Serve). Unset ⇒ a deterministic mock so
+    # the draw/prompt→shapes round-trip is testable in-repo (drop-in for the Ray Serve
+    # HTTP endpoint, like the catalog transport).
+    assist_url: str | None = Field(default=None, alias="MEDIA_ASSIST_URL")
+
     @field_validator("read_backend", "write_backend")
     @classmethod
     def _check_backend(cls, v: str) -> str:
