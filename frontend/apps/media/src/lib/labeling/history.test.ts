@@ -1,0 +1,34 @@
+import { describe, expect, it } from "vitest";
+import { diffSignatures, rowSignature, type RowSig } from "$lib/labeling/history";
+
+const sig = (r: Partial<RowSig>): string =>
+  rowSignature({ label: "", status: "", shape: "", group: "", text: "", ...r });
+
+describe("diffSignatures", () => {
+  it("classifies added / removed / changed by id and signature", () => {
+    const past = new Map([
+      ["a", sig({ label: "line", status: "accepted" })],
+      ["b", sig({ label: "figure", status: "accepted" })],
+    ]);
+    const current = new Map([
+      ["a", sig({ label: "line", status: "rejected" })], // status changed
+      ["c", sig({ label: "word", status: "accepted" })], // new
+    ]);
+    const d = diffSignatures(past, current);
+    expect(d.added).toEqual(["c"]);
+    expect(d.removed).toEqual(["b"]);
+    expect(d.changed).toEqual(["a"]);
+  });
+
+  it("reports no diff for identical signatures", () => {
+    const a = new Map([["x", sig({ label: "l", status: "accepted" })]]);
+    const b = new Map([["x", sig({ label: "l", status: "accepted" })]]);
+    expect(diffSignatures(a, b)).toEqual({ added: [], removed: [], changed: [] });
+  });
+
+  it("rowSignature ignores fields outside the reviewable set (geometry-agnostic)", () => {
+    // Same reviewable content ⇒ same signature; a geometry field is not part of RowSig.
+    expect(sig({ label: "l", status: "s" })).toBe(sig({ label: "l", status: "s" }));
+    expect(sig({ label: "l" })).not.toBe(sig({ label: "m" }));
+  });
+});

@@ -24,6 +24,7 @@ import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "$lib/labeling
 import { isChunkSelection } from "$lib/labeling/types";
 import { PRODUCERS } from "$lib/labeling/producers";
 import { submitBatchJob } from "$lib/labeling/jobs";
+import { rowSignature } from "$lib/labeling/history";
 
 export type Mode = "view" | "edit";
 
@@ -264,6 +265,18 @@ export class AnnotatorController {
       ...new Set(this.rows.filter((r) => r.shape !== "tag").map((r) => r.label).filter(Boolean)),
     ].sort((a, b) => a.localeCompare(b)),
   );
+
+  /** The annotations endpoint for this unit (GET/POST/versions) — null when read-only.
+   *  The compare-versions panel reads history + historical snapshots from it. */
+  get annotationsUrl(): string | null {
+    return this._saveUrl;
+  }
+  /** The current rows as id→signature, for diffing against a historical version. */
+  readonly currentSignatures = $derived.by<Map<string, string>>(() => {
+    const m = new Map<string, string>();
+    for (const r of this.rows) m.set(r.id, rowSignature(r));
+    return m;
+  });
 
   readonly canDraw = $derived(this.mode === "edit");
   readonly canUndo = $derived(this._undo.length > 0);

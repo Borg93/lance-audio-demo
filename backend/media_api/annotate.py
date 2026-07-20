@@ -9,10 +9,11 @@ stream (a dataset with no annotations yet is not an error).
 
 import logging
 from collections.abc import Mapping, Sequence
+from typing import Annotated
 from urllib.parse import quote
 
 import pyarrow as pa
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
 
 from backend.core.exceptions import ConflictError, NotFoundError
@@ -269,11 +270,13 @@ def annotations(
     speech_id: int,
     chunk_id: int,
     dataset: DatasetParam = None,
+    version: Annotated[int | None, Query(ge=1, description="Read a historical version (time-travel).")] = None,
 ) -> Response:
     """Arrow IPC stream of the annotations for one media unit (doc + identity keys).
 
     The keys map positionally onto the descriptor's identity fields (same shape as
-    the chunk / chunk-frame routes)."""
+    the chunk / chunk-frame routes). ``version`` reads a HISTORICAL snapshot (Lance
+    time-travel) for the compare-versions view; omitted ⇒ the latest."""
     handle = dataset_handle(state, dataset)
     declared = handle.descriptor.declared
     doc_id = validate_doc_key(declared, doc_id)
@@ -287,18 +290,71 @@ def annotations(
             headers={"Cache-Control": "no-store", "X-Annotations-Version": "0"},
         )
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
-    # Reads flow through the reader seam (direct default = byte-identical; catalog /query
-    # at merge) — open_reader was built for exactly this.
-    reader = open_reader(
-        dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
-    )
-    table = reader.to_table(filter=where)
+    if version is not None:
+        # A historical read is a direct time-travel snapshot (read-only, off the hot
+        # path); the reader seam governs the current read.
+        snapshot = ds.checkout_version(version)
+        table = snapshot.to_table(filter=where)
+        served_version = version
+    else:
+        # Reads flow through the reader seam (direct default = byte-identical; catalog
+        # /query at merge) — open_reader was built for exactly this.
+        reader = open_reader(
+            dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
+        )
+        table = reader.to_table(filter=where)
+        served_version = int(ds.version)
     # The loaded Lance version — the client echoes it on Save for optimistic concurrency.
     return Response(
         content=_ipc_stream(table),
         media_type=_ARROW_STREAM,
-        headers={"Cache-Control": "no-store", "X-Annotations-Version": str(int(ds.version))},
+        headers={"Cache-Control": "no-store", "X-Annotations-Version": str(served_version)},
     )
+
+
+class AnnotationVersion(BaseModel):
+    """One point in a unit's edit history — a Lance version + when it was committed +
+    how many annotations this unit had at it (the audit/compare-versions trail)."""
+
+    version: int
+    timestamp: str
+    count: int
+
+
+@router.get("/annotations/{doc_id}/{speech_id}/{chunk_id}/versions")
+def annotation_versions(
+    state: StateDep,
+    doc_id: str,
+    speech_id: int,
+    chunk_id: int,
+    dataset: DatasetParam = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+) -> list[AnnotationVersion]:
+    """The unit's edit history (most-recent first, capped): each Lance version + its
+    timestamp + the count of THIS unit's annotations at it. Powers the compare-versions
+    panel — the read-side of the write-plane provenance story (who=reviewer, when=version,
+    what=lineage)."""
+    handle = dataset_handle(state, dataset)
+    declared = handle.descriptor.declared
+    doc_id = validate_doc_key(declared, doc_id)
+    try:
+        ds = table_dataset(handle, ANNOTATIONS_TABLE)
+    except NotFoundError:
+        return []
+    where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
+    out: list[AnnotationVersion] = []
+    for v in list(reversed(ds.versions()))[:limit]:  # most recent first, capped
+        vnum = int(v["version"])
+        count = ds.checkout_version(vnum).to_table(filter=where, columns=["id"]).num_rows
+        ts = v.get("timestamp")
+        out.append(AnnotationVersion(version=vnum, timestamp=_iso(ts), count=count))
+    return out
+
+
+def _iso(ts: object) -> str:
+    """A Lance version timestamp → ISO string (datetime or already-string)."""
+    isofmt = getattr(ts, "isoformat", None)
+    return isofmt() if callable(isofmt) else str(ts or "")
 
 
 @router.post("/annotations/{doc_id}/{speech_id}/{chunk_id}")

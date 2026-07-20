@@ -298,6 +298,40 @@ def test_tag_resave_preserves_human_review(tmp_path: Path) -> None:
     assert row["label"] == "speech-edited"  # human rename preserved
 
 
+def test_iso_formats_version_timestamps() -> None:
+    from datetime import datetime
+
+    from backend.media_api.annotate import _iso
+
+    assert _iso(datetime(2026, 7, 20, 12, 0, 0)) == "2026-07-20T12:00:00"  # datetime → ISO
+    assert _iso("already-a-string") == "already-a-string"
+    assert _iso(None) == ""
+
+
+def test_version_history_counts_this_units_rows_per_version(tmp_path: Path) -> None:
+    # The compare-versions endpoint's core: for each Lance version, count THIS unit's
+    # rows via time-travel (checkout) — a different unit's rows must not leak in.
+    schema = _full_schema()
+    unit = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}
+    other = {"doc_id": "d1", "speech_id": 0, "chunk_id": 99}
+    uri = str(tmp_path / "annotations.lance")
+    lance.write_dataset(pa.Table.from_pylist([{**unit, "id": "a1"}], schema=schema), uri)  # v1
+    ds = lance.dataset(uri)
+    ds.merge_insert("id").when_not_matched_insert_all().execute(  # v2: +1 ours, +1 other unit
+        pa.Table.from_pylist([{**unit, "id": "a2"}, {**other, "id": "b1"}], schema=schema)
+    )
+    ds = lance.dataset(uri)
+    where = "doc_id = 'd1' AND speech_id = 0 AND chunk_id = 19"
+    counts = {
+        int(v["version"]): ds.checkout_version(int(v["version"]))
+        .to_table(filter=where, columns=["id"])
+        .num_rows
+        for v in ds.versions()
+    }
+    assert counts[1] == 1  # our unit had 1 annotation at v1
+    assert counts[2] == 2  # our unit had 2 at v2 — the other unit's row is excluded
+
+
 def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:
     from backend.lancekit.lineage_emit import build_save_event
 

@@ -11,6 +11,7 @@
   import AnnotationTable from './AnnotationTable.svelte';
   import BulkActions from './BulkActions.svelte';
   import LayerPanel from './LayerPanel.svelte';
+  import VersionHistoryPanel from './VersionHistoryPanel.svelte';
   import type { AnnotatorController } from '../annotator.svelte';
 
   let { controller }: { controller: AnnotatorController } = $props();
@@ -91,4 +92,5 @@
   </div>
 
   <LayerPanel {controller} />
+  <VersionHistoryPanel {controller} />
 </aside>
