@@ -22,6 +22,7 @@
   import { submitBatchJob } from '$lib/labeling/jobs';
   import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
   import SearchBar from '$lib/components/search-bar.svelte';
+  import SavedViews from '$lib/components/saved-views.svelte';
   import ActiveFilters from '$lib/components/active-filters.svelte';
   import HitList from '$lib/components/hit-list.svelte';
   import HitCard from '$lib/components/hit-card.svelte';
@@ -709,6 +710,9 @@
 <div class="grid h-full grid-rows-[auto_1fr] min-h-0">
   <div class="border-b border-border bg-card/40">
     <SearchBar bind:spec onsubmit={runSearch} />
+    <div class="flex items-center justify-end px-6 pb-1">
+      <SavedViews {spec} onapply={runSearch} />
+    </div>
     <ActiveFilters bind:spec onchange={runSearch} />
     {#if voiceActive}
       <!-- Voice query chip — mirrors the attached-image chip's lifecycle:
