@@ -20,6 +20,8 @@ import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { type Table, tableFromIPC } from "apache-arrow";
 import type { PixiContext, Tool } from "$lib/engine";
 import { LayerStore } from "$lib/engine";
+import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "$lib/labeling/types";
+import { PRODUCERS } from "$lib/labeling/producers";
 
 export type Mode = "view" | "edit";
 
@@ -263,7 +265,66 @@ export class AnnotatorController {
     this._setField(index, field, value);
   }
   setStatus(index: number, status: string): void {
-    this.updateField(index, "status", status);
+    // Manual mode = ONE instance of the LabelOp abstraction (human · verdict ·
+    // interactive · one). Routing through apply() proves the annotator isn't
+    // coupled to the review flow — a model/batch producer slots into the same seam.
+    this.apply({
+      target: { kind: "one", index },
+      producer: "human",
+      op: "verdict",
+      execution: "interactive",
+      payload: { fields: { status } },
+    });
+  }
+
+  // ── the write-plane seam: dispatch a LabelOp (all 3 modes flow through here) ──
+  apply(op: LabelOp): LabelOutcome {
+    const spec = PRODUCERS[op.producer];
+    if (!spec) return { status: "unsupported", reason: `unknown producer '${op.producer}'` };
+
+    // Batch locus = a silver deriver over a (query/all) selection: the annotator
+    // enqueues, the job surfaces async by media id + Lance version. Not wired in the
+    // prototype (that's the lance-ray/catalog-mover write path).
+    if (op.execution === "batch") {
+      return {
+        status: "queued",
+        job: `${spec.source}:${op.op}`,
+        note: "batch deriver (not wired)",
+      };
+    }
+
+    // Interactive + human = the manual review path (real, local-first → Save).
+    if (spec.kind === "human" && (op.op === "set" || op.op === "verdict")) {
+      const fields = op.payload.fields ?? {};
+      const deltas: LabelDelta[] = [];
+      for (const index of this._resolveInteractive(op.target)) {
+        for (const [field, value] of Object.entries(fields)) {
+          this.updateField(index, field as EditableField, value);
+        }
+        deltas.push({ index, fields });
+      }
+      return { status: "applied", deltas };
+    }
+
+    // Interactive model/propagate (SAM click, INSID3-quick, DINO-on-a-page) — the
+    // narrow interactive-assist exception; needs a predict/decode transport (follow-up).
+    return {
+      status: "unsupported",
+      reason: `interactive ${spec.kind} '${spec.name}' not wired yet`,
+    };
+  }
+
+  /** Resolve an interactive Selection to row indices. query/all are corpus-scale
+   *  (batch) so client-side they fall back to the current canvas selection. */
+  private _resolveInteractive(sel: Selection): number[] {
+    switch (sel.kind) {
+      case "one":
+        return [sel.index];
+      case "picked":
+        return sel.indices;
+      default:
+        return [...this.selectedSet];
+    }
   }
 
   /** Revert the last field edit (canvas + overlay), then re-select it. */

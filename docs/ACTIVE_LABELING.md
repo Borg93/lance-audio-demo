@@ -20,6 +20,56 @@ detectors / VLM / HTR / ASR are batchable; only prompt-interactive SAM is not. A
 "next-unchecked" walk — corpus-wide, re-queryable every round, backed by real model
 confidence + vector diversity.
 
+## The two planes: view+analyze (read) vs annotate (write)
+
+The platform splits by read-vs-write — CQRS over the Lance catalog:
+
+- **VIEW + ANALYZE — read-heavy.** *Look* (individual pages · gallery scroll · table)
+  and *find* (search · filter · **embedding-interaction**, FiftyOne-style). A governed
+  **read-only** catalog client (query/blobs/describe), cacheable, scales independently;
+  home of the WebGPU atlas/embedder + the PixiJS viewer. **Its output is a `Selection`.**
+- **ANNOTATE — write-heavy.** *Mutate* annotations via `LabelOp`s over a Selection.
+  Interactive → local-first overlay → Save (`merge_insert` = 1 atomic version); batch →
+  silver derivers (lance-ray). Replace-protects-humans, versioned, governed.
+
+`Selection` is the ENTIRE bridge read→write (and the viewer/search-vs-annotator service
+seam): the read plane forms it, the write plane consumes it.
+
+## The write plane is mode-agnostic — 4 orthogonal axes, not a flat "review queue"
+
+The `annotations` schema stays MODE-BLIND (records `source` + `status` + `confidence`,
+never "manual"/"bulk"). Every labeling action is a `LabelOp` over four axes
+(`frontend/apps/media/src/lib/labeling/`):
+
+| Axis | Values | Formed by |
+|---|---|---|
+| **Selection** (target) | `one` · `picked` · `query` · `all` | browse → one/picked · search/embedding-interact → query/all |
+| **Producer** (who) | `human` · `model` · `propagate` · `judge` | the producer registry (config-driven model catalog) |
+| **Op** (what) | `set` · `verdict` · `predict` · `propagate` · `judge` | — |
+| **Execution** (where) | `interactive` (local-first→Save) · `batch` (silver deriver) | — |
+
+The **three modes are regions** in (Producer × Execution):
+
+| Mode | Producer | Execution | Selection | Tool analog |
+|---|---|---|---|---|
+| **Manual** | human | interactive | one · picked | Label Studio ("apply to selection") |
+| **AI-assisted** | model · propagate | interactive (or quick batch) | one · picked · all-from-small | X-AnyLabeling · **INSID3** few-shot · SAM click |
+| **Bulk / auto / judge** | model · judge · propagate | **batch** | query · all | ActiveLabelingSystem loop · FiftyOne bulk-tag |
+
+- **INSID3** (visinf/INSID3) = the `propagate` producer: training-free in-context
+  segmentation on a frozen DINOv3 backbone — 1–few exemplar masks → propagate to a
+  selection/all ("apply to all from small data"). DINOv3 features are the SAME embedding
+  space the analyze plane interacts with, so exemplar-pick and propagate share a space.
+- **AI-as-Judge** is batch, not interactive — it *looks at data* (scores/verifies existing
+  predictions), never at a person's screen; it feeds confidence/uncertainty.
+
+**Scaffold status:** `labeling/types.ts` (Selection/Producer/Op/Execution/LabelOp) +
+`labeling/producers.ts` (typed registry: human, sam-click, insid3, grounding-dino, htr,
+vlm-judge, embed-propagate) DONE; the controller's `apply(op)` routes the **manual** path
+for real (manual = human·verdict·interactive·one — proving the annotator isn't coupled to
+the review flow) and returns typed `queued`/`unsupported` for batch + interactive-assist
+producers (their predict/decode transport + batch-deriver enqueue are the follow-ups).
+
 ## Auto-labeling = a silver deriver per model family
 
 `htr` / `ocr` / `asr` / `detect-segment` / `embed` run as **lance-ray + vLLM batch
