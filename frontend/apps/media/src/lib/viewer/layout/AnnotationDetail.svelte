@@ -51,6 +51,22 @@
       />
     </label>
 
+    {#if controller.labelClasses.length}
+      <div class="flex flex-wrap gap-1" title="Quick label (applies to the selection)">
+        {#each controller.labelClasses as lc (lc)}
+          <button
+            class={cn(
+              'rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-muted',
+              row.label === lc && 'border-primary/50 bg-primary/10',
+            )}
+            onclick={() => controller.applyLabel(lc)}
+          >
+            {lc}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     <label class="flex flex-col gap-1 text-xs">
       <span class="text-muted-foreground">Group</span>
       <Input

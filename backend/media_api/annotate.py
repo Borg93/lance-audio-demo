@@ -14,7 +14,7 @@ import pyarrow as pa
 from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 
-from backend.core.exceptions import NotFoundError
+from backend.core.exceptions import ConflictError, NotFoundError
 from backend.deps import StateDep
 from backend.lancekit.descriptor import Declared
 from backend.media_api.media import DatasetParam, chunk_key_filter, table_dataset, validate_doc_key
@@ -67,11 +67,16 @@ class NewAnnotation(BaseModel):
 
 class SaveAnnotations(BaseModel):
     """The delta a Save flushes for one media unit: field edits + newly drawn shapes
-    + deleted ids. All three commit together (edits+inserts in one merge_insert)."""
+    + deleted ids. All three commit together (edits+inserts in one merge_insert).
+
+    ``base_version`` is the Lance version the client loaded — optimistic concurrency:
+    the save 409s if the table advanced underneath it (someone else / a deriver wrote).
+    """
 
     edits: list[AnnotationEdit] = Field(default_factory=list)
     inserts: list[NewAnnotation] = Field(default_factory=list)
     deletes: list[str] = Field(default_factory=list)
+    base_version: int | None = None
 
 
 class SaveResult(BaseModel):
@@ -176,14 +181,15 @@ def annotations(
         return Response(
             content=_ipc_stream(_EMPTY_SCHEMA.empty_table()),
             media_type=_ARROW_STREAM,
-            headers={"Cache-Control": "no-store"},
+            headers={"Cache-Control": "no-store", "X-Annotations-Version": "0"},
         )
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
     table = ds.to_table(filter=where)
+    # The loaded Lance version — the client echoes it on Save for optimistic concurrency.
     return Response(
         content=_ipc_stream(table),
         media_type=_ARROW_STREAM,
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", "X-Annotations-Version": str(int(ds.version))},
     )
 
 
@@ -208,6 +214,12 @@ def save_annotations(
     declared = handle.descriptor.declared
     doc_id = validate_doc_key(declared, doc_id)
     ds = table_dataset(handle, ANNOTATIONS_TABLE)  # raises NotFoundError if absent
+
+    # Optimistic concurrency: reject if the table advanced since the client loaded.
+    if body.base_version is not None and body.base_version != int(ds.version):
+        raise ConflictError(
+            f"annotations changed on the server (loaded v{body.base_version}, now v{int(ds.version)})"
+        )
 
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
     current = ds.to_table(filter=where)

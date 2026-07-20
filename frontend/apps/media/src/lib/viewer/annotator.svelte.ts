@@ -137,6 +137,8 @@ export class AnnotatorController {
   private _detachViewport: (() => void) | null = null;
   // POST target for Save (same URL the annotations are GET from). Null ⇒ read-only.
   private _saveUrl = $state<string | null>(null);
+  // The Lance version we loaded — echoed on Save for optimistic concurrency (409).
+  private _version: number | null = null;
 
   constructor() {
     this.layers.on(() => this._pullLayers());
@@ -216,6 +218,12 @@ export class AnnotatorController {
     return { at: idx < 0 ? 0 : idx + 1, of };
   });
 
+  /** The label-class palette — distinct non-empty labels present in the data, so
+   *  "quick label" needs no hardcoded class list (data-derived, like the groups). */
+  readonly labelClasses = $derived.by<string[]>(() =>
+    [...new Set(this.rows.map((r) => r.label).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+  );
+
   readonly canDraw = $derived(this.mode === "edit");
   readonly canUndo = $derived(this._undo.length > 0);
   readonly canRedo = $derived(this._redo.length > 0);
@@ -230,11 +238,12 @@ export class AnnotatorController {
 
   /** Called by a spatial viewer once its engine + data are ready. `saveUrl` (the
    *  annotations endpoint) enables the local-first Save; omit it for read-only. */
-  attach(ctx: PixiContext, table: Table, saveUrl?: string): void {
+  attach(ctx: PixiContext, table: Table, saveUrl?: string, version?: number): void {
     this.ctx = ctx;
     this.table = table;
     this.count = table.numRows;
     this._saveUrl = saveUrl ?? null;
+    this._version = version ?? null;
 
     const im = ctx.plugins.interaction;
     im.setEditMode(this.mode === "edit");
@@ -367,6 +376,25 @@ export class AnnotatorController {
       op: "verdict",
       execution: "interactive",
       payload: { fields: { status } },
+    });
+  }
+
+  /** Set a label on the selection — one annotation, or the whole picked multi-select
+   *  (Label Studio's "apply to selection"). Flows through the same LabelOp seam. */
+  applyLabel(label: string): void {
+    const picked = [...this.selectedSet];
+    const target: Selection =
+      picked.length > 1
+        ? { level: "picked", indices: picked }
+        : this.selectedIndex != null
+          ? { level: "one", index: this.selectedIndex }
+          : { level: "picked", indices: [] };
+    this.apply({
+      target,
+      producer: "human",
+      op: "set",
+      execution: "interactive",
+      payload: { fields: { label } },
     });
   }
 
@@ -523,8 +551,25 @@ export class AnnotatorController {
       const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ edits, inserts: this._inserts, deletes: this._deletes }),
+        body: JSON.stringify({
+          edits,
+          inserts: this._inserts,
+          deletes: this._deletes,
+          base_version: this._version,
+        }),
       });
+      if (res.status === 409) {
+        // The table advanced under us (another reviewer / a deriver). Reload to the
+        // server state; the user's pending edits are dropped — they re-apply on fresh data.
+        this.saveError = "Annotations changed on the server — reloaded. Re-apply your edits.";
+        await this._reload();
+        this._undo = [];
+        this._redo = [];
+        this._inserts = [];
+        this._deletes = [];
+        this._geoDirty = false;
+        return;
+      }
       if (!res.ok) throw new Error(`save failed (HTTP ${res.status})`);
       await this._reload();
       this._undo = [];
@@ -547,6 +592,7 @@ export class AnnotatorController {
     if (!url || !ctx) return;
     const res = await fetch(url);
     if (!res.ok) return;
+    this._version = Number(res.headers.get("X-Annotations-Version") ?? this._version ?? 0);
     const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
     this._overrides.clear();
     ctx.plugins.arrow.load(table);

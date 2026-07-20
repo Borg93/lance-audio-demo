@@ -52,6 +52,11 @@ class NotFoundError(DomainError):
     title = "Not Found"
 
 
+class ConflictError(DomainError):
+    status_code = HTTPStatus.CONFLICT
+    title = "Conflict"
+
+
 class ServiceUnavailableError(DomainError):
     status_code = HTTPStatus.SERVICE_UNAVAILABLE
     title = "Service Unavailable"
