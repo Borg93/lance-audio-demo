@@ -15,13 +15,12 @@ export interface SavedView {
   spec: SearchSpec;
 }
 
-/** Drop the EPHEMERAL, non-reproducible parts of a spec before saving: an uploaded image
- *  (a `File` can't serialize) and its derived query vector (`qVec` — large + tied to that
- *  upload). A saved view captures the reproducible text/filter/mode query. */
+/** Drop the one EPHEMERAL, non-serializable part of a spec before saving: an uploaded
+ *  image (`image` is a `File`). Everything else — including `qVec`, the reproducible
+ *  vector-leg TEXT of a hybrid query — is kept so the saved view runs identically. */
 export function stripEphemeral(spec: SearchSpec): SearchSpec {
   const clean: SearchSpec = { ...spec };
   delete clean.image;
-  delete clean.qVec;
   return clean;
 }
 

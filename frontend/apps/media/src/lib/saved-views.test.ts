@@ -3,18 +3,18 @@ import type { SearchSpec } from "$lib/api";
 import { removeView, stripEphemeral, upsertView, viewsForDataset } from "$lib/saved-views";
 
 describe("stripEphemeral", () => {
-  it("drops the uploaded image and its derived vector (non-reproducible)", () => {
+  it("drops only the uploaded image File; keeps the reproducible query incl. qVec", () => {
     const spec = {
-      q: "cats",
+      q: "report",
       mode: "hybrid",
       filters: { speaker: "A" },
       image: new File([], "x.png"),
-      qVec: "AAAA",
+      qVec: "quarterly earnings summary", // the hybrid vector-leg TEXT — reproducible
     } as unknown as SearchSpec;
     const clean = stripEphemeral(spec);
-    expect(clean.image).toBeUndefined();
-    expect(clean.qVec).toBeUndefined();
-    expect(clean.q).toBe("cats"); // reproducible query kept
+    expect(clean.image).toBeUndefined(); // a File can't serialize
+    expect(clean.qVec).toBe("quarterly earnings summary"); // kept — else hybrid views break
+    expect(clean.q).toBe("report");
     expect(clean.filters).toEqual({ speaker: "A" });
   });
 });

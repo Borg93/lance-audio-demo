@@ -18,7 +18,10 @@ function load(): SavedView[] {
   if (!browser) return [];
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as SavedView[]) : [];
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    // Guard SHAPE, not just JSON validity: a stored 'null'/'{}'/'42' parses fine but
+    // would make `views` a non-array → a .filter crash on first render.
+    return Array.isArray(parsed) ? (parsed as SavedView[]) : [];
   } catch {
     return [];
   }
