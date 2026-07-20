@@ -24,8 +24,12 @@ router = APIRouter(prefix="/api", tags=["annotate"])
 _ARROW_STREAM = "application/vnd.apache.arrow.stream"
 ANNOTATIONS_TABLE = "annotations"
 
-#: The columns the PixiJS ArrowDataPlugin reads — the minimal schema of an EMPTY
-#: stream when a dataset has no annotations table yet (so the client still parses).
+#: The annotation contract — the schema of an EMPTY stream when a dataset has no
+#: annotations table yet (so the client still parses). Aligned to the engine
+#: (frontend/src/lib/engine/schema.ts) PLUS the active-learning columns
+#: (confidence/uncertainty/source/model_version) so predictions round-trip and the
+#: review queue can rank by them. Kept in one place; scripts/seed_annotations.py
+#: writes the same columns.
 _EMPTY_SCHEMA = pa.schema(
     [
         ("id", pa.string()),
@@ -34,9 +38,23 @@ _EMPTY_SCHEMA = pa.schema(
         ("y", pa.float32()),
         ("width", pa.float32()),
         ("height", pa.float32()),
+        ("rotation", pa.float32()),
         ("polygon", pa.list_(pa.float32())),
+        ("text", pa.string()),
+        ("label", pa.string()),
         ("status", pa.string()),
+        ("source", pa.string()),
+        ("reviewer", pa.string()),
+        ("confidence", pa.float32()),
+        ("uncertainty", pa.float32()),
+        ("model_version", pa.string()),
+        ("group", pa.string()),
+        ("group_id", pa.string()),
+        ("reading_order", pa.int32()),
+        ("difficult", pa.bool_()),
+        ("links", pa.string()),
         ("mask", pa.string()),
+        ("metadata", pa.string()),
     ]
 )
 

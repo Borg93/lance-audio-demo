@@ -1,9 +1,14 @@
-"""Seed a Lance ``annotations`` table (ra-anno engine schema) for the annotator wire.
+"""Seed a Lance ``annotations`` table (aligned to the engine schema + active-learning
+columns) for the annotator wire.
 
-Writes ``<db>/annotations.lance`` with a few sample shapes on a real frame, so the
-`/annotate` route + `GET /api/annotations/{doc}/{speech}/{chunk}` have real data to
-serve as Arrow IPC. The schema matches the vendored engine's ANNOTATION_COLUMNS
-(frontend/src/lib/engine/schema.ts).
+Writes ``<db>/annotations.lance`` with a few sample shapes on a real frame. The
+column set matches the vendored engine (frontend/src/lib/engine/schema.ts) PLUS the
+active-learning columns the labeling study called for — ``confidence`` / ``uncertainty``
+/ ``source`` / ``model_version`` — so predictions round-trip and the review queue can
+rank ``WHERE status='prediction' ORDER BY uncertainty DESC`` with zero search edits.
+
+Identity is OUR descriptor's (doc_id/speech_id/chunk_id/frame_idx); ra-anno's
+page_id/dataset_id are not our canonical key (annotator wiring will reconcile).
 
     uv run python scripts/seed_annotations.py [db_path] [doc_id]
 """
@@ -17,11 +22,13 @@ import pyarrow as pa
 
 SCHEMA = pa.schema(
     [
-        ("id", pa.string()),
+        # identity (our descriptor's key fields)
         ("doc_id", pa.string()),
         ("speech_id", pa.int64()),
         ("chunk_id", pa.int64()),
         ("frame_idx", pa.int64()),
+        # annotation id + geometry (engine ArrowDataPlugin reads x/y/w/h/polygon/shape_type/mask)
+        ("id", pa.string()),
         ("shape_type", pa.string()),
         ("x", pa.float32()),
         ("y", pa.float32()),
@@ -29,12 +36,23 @@ SCHEMA = pa.schema(
         ("height", pa.float32()),
         ("rotation", pa.float32()),
         ("polygon", pa.list_(pa.float32())),
+        # content + class
         ("text", pa.string()),
         ("label", pa.string()),
-        ("status", pa.string()),
+        # review lifecycle + provenance
+        ("status", pa.string()),  # prediction | draft | reviewed | accepted | rejected
+        ("source", pa.string()),  # manual | model:<name>@<version>
+        ("reviewer", pa.string()),
+        # active-learning ranking (the load-bearing columns)
+        ("confidence", pa.float32()),  # model score 0..1
+        ("uncertainty", pa.float32()),  # normalized entropy/margin — review-queue sort key
+        ("model_version", pa.string()),  # e.g. htr-trocr@v1
+        # grouping / ordering / flags
         ("group", pa.string()),
         ("group_id", pa.string()),
+        ("reading_order", pa.int32()),
         ("difficult", pa.bool_()),
+        ("links", pa.string()),  # JSON AnnotationRelation[]
         ("mask", pa.string()),
         ("metadata", pa.string()),
     ]
@@ -42,13 +60,13 @@ SCHEMA = pa.schema(
 
 
 def seed(db_path: str, doc_id: str) -> str:
-    """Write 3 sample annotations (2 predicted text-lines + 1 accepted figure)."""
+    """3 sample rows: 2 model predictions (varying confidence/uncertainty) + 1 human-accepted."""
     rows = {
-        "id": ["a1", "a2", "a3"],
         "doc_id": [doc_id] * 3,
         "speech_id": [0] * 3,
         "chunk_id": [19] * 3,
         "frame_idx": [0] * 3,
+        "id": ["a1", "a2", "a3"],
         "shape_type": ["rectangle", "rectangle", "polygon"],
         "x": [40.0, 210.0, 0.0],
         "y": [40.0, 150.0, 0.0],
@@ -59,9 +77,16 @@ def seed(db_path: str, doc_id: str) -> str:
         "text": ["regeringen", "principmodellen", "region"],
         "label": ["text-line", "text-line", "figure"],
         "status": ["prediction", "prediction", "accepted"],
+        "source": ["model:htr-trocr@v1", "model:htr-trocr@v1", "manual"],
+        "reviewer": ["", "", "gabriel"],
+        "confidence": [0.88, 0.61, 1.0],  # a2 is low-confidence → top of the review queue
+        "uncertainty": [0.18, 0.72, 0.0],
+        "model_version": ["htr-trocr@v1", "htr-trocr@v1", ""],
         "group": ["lines", "lines", "figures"],
         "group_id": ["", "", ""],
-        "difficult": [False, False, False],
+        "reading_order": [0, 1, -1],
+        "difficult": [False, True, False],
+        "links": ["[]", "[]", "[]"],
         "mask": ["", "", ""],
         "metadata": ["{}", "{}", "{}"],
     }
@@ -82,3 +107,4 @@ if __name__ == "__main__":
     out = seed(db, doc)
     ds = lance.dataset(out)
     print(f"seeded {ds.count_rows()} annotations → {out} (v{ds.version})")
+    print("columns:", [f.name for f in ds.schema])

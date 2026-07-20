@@ -35,5 +35,8 @@ def test_empty_schema_is_a_parseable_empty_stream() -> None:
     # parse it and render 0, so it carries the columns ArrowDataPlugin reads.
     back = _read_ipc(_ipc_stream(_EMPTY_SCHEMA.empty_table()))
     assert back.num_rows == 0
-    reads = {"x", "y", "width", "height", "polygon", "shape_type", "status", "mask"}
-    assert reads <= set(back.schema.names)
+    names = set(back.schema.names)
+    # geometry the PixiJS ArrowDataPlugin reads
+    assert {"x", "y", "width", "height", "polygon", "shape_type", "status", "mask"} <= names
+    # active-learning columns (the review queue ranks by these)
+    assert {"confidence", "uncertainty", "source", "model_version"} <= names
