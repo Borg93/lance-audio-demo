@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from typing import Annotated
 from urllib.parse import quote
 
+import lance
 import pyarrow as pa
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
@@ -293,8 +294,7 @@ def annotations(
     if version is not None:
         # A historical read is a direct time-travel snapshot (read-only, off the hot
         # path); the reader seam governs the current read.
-        snapshot = ds.checkout_version(version)
-        table = snapshot.to_table(filter=where)
+        table = _checkout(ds, version).to_table(filter=where)
         served_version = version
     else:
         # Reads flow through the reader seam (direct default = byte-identical; catalog
@@ -355,6 +355,16 @@ def _iso(ts: object) -> str:
     """A Lance version timestamp → ISO string (datetime or already-string)."""
     isofmt = getattr(ts, "isoformat", None)
     return isofmt() if callable(isofmt) else str(ts or "")
+
+
+def _checkout(ds: lance.LanceDataset, version: int) -> lance.LanceDataset:
+    """Time-travel to a version, translating Lance's raw not-found (an out-of-range or
+    reclaimed version) into a clean NotFoundError — mirroring ``table_dataset`` so a bad
+    ``?version`` is a 404, not an opaque 500."""
+    try:
+        return ds.checkout_version(version)
+    except (ValueError, OSError) as e:
+        raise NotFoundError(f"annotations version {version} not found") from e
 
 
 @router.post("/annotations/{doc_id}/{speech_id}/{chunk_id}")

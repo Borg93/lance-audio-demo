@@ -31,4 +31,14 @@ describe("diffSignatures", () => {
     expect(sig({ label: "l", status: "s" })).toBe(sig({ label: "l", status: "s" }));
     expect(sig({ label: "l" })).not.toBe(sig({ label: "m" }));
   });
+
+  it("rowSignature is injective across field boundaries (no separator collision)", () => {
+    // ("ab","") must NOT equal ("a","b") — a shifted field split is a real change.
+    expect(sig({ label: "ab", status: "" })).not.toBe(sig({ label: "a", status: "b" }));
+    // a value containing a quote is still safe (JSON-encoded)
+    expect(sig({ label: 'a"b' })).not.toBe(sig({ label: "ab" }));
+    const past = new Map([["x", sig({ label: "ab", status: "" })]]);
+    const current = new Map([["x", sig({ label: "a", status: "b" })]]);
+    expect(diffSignatures(past, current).changed).toEqual(["x"]); // the edit is detected
+  });
 });

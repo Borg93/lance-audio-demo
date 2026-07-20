@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import lance
 import pyarrow as pa
+import pytest
 from backend.lancekit.descriptor import Declared
 from backend.media_api.annotate import (
     _EMPTY_SCHEMA,
@@ -330,6 +331,18 @@ def test_version_history_counts_this_units_rows_per_version(tmp_path: Path) -> N
     }
     assert counts[1] == 1  # our unit had 1 annotation at v1
     assert counts[2] == 2  # our unit had 2 at v2 — the other unit's row is excluded
+
+
+def test_checkout_translates_bad_version_to_notfound(tmp_path: Path) -> None:
+    from backend.core.exceptions import NotFoundError
+    from backend.media_api.annotate import _checkout
+
+    uri = str(tmp_path / "annotations.lance")
+    lance.write_dataset(pa.Table.from_pylist([{"id": "a1"}], schema=_full_schema()), uri)
+    ds = lance.dataset(uri)
+    assert _checkout(ds, 1).version == 1  # a valid version time-travels
+    with pytest.raises(NotFoundError, match="version 999 not found"):
+        _checkout(ds, 999)  # out-of-range → clean 404, not a raw 500
 
 
 def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:

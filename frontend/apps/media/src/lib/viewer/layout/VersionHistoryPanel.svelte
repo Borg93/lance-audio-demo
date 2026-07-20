@@ -23,6 +23,7 @@
   let selected = $state<number | null>(null);
   let diff = $state<RowDiff | null>(null);
   let diffing = $state(false);
+  let diffError = $state<string | null>(null);
 
   async function open(): Promise<void> {
     collapsed = false;
@@ -45,18 +46,22 @@
     if (selected === v) {
       selected = null;
       diff = null;
+      diffError = null;
       return;
     }
     selected = v;
     diff = null;
+    diffError = null;
     diffing = true;
     try {
       const past = await fetchVersionSignatures(url, v);
+      if (selected !== v) return; // a newer selection superseded this fetch (latest-wins)
       diff = diffSignatures(past, controller.currentSignatures);
-    } catch {
-      diff = null;
+    } catch (e) {
+      if (selected !== v) return;
+      diffError = e instanceof Error ? e.message : 'compare failed';
     } finally {
-      diffing = false;
+      if (selected === v) diffing = false;
     }
   }
 
@@ -104,6 +109,8 @@
             <div class="px-2 pb-1 text-[10px] text-muted-foreground">
               {#if diffing}
                 comparing…
+              {:else if diffError}
+                <span class="text-destructive">compare failed: {diffError}</span>
               {:else if diff}
                 vs current:
                 <span class="text-emerald-500">+{diff.added.length}</span>

@@ -22,11 +22,11 @@ export interface RowSig {
   text: string;
 }
 
-const SEP = "";
-
-/** A stable signature of a row's reviewable content — equal signatures ⇒ no change. */
+/** A stable signature of a row's reviewable content — equal signatures ⇒ no change.
+ *  JSON-encode the field array so it's provably injective: no separator to collide
+ *  ("ab","" vs "a","b" encode differently) and any value (quotes, control chars) is safe. */
 export function rowSignature(r: RowSig): string {
-  return [r.label, r.status, r.shape, r.group, r.text].map((x) => x ?? "").join(SEP);
+  return JSON.stringify([r.label ?? "", r.status ?? "", r.shape ?? "", r.group ?? "", r.text ?? ""]);
 }
 
 /** Insert `suffix` into the annotations path (before any query) and merge `extra` params —
@@ -57,13 +57,16 @@ export async function fetchVersionSignatures(
   const sigs = new Map<string, string>();
   for (const row of table.toArray()) {
     const r = row as Record<string, unknown>;
-    sigs.set(String(r.id), rowSignature({
-      label: String(r.label ?? ""),
-      status: String(r.status ?? ""),
-      shape: String(r.shape_type ?? ""),
-      group: String(r.group ?? ""),
-      text: String(r.text ?? ""),
-    }));
+    sigs.set(
+      String(r.id),
+      rowSignature({
+        label: String(r.label ?? ""),
+        status: String(r.status ?? ""),
+        shape: String(r.shape_type ?? ""),
+        group: String(r.group ?? ""),
+        text: String(r.text ?? ""),
+      }),
+    );
   }
   return sigs;
 }
