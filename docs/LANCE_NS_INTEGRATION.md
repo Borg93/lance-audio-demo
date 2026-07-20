@@ -2,7 +2,8 @@
 
 > **Short answer: yes, cleanly — and the fit is unusually good, because lance-ns
 > already built the exact seams we need.** Our batch pipeline drops into the
-> medallion **media lane** as silver derivers + gold aggregations; our
+> medallion **media lane** as silver derivers (gold is a later QC-gated curation
+> of silver, not an aggregation layer — see §2); our
 > search/viewer app becomes a read-only **application layer** over the catalog.
 > There is exactly **one** real design decision (single-table derivers vs our
 > multi-table fan-out, §4) and a set of governance wires we gain for free.
@@ -38,8 +39,8 @@ flowchart LR
             direction LR
             bronze["bronze<br/>raw media blobs"]:::data
             derivers["silver derivers<br/>★ OUR stages plug in<br/>audio + fan-out PROVEN"]:::proven
-            silver["silver-media<br/>embeddings · frames ·<br/>speaker-turns"]:::data
-            gold["gold-media<br/>★ OUR aggregations<br/>atlas · topics · KG"]:::proven
+            silver["silver-media<br/>embeddings · frames · turns ·<br/>atlas · topics · KG (all derived)"]:::data
+            gold["gold-media<br/>QC-gated + curated<br/>promotion of silver"]:::data
             bronze --> derivers --> silver --> gold
         end
         catalog -. reads .-> silver
@@ -114,15 +115,33 @@ derivers than the single `is_image → thumbnail+embedding` one that ships:
 
 | rmedia stage | medallion mapping | layer |
 |---|---|---|
+| `transcribe`/`htr`/`ocr` (media blob → text rows) | a **deriver** reading the bronze media blob, fanning out chunk/line rows (§4) — *not built as a stage today; see §7* | silver |
 | `extract_frames` (video → frame JPEGs) | a **video deriver** (new `_DERIVERS` entry) — but it *fans out rows* (see §4) | silver |
 | `text_embedding`, `frame_embedding`, `caption`, `caption_embedding` | derivers that **add columns** to the carried table — the exact `Deriver = (table, payloads) -> table` shape | silver |
 | `diarize` (→ speaker_turns), `voiceprint` (→ speaker_embeddings) | **audio derivers** — also row-fan-out (§4) | silver |
-| atlas projections, topic tree, KG | **silver → gold aggregations** — a *new gold media stage* (media lane is silver-terminal today) | **gold (net-new)** |
+| atlas projections, topic tree, KG | **still silver** — derived TABLES over silver embeddings (aggregation ≠ a medallion tier) | silver |
 
-So: **silver = our per-item derivers; gold = our global aggregations.** The gold
-media stage does not exist in lance-ns yet — our atlas/topics/KG would be the
-first media gold datasets, written with the embedded `lineage` JSONB column that
-the gold mover contract requires (`RASK-INTEGRATION.md` § lance-ray seam).
+**Correction (the gold layer is NOT "aggregations" — verified against lance-ns
+2026-07-20).** In lance-ns the medallion tier is defined by **trust/promotion, not
+by per-item-vs-aggregate**:
+
+- **silver** = every derived artifact — our embeddings, chunks/lines, frames,
+  voiceprints, AND the atlas/topics/KG aggregations. They are all just derivations;
+  the `bronze→silver` mover writes them with the **writer** role `can_create_table`.
+- **gold** = a **QC-gated, curated PROMOTION of silver**: the `silver→gold` mover
+  needs the **validator** role `can_promote`, runs the quality gate
+  (`services/medallion/services/quality.py`: row-count, not-null key, blob-resolves;
+  PII scan in the aspirational sketch), and on PASS writes gold + embeds the whole
+  upstream lineage JSONB; on FAIL the version is **quarantined** and no gold is
+  written. Gold is *silver with columns selected/added/dropped, validated, and
+  trust-stamped* — a published replica, not a new computation.
+
+So the right mapping: **all our compute is silver.** Gold, for us, is a later
+curation/QC step — e.g. a `chunks_gold` carrying only the columns the viewer reads,
+asserted (keys non-null, embeddings present, `media_blob` resolves) and
+lineage-stamped — which our app then reads as the trustworthy surface. That gold
+step is **net-new and not yet designed**; it is a QC/curation concern, not an
+aggregation stage.
 
 ---
 
