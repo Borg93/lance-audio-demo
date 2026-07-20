@@ -36,6 +36,9 @@ export * from "./editors/PolygonEditor.js";
 export * from "./store/AnnotationStore.js";
 export * from "./store/LayerStore.js";
 
+// ── Temporal surface (audio waveform — the one Canvas2D lane; video reuses ImagePlugin) ──
+export * from "./temporal/WaveSurface.js";
+
 // ── Data model + utilities ──
 export * from "./schema.js";
 export * from "./utils/arrow.js";

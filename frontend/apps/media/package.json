@@ -36,7 +36,8 @@
     "svelte": "^5.36.0",
     "tailwind-merge": "^2.5.5",
     "tailwind-variants": "^0.3.0",
-    "valibot": "^1.4.2"
+    "valibot": "^1.4.2",
+    "wavesurfer.js": "^7.12.11"
   },
   "devDependencies": {
     "@lance-media/config": "workspace:*",

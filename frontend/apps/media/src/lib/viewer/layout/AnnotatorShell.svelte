@@ -21,6 +21,10 @@
   const controller = new AnnotatorController();
   let status = $state('loading…');
 
+  // Audio is temporal-only (no canvas): hide the spatial chrome — drawing tools, zoom,
+  // and the GroundingDINO box-assist. Image + video keep it (video draws on its frame).
+  const spatial = $derived(unit.kind !== 'audio');
+
   // Page nav = the review selection (else this single unit). Navigating drives the
   // shared store, whose index change re-mounts this shell with the next unit.
   const pages = $derived(
@@ -89,7 +93,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="flex h-screen w-screen">
-  <AnnotatorToolbar {controller} />
+  <AnnotatorToolbar {controller} {spatial} />
 
   <div class="min-w-0 flex-1">
     <ResizableSplit storageKey="lance-media-annotate" initial={0.72} minLeft={420} minRight={320}>
@@ -102,11 +106,13 @@
             annotate · {unit.kind} · {status}
           </div>
           <Viewer {unit} {controller} onload={(n) => (status = `${n} annotations from Lance`)} />
-          {#if controller.canDraw}
+          {#if spatial && controller.canDraw}
             <AiAssistBar {controller} />
           {/if}
           <PageNav {pages} current={pageIndex} onNavigate={navigate} />
-          <ZoomControls {controller} />
+          {#if spatial}
+            <ZoomControls {controller} />
+          {/if}
         </div>
       {/snippet}
       {#snippet right()}

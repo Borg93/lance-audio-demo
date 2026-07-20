@@ -1,20 +1,127 @@
 <script lang="ts">
-  // Audio viewer — SCAFFOLD. Fill in a peaks.js WaveformCanvas: the audio waveform
-  // with temporal SEGMENTS/points (t_start/t_end), sharing the same AnnotationStore
-  // + annotator service. Precomputed waveform peaks come from a `waveform` silver
-  // stage (compact Arrow), not client-side decode. Contract-satisfying today so the
-  // registry + route stay decoupled — wiring it later is drop-in, not a rewire.
+  // Audio viewer — a THIN wrapper over the engine's WaveSurface. All wavesurfer +
+  // region↔row logic lives in `$lib/engine` (framework-agnostic, reusable); this file
+  // only mounts it, bridges gestures to the annotator facade via the data-only
+  // (temporal) seam, and reconciles regions from the controller's rows. The waveform
+  // is the one Canvas2D lane we allow; segments (t_start/t_end) share the SAME
+  // annotations table + Save path as spatial shapes.
+  import { untrack } from 'svelte';
+  import { tableFromIPC } from 'apache-arrow';
+  import { Pause, Play } from 'lucide-svelte';
+  import { WaveSurface, type TemporalSegment } from '$lib/engine';
+  import { Button } from '$lib/components/ui';
   import type { ViewerProps } from './types';
 
-  let { unit, onload }: ViewerProps = $props();
-  $effect(() => onload?.(0));
+  let { unit, onload, controller }: ViewerProps = $props();
+
+  let container = $state<HTMLDivElement | null>(null);
+  let surface = $state<WaveSurface | null>(null);
+  let ready = $state(false);
+  let playing = $state(false);
+  let error = $state<string | null>(null);
+
+  // Rows are the source of truth. A segment = any row with a real time range; id→index
+  // bridges a waveform gesture back to its table row for edits.
+  const segments = $derived.by<TemporalSegment[]>(() => {
+    const out: TemporalSegment[] = [];
+    for (const r of controller?.rows ?? []) {
+      if (r.tStart == null || r.tEnd == null || r.tEnd <= r.tStart) continue;
+      out.push({ id: r.id, start: r.tStart, end: r.tEnd, label: r.label });
+    }
+    return out;
+  });
+  const indexById = $derived(new Map((controller?.rows ?? []).map((r) => [r.id, r.index])));
+  const editable = $derived(controller?.mode === 'edit');
+
+  // Share this unit's annotations with the facade WITHOUT a Pixi engine (the temporal
+  // seam). Runs once per unit — the shell re-mounts this component per unit.
+  $effect(() => {
+    if (!controller) return;
+    const url = unit.annotationsUrl;
+    void (async () => {
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const version = Number(res.headers.get('X-Annotations-Version') ?? '0');
+      const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
+      controller.attachData(table, url, version);
+    })();
+  });
+
+  // Surface lifecycle — synchronous so the cleanup captures the instance. Depends only
+  // on the container + audio URL, never on edit-mode/segments (those flow via methods,
+  // so toggling mode never re-decodes the audio).
+  $effect(() => {
+    const el = container;
+    const url = unit.mediaUrl;
+    if (!el || !url) return;
+    const s = new WaveSurface(
+      el,
+      { url },
+      {
+        onReady: () => {
+          ready = true;
+          onload?.(controller?.rows.length ?? 0);
+        },
+        onPlayStateChange: (p) => (playing = p),
+        onError: (e) => (error = e instanceof Error ? e.message : String(e)),
+        onCreate: ({ start, end }) =>
+          controller?.addTemporalSegment({ t_start: start, t_end: end }),
+        onResize: (id, start, end) => {
+          const i = indexById.get(id);
+          if (i != null) controller?.updateSegmentTime(i, start, end);
+        },
+        onSelect: (id) => controller?.select(id == null ? null : (indexById.get(id) ?? null)),
+      },
+    );
+    surface = s;
+    return () => {
+      s.destroy();
+      surface = null;
+      ready = false;
+    };
+  });
+
+  // Rows → regions (editable read untracked so a mode toggle doesn't re-add regions —
+  // setEditable handles that below).
+  $effect(() => {
+    if (surface && ready) surface.setSegments(segments, untrack(() => editable));
+  });
+  $effect(() => surface?.setEditable(editable));
+  // Sidebar selection → move the playhead to that segment.
+  $effect(() => {
+    const sel = controller?.selected;
+    if (sel && surface) surface.focusSegment(sel.id);
+  });
 </script>
 
-<div
-  class="flex h-full w-full items-center justify-center p-6 text-center text-sm text-muted-foreground"
->
-  <div>
-    <div class="font-medium">audio annotation — scaffold</div>
-    <div class="mt-1 text-xs">peaks.js waveform · temporal segments (t_start/t_end) · {unit.key}</div>
+<div class="flex h-full w-full flex-col gap-3 p-4">
+  <div class="flex items-center gap-2">
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={!ready}
+      onclick={() => surface?.playPause()}
+      aria-label={playing ? 'Pause' : 'Play'}
+    >
+      {#if playing}
+        <Pause class="size-4" />
+      {:else}
+        <Play class="size-4" />
+      {/if}
+    </Button>
+    <span class="text-xs text-muted-foreground">
+      {editable ? 'Drag on the waveform to add a segment' : 'Audio segments'} · {segments.length}
+    </span>
   </div>
+
+  <div
+    class="min-h-[96px] w-full rounded-md border border-border bg-card p-2"
+    bind:this={container}
+  ></div>
+
+  {#if error}
+    <p class="text-xs text-destructive">Failed to load audio: {error}</p>
+  {:else if !ready}
+    <p class="text-xs text-muted-foreground">Loading waveform…</p>
+  {/if}
 </div>

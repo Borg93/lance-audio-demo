@@ -25,7 +25,11 @@
   import type { Tool } from '$lib/engine';
   import type { AnnotatorController } from '../annotator.svelte';
 
-  let { controller }: { controller: AnnotatorController } = $props();
+  // `spatial` = this unit has a canvas to draw ON (image / video frame). Audio has no
+  // spatial lane — its segments are made by dragging on the waveform — so the draw
+  // tools + pan + convert-to-polygon are hidden; mode/undo/redo/save/delete stay.
+  let { controller, spatial = true }: { controller: AnnotatorController; spatial?: boolean } =
+    $props();
 
   type ToolDef = { tool: Tool; icon: typeof MousePointer2; label: string; key: string; drawing: boolean };
   const TOOLS: ToolDef[] = [
@@ -39,7 +43,7 @@
     { tool: 'brush', icon: Paintbrush, label: 'Brush', key: 'B', drawing: true },
   ];
 
-  const visible = $derived(TOOLS.filter((t) => !t.drawing || controller.canDraw));
+  const visible = $derived(spatial ? TOOLS.filter((t) => !t.drawing || controller.canDraw) : []);
 </script>
 
 <div
@@ -57,31 +61,33 @@
     {#if controller.mode === 'edit'}<Pencil class="size-4" />{:else}<Eye class="size-4" />{/if}
   </Button>
 
-  <div class="my-1 h-px w-6 bg-border"></div>
+  {#if spatial}
+    <div class="my-1 h-px w-6 bg-border"></div>
 
-  {#each visible as t (t.tool)}
-    {@const Icon = t.icon}
-    <Button
-      variant={controller.activeTool === t.tool ? 'default' : 'ghost'}
-      size="icon-sm"
-      title={`${t.label} (${t.key})`}
-      aria-pressed={controller.activeTool === t.tool}
-      onclick={() => controller.setTool(t.tool)}
-    >
-      <Icon class="size-4" />
-    </Button>
-  {/each}
+    {#each visible as t (t.tool)}
+      {@const Icon = t.icon}
+      <Button
+        variant={controller.activeTool === t.tool ? 'default' : 'ghost'}
+        size="icon-sm"
+        title={`${t.label} (${t.key})`}
+        aria-pressed={controller.activeTool === t.tool}
+        onclick={() => controller.setTool(t.tool)}
+      >
+        <Icon class="size-4" />
+      </Button>
+    {/each}
 
-  {#if controller.activeTool === 'brush'}
-    <Button
-      variant={controller.brushOptions.erasing ? 'default' : 'ghost'}
-      size="icon-sm"
-      title="Erase (brush)"
-      aria-pressed={controller.brushOptions.erasing}
-      onclick={() => controller.setBrushOptions({ erasing: !controller.brushOptions.erasing })}
-    >
-      <Eraser class="size-4" />
-    </Button>
+    {#if controller.activeTool === 'brush'}
+      <Button
+        variant={controller.brushOptions.erasing ? 'default' : 'ghost'}
+        size="icon-sm"
+        title="Erase (brush)"
+        aria-pressed={controller.brushOptions.erasing}
+        onclick={() => controller.setBrushOptions({ erasing: !controller.brushOptions.erasing })}
+      >
+        <Eraser class="size-4" />
+      </Button>
+    {/if}
   {/if}
 
   <div class="my-1 h-px w-6 bg-border"></div>
@@ -118,15 +124,17 @@
   <div class="my-1 h-px w-6 bg-border"></div>
 
   <!-- Selection actions -->
-  <Button
-    variant="ghost"
-    size="icon-sm"
-    title="Convert to polygon (P)"
-    disabled={controller.selectedIndex == null}
-    onclick={() => controller.convertToPolygon()}
-  >
-    <Spline class="size-4" />
-  </Button>
+  {#if spatial}
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      title="Convert to polygon (P)"
+      disabled={controller.selectedIndex == null}
+      onclick={() => controller.convertToPolygon()}
+    >
+      <Spline class="size-4" />
+    </Button>
+  {/if}
   <Button
     variant="ghost"
     size="icon-sm"
