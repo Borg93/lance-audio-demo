@@ -31,3 +31,25 @@ def test_mock_default_box_when_no_region() -> None:
     assert len(shapes) == 1
     assert shapes[0].label == "figure"
     assert shapes[0].width > 0 and shapes[0].height > 0
+
+
+def test_sam_segments_the_drawn_box_as_a_polygon() -> None:
+    shapes = _mock(
+        AssistRequest(producer="sam-click", region=Region(x=40.0, y=40.0, width=160.0, height=90.0))
+    )
+    assert len(shapes) == 1
+    s = shapes[0]
+    assert s.shape_type == "polygon"  # a mask, not a box
+    assert len(s.polygon) == 8  # a flat [x,y,...] quad within the region
+    assert s.label == "object"  # SAM needs no prompt
+    assert s.confidence > 0
+
+
+def test_sam_click_grows_a_patch_around_the_point() -> None:
+    # A click commits as a zero-size region — the patch is centered on the point.
+    shapes = _mock(
+        AssistRequest(producer="sam-click", region=Region(x=100.0, y=100.0, width=0.0, height=0.0))
+    )
+    s = shapes[0]
+    assert s.width > 1 and s.height > 1  # grown, not zero
+    assert s.x < 100.0 and s.y < 100.0  # centered on the clicked point

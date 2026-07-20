@@ -86,11 +86,25 @@ def assist(
     return AssistResult(shapes=shapes, source=source)
 
 
+_SAM_CLICK_PATCH = 120.0  # default box side for a bare click (a zero-size region)
+
+
 def _mock(body: AssistRequest) -> list[AssistShape]:
-    """Deterministic stand-in for a model server: a box at the drawn region (or a
-    default), labeled with the prompt — enough to prove the round-trip end to end."""
-    label = (body.prompt or "region").strip()
+    """Deterministic stand-in for a model server, so both interactive loops round-trip
+    in-repo. GroundingDINO → a box at the drawn region (or a default), labeled with the
+    prompt. SAM → a polygon 'mask' around the region/click (a click is a zero box, so a
+    default patch is grown around the point). Both render + review like real predictions."""
     r = body.region
+    if body.producer.startswith("sam"):
+        x, y, w, h = _region_box(r)
+        return [
+            AssistShape(
+                shape_type="polygon", x=x, y=y, width=w, height=h,
+                polygon=_diamond(x, y, w, h),
+                label=(body.prompt or "object").strip(), confidence=0.85,
+            )
+        ]
+    label = (body.prompt or "region").strip()
     if r is not None:
         return [
             AssistShape(
@@ -99,6 +113,25 @@ def _mock(body: AssistRequest) -> list[AssistShape]:
             )
         ]
     return [AssistShape(shape_type="rectangle", x=100.0, y=100.0, width=200.0, height=80.0, label=label, confidence=0.7)]
+
+
+def _region_box(r: Region | None) -> tuple[float, float, float, float]:
+    """The region as (x, y, w, h); a click (near-zero size) becomes a patch centered on
+    the point."""
+    if r is None:
+        return (100.0, 100.0, 200.0, 200.0)
+    w = r.width if r.width > 1 else _SAM_CLICK_PATCH
+    h = r.height if r.height > 1 else _SAM_CLICK_PATCH
+    x = r.x if r.width > 1 else r.x - w / 2
+    y = r.y if r.height > 1 else r.y - h / 2
+    return (x, y, w, h)
+
+
+def _diamond(x: float, y: float, w: float, h: float) -> list[float]:
+    """A simple inset polygon (rhombus) standing in for a segmentation mask — flat
+    [x0,y0,x1,y1,...] in image coords, as the engine's ArrowDataPlugin expects."""
+    cx, cy = x + w / 2, y + h / 2
+    return [cx, y, x + w, cy, cx, y + h, x, cy]
 
 
 def _remote(

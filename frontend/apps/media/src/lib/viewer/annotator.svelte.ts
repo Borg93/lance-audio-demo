@@ -122,6 +122,10 @@ export class AnnotatorController {
   // Playhead time (video): a shape drawn on a paused frame is pinned to this moment, so
   // spatial + temporal share the annotations table. Stays 0 for images (no time axis).
   timeCursor = $state(0);
+  // When set (e.g. "sam-click"), the next drawn box/point is sent to that interactive
+  // segmenter as its region prompt instead of being inserted as a manual shape — the
+  // ra-atr SAM click-to-segment loop. Null = normal drawing.
+  assistProducer = $state<string | null>(null);
   count = $state(0);
   saving = $state(false);
   saveError = $state<string | null>(null);
@@ -295,7 +299,15 @@ export class AnnotatorController {
       this._geoEdits.set(index, geo);
       this._geoDirty = true;
     };
-    im.onCommit = (shape) => this._appendInsert(this._buildInsert(shape));
+    im.onCommit = (shape) => {
+      // In SAM mode the drawn box/point is a region prompt (→ a mask prediction),
+      // not a manual annotation.
+      if (this.assistProducer) {
+        void this.assist("", this._regionOf(shape), this.assistProducer);
+      } else {
+        this._appendInsert(this._buildInsert(shape));
+      }
+    };
 
     // chain (never overwrite) the image viewport hook PixiCanvas installed, so
     // zoomPercent tracks wheel-zoom + pan + our zoom buttons alike.
@@ -431,6 +443,12 @@ export class AnnotatorController {
     this.timeCursor = seconds;
   }
 
+  /** Arm/disarm an interactive segmenter (SAM): while armed, the next drawn box/point
+   *  becomes its region prompt rather than a manual annotation. Null = normal drawing. */
+  setAssistProducer(producer: string | null): void {
+    this.assistProducer = producer;
+  }
+
   /** Queue a new row for Save AND render it optimistically — append AT THE END
    *  (index = numRows, so the index-keyed overlay/selection stay valid), re-render the
    *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
@@ -465,9 +483,12 @@ export class AnnotatorController {
   async assist(
     prompt: string,
     region?: { x: number; y: number; width: number; height: number },
+    producer = "grounding-dino",
   ): Promise<void> {
     const url = this._saveUrl;
-    if (!url || !prompt.trim() || this.saving) return;
+    // GroundingDINO detects from a TEXT prompt; SAM segments from the REGION alone.
+    const needsPrompt = producer === "grounding-dino";
+    if (!url || this.saving || (needsPrompt && !prompt.trim())) return;
     const assistUrl = url.replace("/api/annotations/", "/api/assist/");
     this.saving = true;
     this.saveError = null;
@@ -475,7 +496,7 @@ export class AnnotatorController {
       const res = await fetch(assistUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ producer: "grounding-dino", prompt, region: region ?? null }),
+        body: JSON.stringify({ producer, prompt, region: region ?? null }),
       });
       if (!res.ok) throw new Error(`assist failed (HTTP ${res.status})`);
       const result = (await res.json()) as { shapes: AssistShape[]; source: string };
@@ -489,14 +510,15 @@ export class AnnotatorController {
           height: s.height,
           rotation: 0,
           polygon: s.polygon ?? [],
-          t_start: 0,
-          t_end: 0,
+          // Pin the prediction to the current video moment (0 for images).
+          t_start: this.timeCursor,
+          t_end: this.timeCursor,
           mask: "",
-          label: s.label ?? prompt,
+          label: s.label || prompt,
           text: "",
           group: "",
           status: "prediction",
-          source: result.source ?? "model:grounding-dino",
+          source: result.source ?? `model:${producer}`,
         });
       }
     } catch (e) {
@@ -504,6 +526,12 @@ export class AnnotatorController {
     } finally {
       this.saving = false;
     }
+  }
+
+  /** The bounding box of a committed shape → the SAM region prompt (a point commits as
+   *  a zero-size box; the server treats that as a click). */
+  private _regionOf(shape: CommitShape): { x: number; y: number; width: number; height: number } {
+    return { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
   }
 
   /** Map a committed engine shape → the queued insert row (backend NewAnnotation). */
