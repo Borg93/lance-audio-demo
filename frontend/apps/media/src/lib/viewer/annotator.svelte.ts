@@ -46,6 +46,8 @@ export interface AnnoRow {
   source: string;
   confidence: number | null;
   uncertainty: number | null;
+  tStart: number | null;
+  tEnd: number | null;
 }
 
 /** Fields the sidebar can edit inline. */
@@ -71,6 +73,8 @@ interface InsertRow {
   height: number;
   rotation: number;
   polygon: number[];
+  t_start: number;
+  t_end: number;
   mask: string;
   label: string;
   text: string;
@@ -151,6 +155,9 @@ export class AnnotatorController {
   // Geometry moves of EXISTING shapes, keyed by row index (the canvas already renders
   // them via the plugin's dirty overlay; this queues them for Save).
   private readonly _geoEdits = new SvelteMap<number, GeometryUpdate>();
+  // Segment-TIME resizes of EXISTING audio/video annotations, keyed by row index (the
+  // waveform region already reflects the drag; this queues {t_start,t_end} for Save).
+  private readonly _temporalEdits = new SvelteMap<number, { t_start: number; t_end: number }>();
 
   private _detachViewport: (() => void) | null = null;
   // POST target for Save (same URL the annotations are GET from). Null ⇒ read-only.
@@ -190,6 +197,8 @@ export class AnnotatorController {
         source: this._field(t, "source", i) ?? "",
         confidence: this._num(t, "confidence", i),
         uncertainty: this._num(t, "uncertainty", i),
+        tStart: this._num(t, "t_start", i),
+        tEnd: this._num(t, "t_end", i),
       });
     }
     // deletes reflect immediately in the sidebar (the canvas reconciles on save+reload)
@@ -248,7 +257,11 @@ export class AnnotatorController {
   /** Unsaved-edits flag: pending field edits, a canvas geometry edit, or queued
    *  structural inserts/deletes. */
   readonly dirty = $derived(
-    this._undo.length > 0 || this._geoDirty || this._inserts.length > 0 || this._deletes.length > 0,
+    this._undo.length > 0 ||
+      this._geoDirty ||
+      this._inserts.length > 0 ||
+      this._deletes.length > 0 ||
+      this._temporalEdits.size > 0,
   );
   readonly canSave = $derived(this.dirty && !this.saving && this._saveUrl !== null);
 
@@ -294,6 +307,18 @@ export class AnnotatorController {
     };
     this.zoomPercent = img.zoomPercent;
     this._syncLayerConfig();
+  }
+
+  /** The TEMPORAL seam — audio/video viewers share the controller's data + review +
+   *  Save path WITHOUT a PixiContext (they own their own waveform / `<video>` surface).
+   *  Sets only the row-based state; segment create/resize flow through the same
+   *  inserts/edits overlay as spatial shapes, keyed by row id. */
+  attachData(table: Table, saveUrl?: string, version?: number): void {
+    this.ctx = null;
+    this.table = table;
+    this.count = table.numRows;
+    this._saveUrl = saveUrl ?? null;
+    this._version = version ?? null;
   }
 
   detach(): void {
@@ -362,6 +387,42 @@ export class AnnotatorController {
     this.select(null);
   }
 
+  // ── temporal (audio / video segments) ──
+
+  /** Create a new time-range annotation — a waveform region the reviewer dragged, or a
+   *  shape pinned to a video moment. Flows through the SAME inserts overlay + Save path
+   *  as a drawn box (spatial fields zeroed); returns the new row id so the caller can
+   *  key its region to it. */
+  addTemporalSegment(seg: { t_start: number; t_end: number; label?: string }): string {
+    const id = crypto.randomUUID();
+    this._appendInsert({
+      id,
+      shape_type: "segment",
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      rotation: 0,
+      polygon: [],
+      t_start: seg.t_start,
+      t_end: seg.t_end,
+      mask: "",
+      label: seg.label ?? "",
+      text: "",
+      group: "",
+      status: "accepted",
+      source: "human",
+    });
+    return id;
+  }
+
+  /** Queue a segment-time resize of an EXISTING row (a region drag-end), keyed by row
+   *  index — merged into the Save delta as {t_start,t_end}, exactly like a geometry move. */
+  updateSegmentTime(index: number, t_start: number, t_end: number): void {
+    this._temporalEdits.set(index, { t_start, t_end });
+    this._geoDirty = true;
+  }
+
   /** Queue a new row for Save AND render it optimistically — append AT THE END
    *  (index = numRows, so the index-keyed overlay/selection stay valid), re-render the
    *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
@@ -374,6 +435,13 @@ export class AnnotatorController {
       const next = t.concat(buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]));
       arrow.load(next);
       arrow.sync();
+      this.table = next;
+      this.count = next.numRows;
+      this._reapplyOverrides();
+    } else if (t) {
+      // Data-only viewer (audio/video): no Pixi canvas to draw onto — grow the row
+      // table itself so the review sidebar + temporal lane see the segment at once.
+      const next = t.concat(buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]));
       this.table = next;
       this.count = next.numRows;
       this._reapplyOverrides();
@@ -413,6 +481,8 @@ export class AnnotatorController {
           height: s.height,
           rotation: 0,
           polygon: s.polygon ?? [],
+          t_start: 0,
+          t_end: 0,
           mask: "",
           label: s.label ?? prompt,
           text: "",
@@ -439,6 +509,8 @@ export class AnnotatorController {
       height: shape.height,
       rotation: shape.rotation ?? 0,
       polygon: shape.polygon ?? [],
+      t_start: 0,
+      t_end: 0,
       mask: shape.mask ?? "",
       label: "",
       text: "",
@@ -646,11 +718,17 @@ export class AnnotatorController {
       height: g.h,
       polygon: g.polygon ?? [],
     }));
+    const temporal = [...this._temporalEdits].map(([index, s]) => ({
+      id: this._raw(t, "id", index) ?? String(index),
+      t_start: s.t_start,
+      t_end: s.t_end,
+    }));
     if (
       edits.length === 0 &&
       this._inserts.length === 0 &&
       this._deletes.length === 0 &&
-      geometry.length === 0
+      geometry.length === 0 &&
+      temporal.length === 0
     )
       return;
 
@@ -665,6 +743,7 @@ export class AnnotatorController {
           inserts: this._inserts,
           deletes: this._deletes,
           geometry,
+          temporal,
           base_version: this._version,
         }),
       });
@@ -677,6 +756,8 @@ export class AnnotatorController {
         this._redo = [];
         this._inserts = [];
         this._deletes = [];
+        this._geoEdits.clear();
+        this._temporalEdits.clear();
         this._geoDirty = false;
         return;
       }
@@ -687,6 +768,7 @@ export class AnnotatorController {
       this._inserts = [];
       this._deletes = [];
       this._geoEdits.clear();
+      this._temporalEdits.clear();
       this._geoDirty = false;
     } catch (e) {
       this.saveError = e instanceof Error ? e.message : String(e);
@@ -699,16 +781,18 @@ export class AnnotatorController {
    *  now-flushed overlay. merge_insert reorders rows, so selection is dropped. */
   private async _reload(): Promise<void> {
     const url = this._saveUrl;
-    const ctx = this.ctx;
-    if (!url || !ctx) return;
+    if (!url) return;
     const res = await fetch(url);
     if (!res.ok) return;
     this._version = Number(res.headers.get("X-Annotations-Version") ?? this._version ?? 0);
     const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
     this._overrides.clear();
-    ctx.plugins.arrow.clearOverrides(); // drop stale geometry overrides — table is authoritative
-    ctx.plugins.arrow.load(table);
-    ctx.plugins.arrow.sync();
+    const ctx = this.ctx;
+    if (ctx) {
+      ctx.plugins.arrow.clearOverrides(); // drop stale geometry overrides — table is authoritative
+      ctx.plugins.arrow.load(table);
+      ctx.plugins.arrow.sync();
+    }
     this.table = table;
     this.count = table.numRows;
     this.select(null);

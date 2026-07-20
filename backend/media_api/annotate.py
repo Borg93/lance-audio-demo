@@ -60,6 +60,8 @@ class NewAnnotation(BaseModel):
     height: float = 0.0
     rotation: float = 0.0
     polygon: list[float] = Field(default_factory=list)
+    t_start: float = 0.0
+    t_end: float = 0.0
     text: str = ""
     label: str = ""
     status: str = "accepted"
@@ -69,7 +71,7 @@ class NewAnnotation(BaseModel):
 
 
 class GeometryEdit(BaseModel):
-    """A moved/resized EXISTING shape — geometry only, keyed by id (from a canvas drag)."""
+    """A moved/resized EXISTING shape — spatial geometry only, keyed by id (canvas drag)."""
 
     id: str
     x: float
@@ -77,6 +79,14 @@ class GeometryEdit(BaseModel):
     width: float
     height: float
     polygon: list[float] = Field(default_factory=list)
+
+
+class TemporalEdit(BaseModel):
+    """A resized audio/video SEGMENT — its times only, keyed by id (waveform region drag)."""
+
+    id: str
+    t_start: float
+    t_end: float
 
 
 class SaveAnnotations(BaseModel):
@@ -91,6 +101,7 @@ class SaveAnnotations(BaseModel):
     edits: list[AnnotationEdit] = Field(default_factory=list)
     inserts: list[NewAnnotation] = Field(default_factory=list)
     geometry: list[GeometryEdit] = Field(default_factory=list)
+    temporal: list[TemporalEdit] = Field(default_factory=list)
     deletes: list[str] = Field(default_factory=list)
     base_version: int | None = None
 
@@ -117,6 +128,9 @@ _EMPTY_SCHEMA = pa.schema(
         ("height", pa.float32()),
         ("rotation", pa.float32()),
         ("polygon", pa.list_(pa.float32())),
+        # temporal facet — audio segments + a shape pinned to a video moment (seconds)
+        ("t_start", pa.float32()),
+        ("t_end", pa.float32()),
         ("text", pa.string()),
         ("label", pa.string()),
         ("status", pa.string()),
@@ -250,11 +264,13 @@ def save_annotations(
     edits_by_id: dict[str, dict[str, object]] = {
         e.id: e.model_dump(include=set(_EDITABLE_FIELDS), exclude_none=True) for e in body.edits
     }
-    # Geometry moves patch the same rows (by id) — merged into the edit delta.
+    # Geometry moves + segment-time resizes patch the same rows (by id) — merged in.
     for g in body.geometry:
         edits_by_id.setdefault(g.id, {}).update(
             {"x": g.x, "y": g.y, "width": g.width, "height": g.height, "polygon": g.polygon}
         )
+    for tseg in body.temporal:
+        edits_by_id.setdefault(tseg.id, {}).update({"t_start": tseg.t_start, "t_end": tseg.t_end})
     parts = [_build_delta(current, edits_by_id)]
     if body.inserts:
         ident = identity_values(declared, doc_id, (speech_id, chunk_id))
