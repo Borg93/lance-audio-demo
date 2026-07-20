@@ -54,6 +54,11 @@ frontend/.svelte-kit/
 frontend/build/
 demo/.svelte-kit/
 demo/build/
+# Turborepo monorepo layout (apps/* + packages/*) — build + task-cache artifacts
+**/.svelte-kit/
+**/.turbo/
+frontend/apps/*/build/
+frontend/packages/*/dist/
 
 # Stray local artifacts
 images_per.jpg
