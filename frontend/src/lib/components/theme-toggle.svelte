@@ -17,7 +17,7 @@
     document.documentElement.classList.toggle('dark', next);
     isDark = next;
     try {
-      localStorage.setItem('raudio-theme', next ? 'dark' : 'light');
+      localStorage.setItem('lance-media-theme', next ? 'dark' : 'light');
     } catch {
       /* private mode / disabled storage */
     }

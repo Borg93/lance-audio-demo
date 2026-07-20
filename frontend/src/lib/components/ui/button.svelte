@@ -42,7 +42,7 @@
 
   export type ButtonVariant = VariantProps<typeof buttonVariants>['variant'];
   export type ButtonSize = VariantProps<typeof buttonVariants>['size'];
-  /** Back-compat alias (raudio's ui/index.ts re-exports this name). */
+  /** Back-compat alias (lance-media's ui/index.ts re-exports this name). */
   export type ButtonVariants = VariantProps<typeof buttonVariants>;
 
   export type ButtonProps = WithElementRef<HTMLButtonAttributes> &

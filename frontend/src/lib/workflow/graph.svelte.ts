@@ -55,7 +55,7 @@ import { safeParseGraph, type PersistedConfig, type PersistedGraph } from "./per
 export { DEFAULT_N, isNodeKind, MAX_N, MIN_N, NODE_KINDS, RERANK_TOP_N };
 export type { NodeKind, RunStatus, CombineMode, RefineScope, NodeConfig, NodeRuntime };
 
-const STORAGE_KEY = "raudio-workflow-graph-v1";
+const STORAGE_KEY = "lance-media-workflow-graph-v1";
 
 /** Max undo/redo depth — bounds memory; older snapshots fall off the stack. */
 const HISTORY_LIMIT = 50;

@@ -62,7 +62,7 @@
   });
 
   // Per-column hide, persisted so a decluttered list survives reloads.
-  const HIDE_KEY = 'raudio-hidden-cols';
+  const HIDE_KEY = 'lance-media-hidden-cols';
   let hidden = $state<Set<string>>(new Set());
   $effect(() => {
     try {

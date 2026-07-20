@@ -18,7 +18,7 @@
 <CommandMenu />
 
 <div class="h-full min-h-0 w-full">
-  <ResizableSplit storageKey="raudio-workflow-split" initial={0.7} minLeft={460} minRight={300}>
+  <ResizableSplit storageKey="lance-media-workflow-split" initial={0.7} minLeft={460} minRight={300}>
     {#snippet left()}
       <WorkflowCanvas />
     {/snippet}

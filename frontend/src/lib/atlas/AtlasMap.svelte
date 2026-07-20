@@ -457,7 +457,7 @@
           label,
           disabled,
           title: disabled
-            ? `Not built yet — run \`raudio feature atlas --space ${s.name}\``
+            ? `Not built yet — run \`rmedia feature atlas --space ${s.name}\``
             : `${label} embedding map`,
         };
       }),

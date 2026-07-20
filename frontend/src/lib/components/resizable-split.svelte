@@ -26,7 +26,7 @@
   let {
     left,
     right,
-    storageKey = 'raudio-split',
+    storageKey = 'lance-media-split',
     initial = 0.6,
     minLeft = 360,
     minRight = 320,

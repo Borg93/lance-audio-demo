@@ -218,13 +218,13 @@
     ...(ds.bodyField ? [ds.bodyField] : []),
     ...(ds.captionField ? [ds.captionField] : []),
   ];
-  const TABLE_PREFS_KEY = 'raudio-table-cols-v6';
+  const TABLE_PREFS_KEY = 'lance-media-table-cols-v6';
   const initialTablePrefs = loadTablePrefs({
     storageKey: TABLE_PREFS_KEY,
     allKeys: TABLE_COL_KEYS,
     defaults: DEFAULT_TABLE_COLS,
-    legacyMergedKey: 'raudio-table-cols-v5',
-    legacyPlainKey: 'raudio-table-cols-v4',
+    legacyMergedKey: 'lance-media-table-cols-v5',
+    legacyPlainKey: 'lance-media-table-cols-v4',
     legacyAppend: ['speaker'],
   });
   let tableCols = $state<string[]>(initialTablePrefs.cols);
@@ -288,7 +288,7 @@
   // by default): it used to filter through `tableCols`, whose hit-table
   // defaults intersect DOC_COLUMNS on just 3 keys — so the first table a user
   // ever saw showed only Thumb/Name/Dur.
-  const DOC_COLS_KEY = 'raudio-doc-cols-v1';
+  const DOC_COLS_KEY = 'lance-media-doc-cols-v1';
   let docTableCols = $state<string[]>(
     loadCols(
       DOC_COLS_KEY,
@@ -304,14 +304,14 @@
   // Grid column count, persisted in localStorage so it sticks (direct init —
   // same reasoning as loadTableCols above).
   function loadGridCols(): number {
-    const v = localStorage.getItem('raudio-gridcols');
+    const v = localStorage.getItem('lance-media-gridcols');
     return v ? Math.max(2, Math.min(6, Number(v) || 3)) : 3;
   }
   let gridCols = $state<number>(loadGridCols());
   function setGridCols(n: number) {
     gridCols = n;
     try {
-      localStorage.setItem('raudio-gridcols', String(n));
+      localStorage.setItem('lance-media-gridcols', String(n));
     } catch {}
   }
 
@@ -800,7 +800,7 @@
           <div class="min-h-0 flex-1">
             <ResizableSplit
               orientation="vertical"
-              storageKey="raudio-search-map-vsplit"
+              storageKey="lance-media-search-map-vsplit"
               minLeft={220}
               minRight={120}
               initial={0.66}

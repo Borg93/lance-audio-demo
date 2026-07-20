@@ -86,15 +86,15 @@
     <div data-slot="sidebar-header" class="flex flex-col gap-2 p-2">
       <a
         href="/"
-        title="raudio — home"
-        aria-label="raudio home"
+        title="lance-media — home"
+        aria-label="lance-media home"
         class="hover:bg-sidebar-accent flex items-center gap-2 rounded-md p-1.5 transition-colors"
       >
         <div class="bg-primary/10 text-primary grid size-8 shrink-0 place-items-center rounded-lg">
           <AudioLines class="size-5" />
         </div>
         <div class="flex min-w-0 flex-col leading-tight group-data-[collapsible=icon]:hidden">
-          <span class="text-foreground truncate text-sm font-semibold">raudio</span>
+          <span class="text-foreground truncate text-sm font-semibold">lance-media</span>
           <span class="text-muted-foreground truncate text-[10px]">press-conf viewer</span>
         </div>
       </a>

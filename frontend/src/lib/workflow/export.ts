@@ -91,8 +91,8 @@ export function exportHits(
   if (hits.length === 0) return;
   const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, "-");
   if (format === "json") {
-    downloadFile(`raudio-results-${stamp}.json`, hitsToJson(hits, columns), "application/json");
+    downloadFile(`lance-media-results-${stamp}.json`, hitsToJson(hits, columns), "application/json");
   } else {
-    downloadFile(`raudio-results-${stamp}.csv`, hitsToCsv(hits, columns), "text/csv;charset=utf-8");
+    downloadFile(`lance-media-results-${stamp}.csv`, hitsToCsv(hits, columns), "text/csv;charset=utf-8");
   }
 }

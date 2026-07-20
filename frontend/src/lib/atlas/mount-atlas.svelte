@@ -35,7 +35,7 @@
     'text',
     'caption',
   ];
-  const COLS_KEY = 'raudio-atlas-cols-v2'; // bumped so the caption column shows by default
+  const COLS_KEY = 'lance-media-atlas-cols-v2'; // bumped so the caption column shows by default
 
   let visibleCols = $state<string[]>([...DEFAULT_COLS]);
   let showColsPicker = $state(false);
@@ -75,14 +75,14 @@
 <div class="h-full min-h-0">
   <ResizableSplit
     orientation="vertical"
-    storageKey="raudio-atlas-vsplit"
+    storageKey="lance-media-atlas-vsplit"
     minLeft={260}
     minRight={140}
     initial={0.66}
   >
     {#snippet left()}
       <!-- top: map | player -->
-      <ResizableSplit storageKey="raudio-atlas-split" minLeft={420} minRight={320} initial={0.66}>
+      <ResizableSplit storageKey="lance-media-atlas-split" minLeft={420} minRight={320} initial={0.66}>
         {#snippet left()}
           <AtlasMap bind:active {onSelectionHits} />
         {/snippet}

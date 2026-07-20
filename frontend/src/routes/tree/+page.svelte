@@ -2,7 +2,7 @@
   /**
    * Tree tab — the topic hierarchy as a zoomable treemap (or Sankey flow).
    *
-   * `raudio feature topics` clusters chunks (Toponymy) and stores the nested
+   * `rmedia feature topics` clusters chunks (Toponymy) and stores the nested
    * hierarchy as Lance JSONB in `topics.lance`; `/api/topics` serves it. We gate
    * on `built` (pointing the user at the build step otherwise) and render
    * <TopicTreemap>. Clicking a topic opens its results in a side panel
@@ -62,7 +62,7 @@
       <div>
         <p class="mb-1 font-medium text-foreground">No topics yet</p>
         <p>
-          Run <code class="rounded bg-muted px-1 py-0.5">raudio feature topics</code> to cluster the chunks
+          Run <code class="rounded bg-muted px-1 py-0.5">rmedia feature topics</code> to cluster the chunks
           into a topic hierarchy.
         </p>
       </div>
@@ -78,7 +78,7 @@
     <!-- Map + results, draggable divider (same split as the Search page). The
          split is always mounted so the treemap's drill/view state survives
          topic clicks; the right pane swaps hint ↔ results. -->
-    <ResizableSplit storageKey="raudio-tree-split" initial={0.68} minLeft={420} minRight={300}>
+    <ResizableSplit storageKey="lance-media-tree-split" initial={0.68} minLeft={420} minRight={300}>
       {#snippet left()}
         <TopicTreemap
           hierarchy={tree}

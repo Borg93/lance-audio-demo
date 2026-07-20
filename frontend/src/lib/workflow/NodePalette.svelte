@@ -1,6 +1,6 @@
 <script module lang="ts">
   /** MIME carrying the node kind across the HTML5 drag (palette → canvas drop). */
-  export const NODE_DND_MIME = 'application/raudio-node';
+  export const NODE_DND_MIME = 'application/lance-media-node';
 </script>
 
 <script lang="ts">
