@@ -11,7 +11,13 @@ from typing import TYPE_CHECKING
 
 import lance
 import pyarrow as pa
-from backend.media_api.annotate import _EMPTY_SCHEMA, _build_delta, _ipc_stream
+from backend.media_api.annotate import (
+    _EMPTY_SCHEMA,
+    NewAnnotation,
+    _build_delta,
+    _ipc_stream,
+    _new_rows,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -90,3 +96,60 @@ def test_merge_insert_save_is_one_atomic_version(tmp_path: Path) -> None:
     assert got["c"]["status"] == "prediction"  # untouched row unchanged
     assert got["a"]["polygon"] == [0.0, 0.0, 1.0, 1.0]  # geometry survived the round-trip
     assert after.version == v0 + 1  # exactly one new version
+
+
+def _full_schema() -> pa.Schema:
+    """The annotations contract + the chunk identity columns a real table carries."""
+    return pa.schema(
+        [("doc_id", pa.string()), ("speech_id", pa.int64()), ("chunk_id", pa.int64()), *_EMPTY_SCHEMA]
+    )
+
+
+def test_new_rows_stamps_identity_and_carries_geometry() -> None:
+    ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}
+    tbl = _new_rows(
+        [NewAnnotation(id="n1", shape_type="polygon", polygon=[1.0, 2.0, 3.0, 4.0], label="line")],
+        ident,
+        _full_schema(),
+    )
+    r = tbl.to_pylist()[0]
+    assert (r["doc_id"], r["speech_id"], r["chunk_id"]) == ("d1", 0, 19)  # identity stamped
+    assert r["id"] == "n1" and r["shape_type"] == "polygon" and r["polygon"] == [1.0, 2.0, 3.0, 4.0]
+    assert r["status"] == "accepted" and r["source"] == "human"  # human-drawn defaults
+    assert r["confidence"] is None  # unspecified column → null via schema
+
+
+def test_save_edit_insert_delete_round_trip(tmp_path: Path) -> None:
+    schema = _full_schema()
+    ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}
+    uri = str(tmp_path / "annotations.lance")
+    lance.write_dataset(
+        pa.Table.from_pylist(
+            [{**ident, "id": "a", "status": "prediction"}, {**ident, "id": "b", "status": "accepted"}],
+            schema=schema,
+        ),
+        uri,
+    )
+    ds = lance.dataset(uri)
+    v0 = ds.version
+
+    # edit `a` + insert new shape `c` — ONE merge_insert (update + insert)
+    delta = pa.concat_tables(
+        [
+            _build_delta(ds.to_table(), {"a": {"status": "accepted"}}),
+            _new_rows([NewAnnotation(id="c", shape_type="rectangle", x=9.0)], ident, schema),
+        ]
+    )
+    ds.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(delta)
+    after = lance.dataset(uri)
+    got = {r["id"]: r for r in after.to_table().to_pylist()}
+    assert got["a"]["status"] == "accepted"  # edit applied
+    assert got["c"]["shape_type"] == "rectangle" and got["c"]["x"] == 9.0  # insert applied
+    assert got["c"]["doc_id"] == "d1"  # new shape carries the unit identity
+    assert after.version == v0 + 1  # edit + insert = one atomic version
+
+    # delete `b`
+    after.delete("id IN ('b')")
+    final = lance.dataset(uri)
+    assert {r["id"] for r in final.to_table().to_pylist()} == {"a", "c"}
+    assert final.version == v0 + 2

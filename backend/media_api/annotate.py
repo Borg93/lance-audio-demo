@@ -8,13 +8,15 @@ stream (a dataset with no annotations yet is not an error).
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 
 import pyarrow as pa
 from fastapi import APIRouter, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.core.exceptions import NotFoundError
 from backend.deps import StateDep
+from backend.lancekit.descriptor import Declared
 from backend.media_api.media import DatasetParam, chunk_key_filter, table_dataset, validate_doc_key
 from backend.state import dataset_handle
 
@@ -42,14 +44,38 @@ class AnnotationEdit(BaseModel):
     reviewer: str | None = None
 
 
-class SaveAnnotations(BaseModel):
-    """The delta a Save flushes: the edited rows for one media unit."""
+class NewAnnotation(BaseModel):
+    """A newly drawn shape. Geometry + attributes; the chunk identity columns are
+    stamped server-side from the route keys, so the client sends only shape data.
+    A human-drawn shape is ``accepted`` by construction, ``source=human``."""
 
-    edits: list[AnnotationEdit]
+    id: str
+    shape_type: str
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 0.0
+    height: float = 0.0
+    rotation: float = 0.0
+    polygon: list[float] = Field(default_factory=list)
+    text: str = ""
+    label: str = ""
+    status: str = "accepted"
+    source: str = "human"
+    group: str = ""
+    mask: str = ""
+
+
+class SaveAnnotations(BaseModel):
+    """The delta a Save flushes for one media unit: field edits + newly drawn shapes
+    + deleted ids. All three commit together (edits+inserts in one merge_insert)."""
+
+    edits: list[AnnotationEdit] = Field(default_factory=list)
+    inserts: list[NewAnnotation] = Field(default_factory=list)
+    deletes: list[str] = Field(default_factory=list)
 
 
 class SaveResult(BaseModel):
-    """One atomic Lance version = one save."""
+    """One save. ``saved`` counts touched rows (edits+inserts+deletes)."""
 
     saved: int
     version: int
@@ -109,6 +135,25 @@ def _build_delta(current: pa.Table, edits_by_id: dict[str, dict[str, object]]) -
     return pa.Table.from_pylist(patched, schema=current.schema)
 
 
+def identity_values(declared: Declared, doc_id: str, rest: Sequence[int]) -> dict[str, object]:
+    """The chunk identity columns as a dict — the same (doc key, *other key fields)
+    mapping ``chunk_key_filter`` builds as a predicate, stamped onto new rows so a
+    drawn shape carries its unit's identity. Arity-generic off the descriptor."""
+    identity = declared.identity
+    values: dict[str, object] = {identity.doc_key: doc_id}
+    others = [f for f in identity.key_fields if f != identity.doc_key]
+    for field, value in zip(others, rest, strict=False):
+        values[field] = int(value)
+    return values
+
+
+def _new_rows(inserts: Sequence[NewAnnotation], ident: Mapping[str, object], schema: pa.Schema) -> pa.Table:
+    """Full new-annotation rows: identity stamped + shape fields; columns absent from
+    the payload fall to null via the schema. Same schema ⇒ merge_insert can insert."""
+    rows = [{**ident, **ins.model_dump()} for ins in inserts]
+    return pa.Table.from_pylist(rows, schema=schema)
+
+
 @router.get("/annotations/{doc_id}/{speech_id}/{chunk_id}")
 def annotations(
     state: StateDep,
@@ -166,14 +211,41 @@ def save_annotations(
 
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
     current = ds.to_table(filter=where)
+
+    # edits (patch existing) + inserts (new shapes) commit in ONE merge_insert; the
+    # source is the union, keyed by id — matched ⇒ update, unmatched ⇒ insert.
     edits_by_id: dict[str, dict[str, object]] = {
         e.id: e.model_dump(include=set(_EDITABLE_FIELDS), exclude_none=True) for e in body.edits
     }
-    delta = _build_delta(current, edits_by_id)
-    if delta.num_rows == 0:
-        return SaveResult(saved=0, version=int(ds.version))
+    parts = [_build_delta(current, edits_by_id)]
+    if body.inserts:
+        ident = identity_values(declared, doc_id, (speech_id, chunk_id))
+        parts.append(_new_rows(body.inserts, ident, current.schema))
+    delta = pa.concat_tables(parts)
 
-    ds.merge_insert("id").when_matched_update_all().execute(delta)
+    touched = 0
+    if delta.num_rows:
+        ds.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(delta)
+        touched += delta.num_rows
+    if body.deletes:
+        quoted = ", ".join(_sql_quote(d) for d in body.deletes)
+        ds.delete(f"id IN ({quoted})")
+        touched += len(body.deletes)
+
+    if touched == 0:
+        return SaveResult(saved=0, version=int(ds.version))
     new_version = int(table_dataset(handle, ANNOTATIONS_TABLE).version)
-    logger.info("saved %d annotation edits → %s v%d", delta.num_rows, doc_id, new_version)
-    return SaveResult(saved=delta.num_rows, version=new_version)
+    logger.info(
+        "saved %s→ v%d (%d edit+insert, %d delete)",
+        doc_id,
+        new_version,
+        delta.num_rows,
+        len(body.deletes),
+    )
+    return SaveResult(saved=touched, version=new_version)
+
+
+def _sql_quote(value: str) -> str:
+    """SQL single-quoted string literal (doubling quotes) — the injection guard for
+    the delete predicate's id list."""
+    return "'" + value.replace("'", "''") + "'"
