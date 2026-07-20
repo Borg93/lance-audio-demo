@@ -299,6 +299,9 @@ export class InteractionManager {
     // Restore highlight with updated geometry (sync clears it)
     this.arrowPlugin.highlight(this.selectedIndex);
     this.onDirtyChange?.(true);
+    // Propagate the FINAL geometry (drag-end, not per-frame) so a binding layer can
+    // persist it — the per-frame editor onChange stays no-op'd.
+    this.onChange?.(this.selectedIndex, geo);
   }
 
   private createContext(): InteractionContext {

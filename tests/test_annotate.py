@@ -80,6 +80,17 @@ def test_build_delta_patches_only_editable_fields_and_carries_geometry() -> None
     assert by_id["c"]["x"] == 3.0  # geometry carried forward
 
 
+def test_geometry_edit_patches_shape_carries_fields() -> None:
+    # simulates the save()'s geometry merge: a moved shape patches x/polygon by id
+    current = _ann_table()
+    edits_by_id: dict[str, dict[str, object]] = {}
+    edits_by_id.setdefault("a", {}).update({"x": 9.0, "polygon": [1.0, 1.0, 2.0, 2.0]})
+    delta = _build_delta(current, edits_by_id)
+    r = {x["id"]: x for x in delta.to_pylist()}["a"]
+    assert r["x"] == 9.0 and r["polygon"] == [1.0, 1.0, 2.0, 2.0]  # geometry patched
+    assert r["status"] == "prediction" and r["label"] == "text-line"  # fields carried forward
+
+
 def test_merge_insert_save_is_one_atomic_version(tmp_path: Path) -> None:
     uri = str(tmp_path / "annotations.lance")
     lance.write_dataset(_ann_table(), uri)

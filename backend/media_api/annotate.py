@@ -68,9 +68,21 @@ class NewAnnotation(BaseModel):
     mask: str = ""
 
 
+class GeometryEdit(BaseModel):
+    """A moved/resized EXISTING shape — geometry only, keyed by id (from a canvas drag)."""
+
+    id: str
+    x: float
+    y: float
+    width: float
+    height: float
+    polygon: list[float] = Field(default_factory=list)
+
+
 class SaveAnnotations(BaseModel):
     """The delta a Save flushes for one media unit: field edits + newly drawn shapes
-    + deleted ids. All three commit together (edits+inserts in one merge_insert).
+    + moved geometry + deleted ids. Edits/inserts/geometry commit together (one
+    merge_insert), deletes follow.
 
     ``base_version`` is the Lance version the client loaded — optimistic concurrency:
     the save 409s if the table advanced underneath it (someone else / a deriver wrote).
@@ -78,6 +90,7 @@ class SaveAnnotations(BaseModel):
 
     edits: list[AnnotationEdit] = Field(default_factory=list)
     inserts: list[NewAnnotation] = Field(default_factory=list)
+    geometry: list[GeometryEdit] = Field(default_factory=list)
     deletes: list[str] = Field(default_factory=list)
     base_version: int | None = None
 
@@ -237,6 +250,11 @@ def save_annotations(
     edits_by_id: dict[str, dict[str, object]] = {
         e.id: e.model_dump(include=set(_EDITABLE_FIELDS), exclude_none=True) for e in body.edits
     }
+    # Geometry moves patch the same rows (by id) — merged into the edit delta.
+    for g in body.geometry:
+        edits_by_id.setdefault(g.id, {}).update(
+            {"x": g.x, "y": g.y, "width": g.width, "height": g.height, "polygon": g.polygon}
+        )
     parts = [_build_delta(current, edits_by_id)]
     if body.inserts:
         ident = identity_values(declared, doc_id, (speech_id, chunk_id))

@@ -88,6 +88,26 @@ const reviewOk =
   saveEnabledBefore === false &&
   advancedTo !== advancedFrom;
 
+// multi-select: Shift-click two list items → the bulk-actions bar shows "2 selected"
+await page.locator("body").press("Escape");
+await page.waitForTimeout(150);
+await page
+  .locator("[data-testid=annotation-list] ul > li button")
+  .nth(0)
+  .click({ modifiers: ["Shift"] });
+await page
+  .locator("[data-testid=annotation-list] ul > li button")
+  .nth(1)
+  .click({ modifiers: ["Shift"] });
+await page.waitForTimeout(200);
+const bulkText = (
+  (await page
+    .locator("[data-testid=bulk-actions]")
+    .textContent()
+    .catch(() => "")) || ""
+).replace(/\s+/g, " ");
+const multiOk = /2 selected/.test(bulkText);
+
 console.log("viewer status :", status.trim());
 console.log("canvas count  :", canvas);
 console.log(
@@ -107,9 +127,10 @@ console.log(
   "accept-advance:",
   reviewOk ? "OK" : `FAIL acc ${acc0}->${acc1}->${acc2} advanced=${advancedTo !== advancedFrom}`,
 );
+console.log("multi-select :", multiOk ? "OK" : `FAIL bulk="${bulkText.slice(0, 40)}"`);
 const layoutOk = toolbar === 1 && sidebar === 1 && layers === 1 && zoom === 1 && pagenav === 1;
 const dataOk =
   canvas > 0 && listItems === 3 && tableRows === 3 && /annotations from Lance/.test(status);
-console.log(layoutOk && dataOk && reviewOk ? "BOTH OK" : "BOTH FAIL");
+console.log(layoutOk && dataOk && reviewOk && multiOk ? "BOTH OK" : "BOTH FAIL");
 await browser.close();
-process.exit(layoutOk && dataOk && reviewOk ? 0 : 1);
+process.exit(layoutOk && dataOk && reviewOk && multiOk ? 0 : 1);

@@ -34,9 +34,13 @@
         <button
           class={cn(
             'flex w-full items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted/60',
-            controller.selectedIndex === r.index && 'bg-primary/10 ring-1 ring-primary/40',
+            (controller.selectedIndex === r.index || controller.selectedSet.has(r.index)) &&
+              'bg-primary/10 ring-1 ring-primary/40',
           )}
-          onclick={() => controller.select(r.index)}
+          onclick={(e) =>
+            e.shiftKey || e.metaKey || e.ctrlKey
+              ? controller.toggleSelect(r.index)
+              : controller.select(r.index)}
         >
           <span class={cn('mt-1 size-2 shrink-0 rounded-full', statusDot(r.status))}></span>
           <span class="min-w-0 flex-1">

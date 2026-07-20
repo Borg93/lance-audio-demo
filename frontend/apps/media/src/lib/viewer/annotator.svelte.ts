@@ -18,7 +18,7 @@
  */
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { type Table, tableFromIPC } from "apache-arrow";
-import type { CommitShape, PixiContext, Tool } from "$lib/engine";
+import type { CommitShape, GeometryUpdate, PixiContext, Tool } from "$lib/engine";
 import { LayerStore, buildBatchTable } from "$lib/engine";
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "$lib/labeling/types";
 import { PRODUCERS } from "$lib/labeling/producers";
@@ -99,6 +99,9 @@ export class AnnotatorController {
   activeTool = $state<Tool>("select");
   selectedIndex = $state<number | null>(null);
   readonly selectedSet = new SvelteSet<number>();
+  // true while multi-selecting (Shift/Ctrl-click) — keeps the sidebar on the list so
+  // more can be picked, instead of opening the single-annotation detail.
+  multiSelect = $state(false);
   zoomPercent = $state(1);
   count = $state(0);
   saving = $state(false);
@@ -133,6 +136,9 @@ export class AnnotatorController {
   // deletes immediately (filtered from `rows`); new shapes render after save+reload.
   private _inserts = $state<InsertRow[]>([]);
   private _deletes = $state<string[]>([]);
+  // Geometry moves of EXISTING shapes, keyed by row index (the canvas already renders
+  // them via the plugin's dirty overlay; this queues them for Save).
+  private readonly _geoEdits = new SvelteMap<number, GeometryUpdate>();
 
   private _detachViewport: (() => void) | null = null;
   // POST target for Save (same URL the annotations are GET from). Null ⇒ read-only.
@@ -256,6 +262,11 @@ export class AnnotatorController {
     im.onDirtyChange = (hasDirty) => {
       if (hasDirty) this._geoDirty = true;
     };
+    im.onChange = (index, geo) => {
+      // drag-end geometry of an existing shape → queue for Save (canvas already updated)
+      this._geoEdits.set(index, geo);
+      this._geoDirty = true;
+    };
     im.onCommit = (shape) => {
       const row = this._buildInsert(shape);
       this._inserts = [...this._inserts, row];
@@ -317,11 +328,37 @@ export class AnnotatorController {
 
   // ── selection ──
   select(index: number | null): void {
+    this.multiSelect = false;
     this.selectedIndex = index;
     const im = this.ctx?.plugins.interaction;
     im?.select(index);
     this._mirrorSelection(im?.getSelectedSet() ?? new Set());
   }
+  /** Toggle an annotation in the multi-selection (Shift/Ctrl-click) — the `picked`
+   *  target for bulk ops ("apply to selection", Label Studio). */
+  toggleSelect(index: number): void {
+    this.multiSelect = true;
+    const im = this.ctx?.plugins.interaction;
+    im?.select(index, true);
+    this._mirrorSelection(im?.getSelectedSet() ?? new Set());
+    this.selectedIndex = im?.getSelectedIndex() ?? index;
+  }
+  clearSelection(): void {
+    this.select(null);
+  }
+  /** Set a status on the WHOLE multi-selection — a bulk verdict through the picked seam. */
+  bulkStatus(status: string): void {
+    const picked = [...this.selectedSet];
+    if (picked.length === 0) return;
+    this.apply({
+      target: { level: "picked", indices: picked },
+      producer: "human",
+      op: "verdict",
+      execution: "interactive",
+      payload: { fields: { status } },
+    });
+  }
+
   deleteSelected(): void {
     const i = this.selectedIndex;
     if (i == null) return;
@@ -543,7 +580,21 @@ export class AnnotatorController {
       id: this._raw(t, "id", index) ?? String(index),
       ...fields,
     }));
-    if (edits.length === 0 && this._inserts.length === 0 && this._deletes.length === 0) return;
+    const geometry = [...this._geoEdits].map(([index, g]) => ({
+      id: this._raw(t, "id", index) ?? String(index),
+      x: g.x,
+      y: g.y,
+      width: g.w,
+      height: g.h,
+      polygon: g.polygon ?? [],
+    }));
+    if (
+      edits.length === 0 &&
+      this._inserts.length === 0 &&
+      this._deletes.length === 0 &&
+      geometry.length === 0
+    )
+      return;
 
     this.saving = true;
     this.saveError = null;
@@ -555,6 +606,7 @@ export class AnnotatorController {
           edits,
           inserts: this._inserts,
           deletes: this._deletes,
+          geometry,
           base_version: this._version,
         }),
       });
@@ -576,6 +628,7 @@ export class AnnotatorController {
       this._redo = [];
       this._inserts = [];
       this._deletes = [];
+      this._geoEdits.clear();
       this._geoDirty = false;
     } catch (e) {
       this.saveError = e instanceof Error ? e.message : String(e);
@@ -595,6 +648,7 @@ export class AnnotatorController {
     this._version = Number(res.headers.get("X-Annotations-Version") ?? this._version ?? 0);
     const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
     this._overrides.clear();
+    ctx.plugins.arrow.clearOverrides(); // drop stale geometry overrides — table is authoritative
     ctx.plugins.arrow.load(table);
     ctx.plugins.arrow.sync();
     this.table = table;

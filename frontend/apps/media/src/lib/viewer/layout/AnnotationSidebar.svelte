@@ -9,6 +9,7 @@
   import AnnotationDetail from './AnnotationDetail.svelte';
   import AnnotationList from './AnnotationList.svelte';
   import AnnotationTable from './AnnotationTable.svelte';
+  import BulkActions from './BulkActions.svelte';
   import LayerPanel from './LayerPanel.svelte';
   import type { AnnotatorController } from '../annotator.svelte';
 
@@ -66,7 +67,14 @@
   </div>
 
   <div class="flex min-h-0 flex-1 flex-col">
-    {#if controller.selected}
+    {#if controller.multiSelect}
+      {#if controller.selectedSet.size > 1}
+        <BulkActions {controller} />
+      {/if}
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <AnnotationList {controller} />
+      </div>
+    {:else if controller.selected}
       <div class="border-b border-border px-2 py-1.5">
         <Button variant="ghost" size="sm" onclick={() => controller.select(null)}>
           <ChevronLeft class="size-3.5" /> Back to list
