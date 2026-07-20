@@ -40,6 +40,7 @@ export interface AnnoRow {
   id: string;
   label: string;
   status: string;
+  shape: string;
   group: string;
   text: string;
   source: string;
@@ -163,6 +164,7 @@ export class AnnotatorController {
         id: this._raw(t, "id", i) ?? String(i),
         label: this._field(t, "label", i) ?? "",
         status: this._field(t, "status", i) ?? "",
+        shape: this._field(t, "shape_type", i) ?? "",
         group: this._field(t, "group", i) ?? "",
         text: this._field(t, "text", i) ?? "",
         source: this._field(t, "source", i) ?? "",

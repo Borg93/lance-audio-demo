@@ -32,6 +32,19 @@ const zoom = await page.locator("[data-testid=zoom-controls]").count();
 const pagenav = await page.locator("[data-testid=page-nav]").count();
 const listItems = await page.locator("[data-testid=annotation-list] ul > li").count();
 
+// table view: the List/Table toggle shows the sortable table, then back to list
+await page
+  .getByTitle("Table")
+  .click()
+  .catch(() => {});
+await page.waitForTimeout(150);
+const tableRows = await page.locator("[data-testid=annotation-table] tbody tr").count();
+await page
+  .getByTitle("List")
+  .click()
+  .catch(() => {});
+await page.waitForTimeout(150);
+
 // review loop: select a prediction → accept-and-advance (A) bumps the accepted count
 // + advances the selection; Ctrl+Z reverts. Read the count off the sidebar summary.
 const acceptedCount = async () => {
@@ -89,13 +102,14 @@ console.log(
   "| pagenav",
   pagenav,
 );
-console.log("queue items   :", listItems);
+console.log("queue items   :", listItems, "| table rows", tableRows);
 console.log(
   "accept-advance:",
   reviewOk ? "OK" : `FAIL acc ${acc0}->${acc1}->${acc2} advanced=${advancedTo !== advancedFrom}`,
 );
 const layoutOk = toolbar === 1 && sidebar === 1 && layers === 1 && zoom === 1 && pagenav === 1;
-const dataOk = canvas > 0 && listItems === 3 && /annotations from Lance/.test(status);
+const dataOk =
+  canvas > 0 && listItems === 3 && tableRows === 3 && /annotations from Lance/.test(status);
 console.log(layoutOk && dataOk && reviewOk ? "BOTH OK" : "BOTH FAIL");
 await browser.close();
 process.exit(layoutOk && dataOk && reviewOk ? 0 : 1);

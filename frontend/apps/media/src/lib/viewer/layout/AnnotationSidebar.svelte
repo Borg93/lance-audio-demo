@@ -2,16 +2,20 @@
   // Right inspector pane. Composes the review list / single-annotation detail
   // + the layer panel. Controlled by the facade. (Ported from ra-anno, split into
   // focused sub-components per our no-god-files rule.)
-  import { ChevronLeft } from 'lucide-svelte';
+  import { ChevronLeft, List, Table } from 'lucide-svelte';
   import { Button } from '$lib/components/ui';
   import { cn } from '$lib/utils';
   import { statusDot } from './statusStyle';
   import AnnotationDetail from './AnnotationDetail.svelte';
   import AnnotationList from './AnnotationList.svelte';
+  import AnnotationTable from './AnnotationTable.svelte';
   import LayerPanel from './LayerPanel.svelte';
   import type { AnnotatorController } from '../annotator.svelte';
 
   let { controller }: { controller: AnnotatorController } = $props();
+
+  // browse mode when nothing is selected: compact list vs full sortable table
+  let view = $state<'list' | 'table'>('list');
 
   const summary = $derived.by(() => {
     const counts = new Map<string, number>();
@@ -26,7 +30,29 @@
 >
   <header class="flex items-center justify-between border-b border-border px-3 py-2">
     <h2 class="text-sm font-semibold">Review queue</h2>
-    <span class="text-xs tabular-nums text-muted-foreground">{controller.count}</span>
+    <div class="flex items-center gap-2">
+      <div class="flex overflow-hidden rounded border border-border">
+        <Button
+          variant={view === 'list' ? 'secondary' : 'ghost'}
+          size="icon-xs"
+          title="List"
+          aria-pressed={view === 'list'}
+          onclick={() => (view = 'list')}
+        >
+          <List class="size-3.5" />
+        </Button>
+        <Button
+          variant={view === 'table' ? 'secondary' : 'ghost'}
+          size="icon-xs"
+          title="Table"
+          aria-pressed={view === 'table'}
+          onclick={() => (view = 'table')}
+        >
+          <Table class="size-3.5" />
+        </Button>
+      </div>
+      <span class="text-xs tabular-nums text-muted-foreground">{controller.count}</span>
+    </div>
   </header>
 
   <!-- status summary -->
@@ -49,6 +75,8 @@
       <div class="min-h-0 flex-1 overflow-y-auto">
         <AnnotationDetail {controller} />
       </div>
+    {:else if view === 'table'}
+      <AnnotationTable {controller} />
     {:else}
       <AnnotationList {controller} />
     {/if}
