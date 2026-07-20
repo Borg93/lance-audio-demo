@@ -31,6 +31,7 @@ GPU             ?= 2
 	caption-chunk-frames embed-captions captions topics \
 	atlas atlas-visual atlas-caption atlas-all features-all stack-up stack-down \
 	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
+	seed-annotations annotate \
 	hf-upload-db hf-upload-videos hf-upload-all hf-download-db hf-download-all \
 	reingest search query demo shell clean clean-db clean-run reset download
 
@@ -472,6 +473,20 @@ dev:                  ## Run backend + frontend together (tmux or two terminals)
 	@echo "  1) make backend"
 	@echo "  2) make frontend"
 	@echo "Then open http://localhost:$(FRONTEND_PORT)"
+
+seed-annotations:     ## Seed a demo annotations.lance (engine schema + active-learning cols) into $(DB).
+	uv run python scripts/seed_annotations.py $(DB)
+
+annotate: seed-annotations  ## Seed + print how to run the annotator (viewer + review-queue table).
+	@echo ""
+	@echo "Annotator is at /annotate. Start these in two terminals:"
+	@echo "  1) make backend                        # FastAPI on :$(BACKEND_PORT)"
+	@echo "  2) make frontend-dev                   # vite (auto-picks a free port if 5173 is taken — it PRINTS the port)"
+	@echo "Then open   http://127.0.0.1:<printed-port>/annotate"
+	@echo ""
+	@echo "Remote (Zed/VS Code over SSH)? forward the printed port from your LOCAL machine:"
+	@echo "  ssh -L <port>:127.0.0.1:<port> $$(whoami)@$$(hostname)"
+	@echo "Headless e2e check:  cd frontend && E2E_BASE=http://127.0.0.1:<port> bun run test:e2e"
 
 # ─── Whole-stack bring-up (4 services, detached + health-gated) ──────────────
 # One command for embed:8001 → rerank:8002 → backend:8000 → frontend:5274.
