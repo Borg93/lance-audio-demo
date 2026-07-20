@@ -179,6 +179,81 @@ Landed in this repo (`frontend/`), all gates green:
 Deferred to increment 2: wire `PixiCanvas.svelte` + an annotation route, connect it
 to a real Lance `annotations` table, and add peaks.js for the audio lane.
 
+## 5b. Merged vs NOT merged — the honest reality of increment 1
+
+**Merged (committed):** ONLY `frontend/src/lib/engine/` (25 files) — the rendering
++ annotation *core*: PixiJS Image/ArrowData/Interaction plugins, the tool suite,
+the editors, `AnnotationStore` (local-first WAL), `schema.ts` (the annotation
+model), interaction (incl. **lasso multi-select** — `selectedSet`). Plus deps
+(pixi.js, flatbush, opencv-js, elkjs) + the oxc toolchain.
+
+**⚠️ It is INERT.** Nothing imports `$lib/engine` — no canvas, no route, no UI, no
+data. So ra-anno is *code-present, not functional*. What's **NOT merged** (still
+only in the ra-anno clone) is everything that makes it run:
+
+| Not moved | What it is |
+|---|---|
+| `PixiCanvas.svelte` | the thin mount wrapper (Application + plugin wiring) |
+| app stores | `annotations.svelte.ts` / tools / undo / transport (what components bind to) |
+| components | `AnnotationSidebar`, `Toolbar`, `magic/`, `ui/` (most `ui/` = shadcn we already have) |
+| routes | the annotation-editor page(s) |
+| API endpoints | `annotations` / `images` / `pages` / `thumbnails` / `datasets` — the Arrow-IPC server + image serving (currently mock; Flight SQL not built even upstream) |
+| hooks/server | 2 files |
+
+**Increment 2 = wire it:** mount `PixiCanvas` in a route, bring the sidebar/toolbar
++ app stores, stand up the annotator API endpoints against a real Lance
+`annotations` table. Only then does annotation actually work here.
+
+## 5c. Annotation across modalities — can we, and what's needed
+
+The engine's model (`schema.ts`) is genuinely document-grade: `shape_type` ∈
+{rectangle, rotation(oriented), polygon, baseline(HTR line), line, point, mask},
+plus `text/label/status(prediction→reviewed→accepted)/group_id(link lines→region)/
+difficult/mask/metadata`. But it is **spatial-image ONLY** — zero time/video.
+
+| Capability | Now? | What it needs |
+|---|---|---|
+| **Bulk selection** | **✅ already in the engine** (LassoTool → `selectedSet` → `highlightSet`, `batchUpdateLocal`) | just wire the sidebar bulk-edit UI |
+| **Annotate on audio** | ❌ | a **WaveformCanvas** (peaks.js) + a `segment` time-range shape (`t_start/t_end`). Store + annotator service already generalize (region+label); only the VIEWER is new |
+| **Draw on video (spatial, on a frame)** | ⚠️ partial | a **VideoCanvas** = `<video>` + the PixiJS overlay synced to `currentTime`; add a temporal key to a shape (`frame_idx` or `t`). The DRAWING engine works as-is on the frame texture |
+| **Frames that draw on video** | ⚠️ partial | our `extract_frames` silver stage already yields frames; drawing on them is just the image path — pinning a shape to a video *time* + overlaying it back is the new part |
+| **Track/interpolate across frames (CVAT-style)** | ❌ | keyframe interpolation between annotated frames using per-object tracks (`group_id` exists as the track key) — a bigger, separate feature |
+
+**The unifying idea:** keep ONE `annotations` table + ONE annotator service. Extend
+the model with an optional **temporal facet** (`t_start/t_end` for segments, `t`/
+`frame_idx` for a shape pinned to a video moment). `shape_type` + the media kind
+disambiguate. Spatial-only rows are unchanged (documents/HTR); audio/video rows add
+the time columns. No fork of the data model or the service.
+
+## 5d. The layout + service segmentation
+
+**Frontend = one shell + a viewer REGISTRY keyed by media kind** (from the
+descriptor's `document.mime`), all sharing `AnnotationStore` + `AnnotationSidebar`
++ `Toolbar` + the annotator service:
+
+```
+/annotate/[dataset]/[docId]/[unit]
+   ├─ image/PDF  → ImageCanvas   (ra-anno PixiJS engine, as-is)
+   ├─ audio      → WaveformCanvas (peaks.js — temporal segments/points)
+   └─ video      → VideoCanvas    (<video> + PixiJS overlay @currentTime + a timeline)
+        shared: AnnotationStore · Sidebar · Toolbar · undo/redo
+```
+
+**Services (the 3, unchanged by modality):**
+1. **Viewer** — media bytes (image/audio/video, Range) + annotation READ (Arrow IPC).
+2. **Search** — FTS / vector / hybrid.
+3. **Annotator** — annotation CRUD (Arrow IPC → `merge_insert`); model predictions
+   (`status="prediction"`) land here for human review — SAME table, SAME service,
+   for all three modalities.
+
+**Compute (silver stages) feed the annotator:** `htr`/`ocr` (image→regions),
+`asr` (audio→segments), `extract_frames` (video→frames), `embed`. They WRITE
+predictions into the one `annotations` table; humans correct → a new Lance version.
+
+So the segmentation is: **one uniform annotation model + one annotator service; the
+frontend segments by a per-modality VIEWER component.** That's the only axis that
+forks — and it forks in the view layer, exactly where it should.
+
 ## 6. Open decisions (call these before building)
 
 1. **Flight SQL server vs `@lancedb/lancedb` TS SDK vs our FastAPI** for the
