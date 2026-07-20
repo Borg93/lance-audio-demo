@@ -1,14 +1,17 @@
 import "../../../chunks/async.js";
 import "clsx";
-import { a as Play, X, P as Plus$1, L as Loader_circle, b as Player_pane, R as Resizable_split } from "../../../chunks/resizable-split.js";
+import { X, R as Resizable_split } from "../../../chunks/resizable-split.js";
 import { c as setContext, a as spread_props, j as bind_props, e as attributes, f as clsx, d as derived, i as attr_class, h as attr, n as attr_style, o as css_props, k as stringify, m as escape_html, l as ensure_array_like, s as sanitize_props, b as slot, p as props_id } from "../../../chunks/renderer.js";
 import { c as createStore, k as key, u as useStore, g as getEdgeIdContext, E as EdgeLabel, P as Panel, s as snapshot, H as Handle, a as BaseEdge, b as useSvelteFlow, S as SvelteFlow, B as Background } from "../../../chunks/style.js";
 import { D as DEV } from "../../../chunks/false.js";
-import { c as activeView, e as search, r as relevanceOf, d as chunkFrameUrl } from "../../../chunks/api.js";
+import { s as search, r as relevanceOf, c as chunkFrameUrl } from "../../../chunks/api.js";
 import { C as Context, M as PresenceManager, d as boxWith, w as watch, m as attachRef, Q as getDataOpenClosed, q as createBitsAttrs, R as getDataTransitionAttrs, n as boolToEmptyStrOrUndef, r as createId, u as mergeProps, T as afterTick, x as ENTER, E as END, H as HOME, j as ARROW_LEFT, A as ARROW_UP, U as h, V as k, W as p, h as ARROW_RIGHT, k as ARROW_DOWN, X as l, Y as j, Z as n, o as boolToStr, _ as getFirstNonCommentChild, $ as afterSleep, s as noop, a0 as Focus_scope, a1 as Escape_layer, a2 as Dismissible_layer, a3 as Text_selection_layer, a4 as Scroll_lock, F as hitKey, B as Button, P as Portal } from "../../../chunks/scroll-lock.js";
 import ELK from "elkjs/lib/elk.bundled.js";
+import { a as activeView } from "../../../chunks/descriptor.js";
 import * as v from "valibot";
+import { a as Play, P as Plus$1, L as Loader_circle, b as Player_pane } from "../../../chunks/player-pane.js";
 import { I as Icon } from "../../../chunks/Icon.js";
+import { E as Eye_off, a as Eye, R as Rotate_ccw, T as Trash_2, b as Eraser } from "../../../chunks/trash-2.js";
 import { XYHandle, getNodeDimensions, nodeHasDimensions, getBoundsOfRects, getInternalNodesBounds, Position, MarkerType, getBezierPath } from "@xyflow/system";
 import { M as Map$1 } from "../../../chunks/map.js";
 import { t as to_array } from "../../../chunks/render-context.js";
@@ -760,122 +763,6 @@ function Download($$renderer, $$props) {
     }
   ]));
 }
-function Eraser($$renderer, $$props) {
-  const $$sanitized_props = sanitize_props($$props);
-  const iconNode = [
-    [
-      "path",
-      {
-        "d": "m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"
-      }
-    ],
-    ["path", { "d": "M22 21H7" }],
-    ["path", { "d": "m5 11 9 9" }]
-  ];
-  Icon($$renderer, spread_props([
-    { name: "eraser" },
-    $$sanitized_props,
-    {
-      /**
-       * @component @name Eraser
-       * @description Lucide SVG icon component, renders SVG Element with children.
-       *
-       * @preview ![img](data:image/svg+xml;base64,PHN2ZyAgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIgogIHdpZHRoPSIyNCIKICBoZWlnaHQ9IjI0IgogIHZpZXdCb3g9IjAgMCAyNCAyNCIKICBmaWxsPSJub25lIgogIHN0cm9rZT0iIzAwMCIgc3R5bGU9ImJhY2tncm91bmQtY29sb3I6ICNmZmY7IGJvcmRlci1yYWRpdXM6IDJweCIKICBzdHJva2Utd2lkdGg9IjIiCiAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIgogIHN0cm9rZS1saW5lam9pbj0icm91bmQiCj4KICA8cGF0aCBkPSJtNyAyMS00LjMtNC4zYy0xLTEtMS0yLjUgMC0zLjRsOS42LTkuNmMxLTEgMi41LTEgMy40IDBsNS42IDUuNmMxIDEgMSAyLjUgMCAzLjRMMTMgMjEiIC8+CiAgPHBhdGggZD0iTTIyIDIxSDciIC8+CiAgPHBhdGggZD0ibTUgMTEgOSA5IiAvPgo8L3N2Zz4K) - https://lucide.dev/icons/eraser
-       * @see https://lucide.dev/guide/packages/lucide-svelte - Documentation
-       *
-       * @param {Object} props - Lucide icons props and any valid SVG attribute
-       * @returns {FunctionalComponent} Svelte component
-       *
-       */
-      iconNode,
-      children: ($$renderer2) => {
-        $$renderer2.push(`<!--[-->`);
-        slot($$renderer2, $$props, "default", {});
-        $$renderer2.push(`<!--]-->`);
-      },
-      $$slots: { default: true }
-    }
-  ]));
-}
-function Eye_off($$renderer, $$props) {
-  const $$sanitized_props = sanitize_props($$props);
-  const iconNode = [
-    [
-      "path",
-      {
-        "d": "M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"
-      }
-    ],
-    ["path", { "d": "M14.084 14.158a3 3 0 0 1-4.242-4.242" }],
-    [
-      "path",
-      {
-        "d": "M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"
-      }
-    ],
-    ["path", { "d": "m2 2 20 20" }]
-  ];
-  Icon($$renderer, spread_props([
-    { name: "eye-off" },
-    $$sanitized_props,
-    {
-      /**
-       * @component @name EyeOff
-       * @description Lucide SVG icon component, renders SVG Element with children.
-       *
-       * @preview ![img](data:image/svg+xml;base64,PHN2ZyAgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIgogIHdpZHRoPSIyNCIKICBoZWlnaHQ9IjI0IgogIHZpZXdCb3g9IjAgMCAyNCAyNCIKICBmaWxsPSJub25lIgogIHN0cm9rZT0iIzAwMCIgc3R5bGU9ImJhY2tncm91bmQtY29sb3I6ICNmZmY7IGJvcmRlci1yYWRpdXM6IDJweCIKICBzdHJva2Utd2lkdGg9IjIiCiAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIgogIHN0cm9rZS1saW5lam9pbj0icm91bmQiCj4KICA8cGF0aCBkPSJNMTAuNzMzIDUuMDc2YTEwLjc0NCAxMC43NDQgMCAwIDEgMTEuMjA1IDYuNTc1IDEgMSAwIDAgMSAwIC42OTYgMTAuNzQ3IDEwLjc0NyAwIDAgMS0xLjQ0NCAyLjQ5IiAvPgogIDxwYXRoIGQ9Ik0xNC4wODQgMTQuMTU4YTMgMyAwIDAgMS00LjI0Mi00LjI0MiIgLz4KICA8cGF0aCBkPSJNMTcuNDc5IDE3LjQ5OWExMC43NSAxMC43NSAwIDAgMS0xNS40MTctNS4xNTEgMSAxIDAgMCAxIDAtLjY5NiAxMC43NSAxMC43NSAwIDAgMSA0LjQ0Ni01LjE0MyIgLz4KICA8cGF0aCBkPSJtMiAyIDIwIDIwIiAvPgo8L3N2Zz4K) - https://lucide.dev/icons/eye-off
-       * @see https://lucide.dev/guide/packages/lucide-svelte - Documentation
-       *
-       * @param {Object} props - Lucide icons props and any valid SVG attribute
-       * @returns {FunctionalComponent} Svelte component
-       *
-       */
-      iconNode,
-      children: ($$renderer2) => {
-        $$renderer2.push(`<!--[-->`);
-        slot($$renderer2, $$props, "default", {});
-        $$renderer2.push(`<!--]-->`);
-      },
-      $$slots: { default: true }
-    }
-  ]));
-}
-function Eye($$renderer, $$props) {
-  const $$sanitized_props = sanitize_props($$props);
-  const iconNode = [
-    [
-      "path",
-      {
-        "d": "M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"
-      }
-    ],
-    ["circle", { "cx": "12", "cy": "12", "r": "3" }]
-  ];
-  Icon($$renderer, spread_props([
-    { name: "eye" },
-    $$sanitized_props,
-    {
-      /**
-       * @component @name Eye
-       * @description Lucide SVG icon component, renders SVG Element with children.
-       *
-       * @preview ![img](data:image/svg+xml;base64,PHN2ZyAgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIgogIHdpZHRoPSIyNCIKICBoZWlnaHQ9IjI0IgogIHZpZXdCb3g9IjAgMCAyNCAyNCIKICBmaWxsPSJub25lIgogIHN0cm9rZT0iIzAwMCIgc3R5bGU9ImJhY2tncm91bmQtY29sb3I6ICNmZmY7IGJvcmRlci1yYWRpdXM6IDJweCIKICBzdHJva2Utd2lkdGg9IjIiCiAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIgogIHN0cm9rZS1saW5lam9pbj0icm91bmQiCj4KICA8cGF0aCBkPSJNMi4wNjIgMTIuMzQ4YTEgMSAwIDAgMSAwLS42OTYgMTAuNzUgMTAuNzUgMCAwIDEgMTkuODc2IDAgMSAxIDAgMCAxIDAgLjY5NiAxMC43NSAxMC43NSAwIDAgMS0xOS44NzYgMCIgLz4KICA8Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIzIiAvPgo8L3N2Zz4K) - https://lucide.dev/icons/eye
-       * @see https://lucide.dev/guide/packages/lucide-svelte - Documentation
-       *
-       * @param {Object} props - Lucide icons props and any valid SVG attribute
-       * @returns {FunctionalComponent} Svelte component
-       *
-       */
-      iconNode,
-      children: ($$renderer2) => {
-        $$renderer2.push(`<!--[-->`);
-        slot($$renderer2, $$props, "default", {});
-        $$renderer2.push(`<!--]-->`);
-      },
-      $$slots: { default: true }
-    }
-  ]));
-}
 function Grip_vertical($$renderer, $$props) {
   const $$sanitized_props = sanitize_props($$props);
   const iconNode = [
@@ -970,74 +857,6 @@ function Refresh_cw($$renderer, $$props) {
        * @description Lucide SVG icon component, renders SVG Element with children.
        *
        * @preview ![img](data:image/svg+xml;base64,PHN2ZyAgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIgogIHdpZHRoPSIyNCIKICBoZWlnaHQ9IjI0IgogIHZpZXdCb3g9IjAgMCAyNCAyNCIKICBmaWxsPSJub25lIgogIHN0cm9rZT0iIzAwMCIgc3R5bGU9ImJhY2tncm91bmQtY29sb3I6ICNmZmY7IGJvcmRlci1yYWRpdXM6IDJweCIKICBzdHJva2Utd2lkdGg9IjIiCiAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIgogIHN0cm9rZS1saW5lam9pbj0icm91bmQiCj4KICA8cGF0aCBkPSJNMyAxMmE5IDkgMCAwIDEgOS05IDkuNzUgOS43NSAwIDAgMSA2Ljc0IDIuNzRMMjEgOCIgLz4KICA8cGF0aCBkPSJNMjEgM3Y1aC01IiAvPgogIDxwYXRoIGQ9Ik0yMSAxMmE5IDkgMCAwIDEtOSA5IDkuNzUgOS43NSAwIDAgMS02Ljc0LTIuNzRMMyAxNiIgLz4KICA8cGF0aCBkPSJNOCAxNkgzdjUiIC8+Cjwvc3ZnPgo=) - https://lucide.dev/icons/refresh-cw
-       * @see https://lucide.dev/guide/packages/lucide-svelte - Documentation
-       *
-       * @param {Object} props - Lucide icons props and any valid SVG attribute
-       * @returns {FunctionalComponent} Svelte component
-       *
-       */
-      iconNode,
-      children: ($$renderer2) => {
-        $$renderer2.push(`<!--[-->`);
-        slot($$renderer2, $$props, "default", {});
-        $$renderer2.push(`<!--]-->`);
-      },
-      $$slots: { default: true }
-    }
-  ]));
-}
-function Rotate_ccw($$renderer, $$props) {
-  const $$sanitized_props = sanitize_props($$props);
-  const iconNode = [
-    [
-      "path",
-      { "d": "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" }
-    ],
-    ["path", { "d": "M3 3v5h5" }]
-  ];
-  Icon($$renderer, spread_props([
-    { name: "rotate-ccw" },
-    $$sanitized_props,
-    {
-      /**
-       * @component @name RotateCcw
-       * @description Lucide SVG icon component, renders SVG Element with children.
-       *
-       * @preview ![img](data:image/svg+xml;base64,PHN2ZyAgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIgogIHdpZHRoPSIyNCIKICBoZWlnaHQ9IjI0IgogIHZpZXdCb3g9IjAgMCAyNCAyNCIKICBmaWxsPSJub25lIgogIHN0cm9rZT0iIzAwMCIgc3R5bGU9ImJhY2tncm91bmQtY29sb3I6ICNmZmY7IGJvcmRlci1yYWRpdXM6IDJweCIKICBzdHJva2Utd2lkdGg9IjIiCiAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIgogIHN0cm9rZS1saW5lam9pbj0icm91bmQiCj4KICA8cGF0aCBkPSJNMyAxMmE5IDkgMCAxIDAgOS05IDkuNzUgOS43NSAwIDAgMC02Ljc0IDIuNzRMMyA4IiAvPgogIDxwYXRoIGQ9Ik0zIDN2NWg1IiAvPgo8L3N2Zz4K) - https://lucide.dev/icons/rotate-ccw
-       * @see https://lucide.dev/guide/packages/lucide-svelte - Documentation
-       *
-       * @param {Object} props - Lucide icons props and any valid SVG attribute
-       * @returns {FunctionalComponent} Svelte component
-       *
-       */
-      iconNode,
-      children: ($$renderer2) => {
-        $$renderer2.push(`<!--[-->`);
-        slot($$renderer2, $$props, "default", {});
-        $$renderer2.push(`<!--]-->`);
-      },
-      $$slots: { default: true }
-    }
-  ]));
-}
-function Trash_2($$renderer, $$props) {
-  const $$sanitized_props = sanitize_props($$props);
-  const iconNode = [
-    ["path", { "d": "M3 6h18" }],
-    ["path", { "d": "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" }],
-    ["path", { "d": "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" }],
-    ["line", { "x1": "10", "x2": "10", "y1": "11", "y2": "17" }],
-    ["line", { "x1": "14", "x2": "14", "y1": "11", "y2": "17" }]
-  ];
-  Icon($$renderer, spread_props([
-    { name: "trash-2" },
-    $$sanitized_props,
-    {
-      /**
-       * @component @name Trash2
-       * @description Lucide SVG icon component, renders SVG Element with children.
-       *
-       * @preview ![img](data:image/svg+xml;base64,PHN2ZyAgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIgogIHdpZHRoPSIyNCIKICBoZWlnaHQ9IjI0IgogIHZpZXdCb3g9IjAgMCAyNCAyNCIKICBmaWxsPSJub25lIgogIHN0cm9rZT0iIzAwMCIgc3R5bGU9ImJhY2tncm91bmQtY29sb3I6ICNmZmY7IGJvcmRlci1yYWRpdXM6IDJweCIKICBzdHJva2Utd2lkdGg9IjIiCiAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIgogIHN0cm9rZS1saW5lam9pbj0icm91bmQiCj4KICA8cGF0aCBkPSJNMyA2aDE4IiAvPgogIDxwYXRoIGQ9Ik0xOSA2djE0YzAgMS0xIDItMiAySDdjLTEgMC0yLTEtMi0yVjYiIC8+CiAgPHBhdGggZD0iTTggNlY0YzAtMSAxLTIgMi0yaDRjMSAwIDIgMSAyIDJ2MiIgLz4KICA8bGluZSB4MT0iMTAiIHgyPSIxMCIgeTE9IjExIiB5Mj0iMTciIC8+CiAgPGxpbmUgeDE9IjE0IiB4Mj0iMTQiIHkxPSIxMSIgeTI9IjE3IiAvPgo8L3N2Zz4K) - https://lucide.dev/icons/trash-2
        * @see https://lucide.dev/guide/packages/lucide-svelte - Documentation
        *
        * @param {Object} props - Lucide icons props and any valid SVG attribute

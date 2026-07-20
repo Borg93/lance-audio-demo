@@ -2,11 +2,11 @@ import "./async.js";
 import { e as attributes, f as clsx$1, j as bind_props, d as derived, q as hasContext, g as getContext, c as setContext, A as ATTACHMENT_KEY, t as getAllContexts } from "./renderer.js";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { c as activeView } from "./api.js";
+import { a as activeView } from "./descriptor.js";
 import { tv } from "tailwind-variants";
 import { r as run } from "./render-context.js";
 import { c as createSubscriber, t as tick, m as mount, u as unmount, a as SvelteMap } from "./index-server.js";
-import { o as on } from "./root.js";
+import { o as on } from "./events.js";
 function cn(...inputs) {
   return twMerge(clsx(inputs));
 }

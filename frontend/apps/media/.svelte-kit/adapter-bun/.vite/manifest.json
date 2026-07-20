@@ -59,7 +59,10 @@
   },
   "_api.js": {
     "file": "chunks/api.js",
-    "name": "api"
+    "name": "api",
+    "imports": [
+      "_descriptor.js"
+    ]
   },
   "_arrow-right.js": {
     "file": "chunks/arrow-right.js",
@@ -88,9 +91,23 @@
       "_root.js"
     ]
   },
+  "_descriptor.js": {
+    "file": "chunks/descriptor.js",
+    "name": "descriptor"
+  },
   "_environment.js": {
     "file": "chunks/environment.js",
     "name": "environment"
+  },
+  "_events.js": {
+    "file": "chunks/events.js",
+    "name": "events",
+    "imports": [
+      "_false.js",
+      "_render-context.js",
+      "_renderer.js",
+      "_index2.js"
+    ]
   },
   "_exports.js": {
     "file": "chunks/exports.js",
@@ -113,7 +130,7 @@
     "name": "index",
     "imports": [
       "_render-context.js",
-      "_root.js"
+      "_events.js"
     ]
   },
   "_index2.js": {
@@ -126,6 +143,16 @@
     "imports": [
       "_client.js",
       "_renderer.js"
+    ]
+  },
+  "_input.js": {
+    "file": "chunks/input.js",
+    "name": "input",
+    "imports": [
+      "_async.js",
+      "_renderer.js",
+      "_Icon.js",
+      "_scroll-lock.js"
     ]
   },
   "_internal.js": {
@@ -145,6 +172,23 @@
       "_Icon.js"
     ]
   },
+  "_player-pane.js": {
+    "file": "chunks/player-pane.js",
+    "name": "player-pane",
+    "imports": [
+      "_async.js",
+      "_renderer.js",
+      "_Icon.js",
+      "_exports.js",
+      "_utils.js",
+      "_root.js",
+      "_state.svelte.js",
+      "_api.js",
+      "_scroll-lock.js",
+      "_descriptor.js",
+      "_sr-only-styles.js"
+    ]
+  },
   "_popover.js": {
     "file": "chunks/popover.js",
     "name": "popover",
@@ -154,7 +198,7 @@
       "_Icon.js",
       "_popper-layer-force-mount.js",
       "_scroll-lock.js",
-      "_root.js"
+      "_events.js"
     ]
   },
   "_popper-layer-force-mount.js": {
@@ -186,13 +230,6 @@
       "_async.js",
       "_renderer.js",
       "_Icon.js",
-      "_exports.js",
-      "_utils.js",
-      "_root.js",
-      "_state.svelte.js",
-      "_api.js",
-      "_scroll-lock.js",
-      "_sr-only-styles.js",
       "_render-context.js"
     ]
   },
@@ -201,7 +238,7 @@
     "name": "root",
     "imports": [
       "_renderer.js",
-      "_false.js",
+      "_events.js",
       "_render-context.js",
       "_index2.js",
       "_async.js"
@@ -213,10 +250,10 @@
     "imports": [
       "_async.js",
       "_renderer.js",
-      "_api.js",
+      "_descriptor.js",
       "_render-context.js",
       "_index-server.js",
-      "_root.js"
+      "_events.js"
     ]
   },
   "_search.js": {
@@ -240,7 +277,7 @@
       "_renderer.js",
       "_scroll-lock.js",
       "_popper-layer-force-mount.js",
-      "_root.js",
+      "_events.js",
       "_sr-only-styles.js",
       "_Icon.js"
     ],
@@ -293,6 +330,15 @@
       "_app/immutable/assets/style.Y8dbfDd5.css"
     ]
   },
+  "_trash-2.js": {
+    "file": "chunks/trash-2.js",
+    "name": "trash-2",
+    "imports": [
+      "_async.js",
+      "_renderer.js",
+      "_Icon.js"
+    ]
+  },
   "_utils.js": {
     "file": "chunks/utils.js",
     "name": "utils"
@@ -307,6 +353,7 @@
       "_renderer.js",
       "_index3.js",
       "_api.js",
+      "_descriptor.js",
       "_scroll-lock.js",
       "_Icon.js",
       "_popover.js",
@@ -314,7 +361,7 @@
       "_map.js"
     ],
     "css": [
-      "_app/immutable/assets/_layout.CTIWbJoV.css"
+      "_app/immutable/assets/_layout.DeBfDYDn.css"
     ]
   },
   "src/routes/+layout.ts": {
@@ -334,10 +381,13 @@
       "_client.js",
       "_api.js",
       "_scroll-lock.js",
+      "_input.js",
+      "_descriptor.js",
       "_select.js",
       "_popover.js",
       "_Icon.js",
       "_resizable-split.js",
+      "_player-pane.js",
       "_arrow-right.js",
       "_render-context.js",
       "_search.js",
@@ -357,7 +407,17 @@
     "isEntry": true,
     "imports": [
       "_async.js",
-      "_renderer.js"
+      "_renderer.js",
+      "_index-server.js",
+      "_resizable-split.js",
+      "_scroll-lock.js",
+      "_Icon.js",
+      "_trash-2.js",
+      "_input.js",
+      "_select.js",
+      "_search.js",
+      "_descriptor.js",
+      "_sr-only-styles.js"
     ]
   },
   "src/routes/atlas/+page.svelte": {
@@ -394,10 +454,11 @@
       "_root.js",
       "_state.svelte.js",
       "_scroll-lock.js",
-      "_api.js",
+      "_descriptor.js",
       "_select.js",
       "_sr-only-styles.js",
-      "_Icon.js"
+      "_Icon.js",
+      "_api.js"
     ]
   },
   "src/routes/guide/+page.svelte": {
@@ -428,7 +489,8 @@
       "_exports.js",
       "_utils.js",
       "_root.js",
-      "_state.svelte.js"
+      "_state.svelte.js",
+      "_descriptor.js"
     ]
   },
   "src/routes/workflow/+page.svelte": {
@@ -444,7 +506,10 @@
       "_false.js",
       "_api.js",
       "_scroll-lock.js",
+      "_descriptor.js",
+      "_player-pane.js",
       "_Icon.js",
+      "_trash-2.js",
       "_map.js",
       "_render-context.js",
       "_index-server.js",

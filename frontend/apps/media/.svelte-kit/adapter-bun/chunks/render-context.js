@@ -668,9 +668,9 @@ function in_webcontainer() {
   return !!globalThis.process?.versions?.webcontainer;
 }
 export {
-  index_of as A,
-  define_property as B,
-  array_from as C,
+  get_descriptor as A,
+  is_extensible as B,
+  index_of as C,
   DevalueError as D,
   lifecycle_outside_component as E,
   has_own_property as F,
@@ -696,15 +696,15 @@ export {
   lifecycle_function_unavailable as m,
   noop as n,
   object_prototype as o,
-  run_all as p,
-  deferred as q,
+  array_from as p,
+  define_property as q,
   run as r,
   stringify_key as s,
   to_array as t,
   uneval as u,
   valid_array_indices as v,
-  includes as w,
-  array_prototype as x,
-  get_descriptor as y,
-  is_extensible as z
+  run_all as w,
+  deferred as x,
+  includes as y,
+  array_prototype as z
 };

@@ -9,10 +9,11 @@ import "../../../chunks/state.svelte.js";
 import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY } from "d3-force";
 import { B as Button } from "../../../chunks/scroll-lock.js";
 import "clsx";
-import { k as getGraphSubgraph, l as runGraphCypher } from "../../../chunks/api.js";
+import "../../../chunks/descriptor.js";
 import { S as Select_1 } from "../../../chunks/select.js";
 import { C as Chevron_right } from "../../../chunks/sr-only-styles.js";
 import { I as Icon } from "../../../chunks/Icon.js";
+import { h as getGraphSubgraph, j as runGraphCypher } from "../../../chunks/api.js";
 function Ellipsis($$renderer, $$props) {
   const $$sanitized_props = sanitize_props($$props);
   const iconNode = [

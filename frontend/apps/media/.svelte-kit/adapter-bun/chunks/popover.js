@@ -4,7 +4,7 @@ import { I as Icon } from "./Icon.js";
 import { P as Popper_layer_force_mount, a as Popper_layer, g as getFloatingContentCSSVars, F as Floating_layer_anchor, b as Floating_layer } from "./popper-layer-force-mount.js";
 import { w as watch, K as getDocument, L as isElement, C as Context, M as PresenceManager, d as boxWith, m as attachRef, D as DOMContext, N as isTouch, x as ENTER, S as SPACE, O as isTabbable, q as createBitsAttrs, Q as getDataOpenClosed, o as boolToStr, R as getDataTransitionAttrs, r as createId, s as noop, u as mergeProps } from "./scroll-lock.js";
 import "clsx";
-import { o as on } from "./root.js";
+import { o as on } from "./events.js";
 function Audio_lines($$renderer, $$props) {
   const $$sanitized_props = sanitize_props($$props);
   const iconNode = [

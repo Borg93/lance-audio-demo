@@ -34,6 +34,11 @@ export interface ViewerProps {
   unit: MediaUnit;
   /** Fired once the viewer has loaded + rendered (`count` = annotations shown). */
   onload?: (count: number) => void;
+  /** Optional route-level annotator facade. A spatial viewer `attach`es its engine
+   *  + loaded table here so the ra-anno layout (toolbar/sidebar/zoom/layers) can bind
+   *  to a single reactive source; temporal viewers may attach their own surface later.
+   *  Omitted ⇒ the viewer renders read-only, exactly as before. */
+  controller?: import("./annotator.svelte").AnnotatorController;
 }
 
 /** Spatial geometry — image + video-frame. Mirrors the engine's shape model

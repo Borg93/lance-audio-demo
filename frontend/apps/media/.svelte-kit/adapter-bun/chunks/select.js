@@ -2,7 +2,7 @@ import "./async.js";
 import { s as sanitize_props, a as spread_props, b as slot, d as derived, e as attributes, j as bind_props, p as props_id, l as ensure_array_like, i as attr_class, f as clsx, m as escape_html } from "./renderer.js";
 import { d as boxWith, s as noop, u as mergeProps, C as Context, m as attachRef, D as DOMContext, A as ARROW_UP, k as ARROW_DOWN, x as ENTER, S as SPACE, a5 as TAB, a6 as PAGE_UP, H as HOME, a7 as PAGE_DOWN, E as END, n as boolToEmptyStrOrUndef, Q as getDataOpenClosed, o as boolToStr, w as watch, R as getDataTransitionAttrs, a8 as isIOS, z as boolToTrueOrUndef, T as afterTick, M as PresenceManager, q as createBitsAttrs, r as createId, c as cn, P as Portal } from "./scroll-lock.js";
 import { g as getFloatingContentCSSVars, P as Popper_layer_force_mount, a as Popper_layer, b as Floating_layer, F as Floating_layer_anchor } from "./popper-layer-force-mount.js";
-import { o as on } from "./root.js";
+import { o as on } from "./events.js";
 import "clsx";
 import { s as srOnlyStyles } from "./sr-only-styles.js";
 import { I as Icon } from "./Icon.js";
@@ -1553,7 +1553,9 @@ function Select_1($$renderer, $$props) {
   });
 }
 export {
+  Check as C,
   Hidden_input as H,
   Select_1 as S,
+  Chevron_down as a,
   isValidIndex as i
 };
