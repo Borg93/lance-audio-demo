@@ -96,6 +96,33 @@ export class ImagePlugin {
     }
   }
 
+  /**
+   * Snapshot a video's CURRENT frame as the backdrop, so spatial shapes are drawn on
+   * the exact frame via the SAME PixiJS overlay as images. Uses `createImageBitmap`
+   * (a decoded still) — NOT a Pixi VideoSource, which drives itself off a running
+   * ticker; this engine renders on demand (`app.ticker.stop()`), so a VideoSource would
+   * freeze on a paused frame anyway. Re-callable per seek/frame; keeps the current
+   * zoom/pan across frames (only the first frame fits-to-viewport).
+   */
+  async loadFromVideoFrame(video: HTMLVideoElement): Promise<void> {
+    if (video.readyState < 2 || video.videoWidth === 0) return; // no frame decoded yet
+    const bitmap = await createImageBitmap(video);
+    const first = this.sprite === null;
+    if (this.sprite) {
+      this.app.stage.removeChild(this.sprite);
+      const old = this.sprite.texture;
+      this.sprite.destroy();
+      old.destroy(true); // frees the previous frame's GPU texture + source
+    }
+
+    this.sprite = new Sprite(Texture.from(bitmap));
+    this.imageWidth = video.videoWidth;
+    this.imageHeight = video.videoHeight;
+    this.app.stage.addChildAt(this.sprite, 0);
+    if (first) this.fitToViewport();
+    else this.applyTransform(); // stable view while scrubbing
+  }
+
   fitToViewport(): void {
     if (!this.sprite) return;
 

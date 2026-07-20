@@ -119,6 +119,9 @@ export class AnnotatorController {
   // more can be picked, instead of opening the single-annotation detail.
   multiSelect = $state(false);
   zoomPercent = $state(1);
+  // Playhead time (video): a shape drawn on a paused frame is pinned to this moment, so
+  // spatial + temporal share the annotations table. Stays 0 for images (no time axis).
+  timeCursor = $state(0);
   count = $state(0);
   saving = $state(false);
   saveError = $state<string | null>(null);
@@ -423,6 +426,11 @@ export class AnnotatorController {
     this._geoDirty = true;
   }
 
+  /** Move the playhead (video scrub/play) so newly-drawn shapes pin to this moment. */
+  setTimeCursor(seconds: number): void {
+    this.timeCursor = seconds;
+  }
+
   /** Queue a new row for Save AND render it optimistically — append AT THE END
    *  (index = numRows, so the index-keyed overlay/selection stay valid), re-render the
    *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
@@ -509,8 +517,9 @@ export class AnnotatorController {
       height: shape.height,
       rotation: shape.rotation ?? 0,
       polygon: shape.polygon ?? [],
-      t_start: 0,
-      t_end: 0,
+      // Pin the shape to the current video moment (0 for images — no time axis).
+      t_start: this.timeCursor,
+      t_end: this.timeCursor,
       mask: shape.mask ?? "",
       label: "",
       text: "",

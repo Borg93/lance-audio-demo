@@ -16,6 +16,9 @@
     step?: number;
     class?: string;
     'aria-label'?: string;
+    /** Fires on user interaction only (not programmatic value changes) — lets a
+     *  controlled scrubber seek without a bind:value ↔ update loop. */
+    onValueChange?: (value: number) => void;
   } = $props();
 </script>
 
