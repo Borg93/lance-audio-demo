@@ -17,7 +17,7 @@
  * controller later. The layout binds to the controller, never to the engine.
  */
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
-import type { Table } from "apache-arrow";
+import { type Table, tableFromIPC } from "apache-arrow";
 import type { PixiContext, Tool } from "$lib/engine";
 import { LayerStore } from "$lib/engine";
 
@@ -79,6 +79,8 @@ export class AnnotatorController {
   readonly selectedSet = new SvelteSet<number>();
   zoomPercent = $state(1);
   count = $state(0);
+  saving = $state(false);
+  saveError = $state<string | null>(null);
   brushOptions = $state<BrushOptions>({
     radius: 20,
     erasing: false,
@@ -104,6 +106,8 @@ export class AnnotatorController {
   private _geoDirty = $state(false);
 
   private _detachViewport: (() => void) | null = null;
+  // POST target for Save (same URL the annotations are GET from). Null ⇒ read-only.
+  private _saveUrl = $state<string | null>(null);
 
   constructor() {
     this.layers.on(() => this._pullLayers());
@@ -166,14 +170,17 @@ export class AnnotatorController {
   readonly canRedo = $derived(this._redo.length > 0);
   /** Unsaved-edits flag: any pending field edit OR a geometry edit on the canvas. */
   readonly dirty = $derived(this._undo.length > 0 || this._geoDirty);
+  readonly canSave = $derived(this.dirty && !this.saving && this._saveUrl !== null);
 
   // ── engine lifecycle ──
 
-  /** Called by a spatial viewer once its engine + data are ready. */
-  attach(ctx: PixiContext, table: Table): void {
+  /** Called by a spatial viewer once its engine + data are ready. `saveUrl` (the
+   *  annotations endpoint) enables the local-first Save; omit it for read-only. */
+  attach(ctx: PixiContext, table: Table, saveUrl?: string): void {
     this.ctx = ctx;
     this.table = table;
     this.count = table.numRows;
+    this._saveUrl = saveUrl ?? null;
 
     const im = ctx.plugins.interaction;
     im.setEditMode(this.mode === "edit");
@@ -284,6 +291,66 @@ export class AnnotatorController {
     this._overrides.set(`${index}:${field}`, value);
     this.ctx?.plugins.arrow.setFieldOverride(index, field, value);
     this.ctx?.plugins.arrow.sync();
+  }
+
+  // ── persistence: local-first Save → Lance merge_insert (NOT sync-per-edit) ──
+
+  /** Flush the accumulated field-edit overlay to Lance as ONE atomic version, then
+   *  reload so the display reflects the persisted (merge-reordered) rows. */
+  async save(): Promise<void> {
+    const t = this.table;
+    const url = this._saveUrl;
+    if (!t || !url || this.saving) return;
+
+    const byIndex = new Map<number, Record<string, string>>();
+    for (const [key, value] of this._overrides) {
+      const sep = key.indexOf(":");
+      const index = Number(key.slice(0, sep));
+      const row = byIndex.get(index) ?? {};
+      row[key.slice(sep + 1)] = value;
+      byIndex.set(index, row);
+    }
+    const edits = [...byIndex].map(([index, fields]) => ({
+      id: this._raw(t, "id", index) ?? String(index),
+      ...fields,
+    }));
+    if (edits.length === 0) return;
+
+    this.saving = true;
+    this.saveError = null;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ edits }),
+      });
+      if (!res.ok) throw new Error(`save failed (HTTP ${res.status})`);
+      await this._reload();
+      this._undo = [];
+      this._redo = [];
+      this._geoDirty = false;
+    } catch (e) {
+      this.saveError = e instanceof Error ? e.message : String(e);
+    } finally {
+      this.saving = false;
+    }
+  }
+
+  /** Re-fetch the persisted annotations into the canvas + controller, clearing the
+   *  now-flushed overlay. merge_insert reorders rows, so selection is dropped. */
+  private async _reload(): Promise<void> {
+    const url = this._saveUrl;
+    const ctx = this.ctx;
+    if (!url || !ctx) return;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
+    this._overrides.clear();
+    ctx.plugins.arrow.load(table);
+    ctx.plugins.arrow.sync();
+    this.table = table;
+    this.count = table.numRows;
+    this.select(null);
   }
 
   // ── zoom ──

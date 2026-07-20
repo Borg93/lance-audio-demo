@@ -11,6 +11,7 @@ import logging
 
 import pyarrow as pa
 from fastapi import APIRouter, Response
+from pydantic import BaseModel
 
 from backend.core.exceptions import NotFoundError
 from backend.deps import StateDep
@@ -23,6 +24,35 @@ router = APIRouter(prefix="/api", tags=["annotate"])
 
 _ARROW_STREAM = "application/vnd.apache.arrow.stream"
 ANNOTATIONS_TABLE = "annotations"
+
+#: The fields a reviewer may edit — the local-first review overlay flushed on save.
+#: Only these are patched; geometry + provenance columns are carried forward from the
+#: current row, so a partial edit never wipes a shape.
+_EDITABLE_FIELDS = ("label", "status", "text", "group", "reviewer")
+
+
+class AnnotationEdit(BaseModel):
+    """One reviewed annotation: its id + only the fields that changed."""
+
+    id: str
+    label: str | None = None
+    status: str | None = None
+    text: str | None = None
+    group: str | None = None
+    reviewer: str | None = None
+
+
+class SaveAnnotations(BaseModel):
+    """The delta a Save flushes: the edited rows for one media unit."""
+
+    edits: list[AnnotationEdit]
+
+
+class SaveResult(BaseModel):
+    """One atomic Lance version = one save."""
+
+    saved: int
+    version: int
 
 #: The annotation contract — the schema of an EMPTY stream when a dataset has no
 #: annotations table yet (so the client still parses). Aligned to the engine
@@ -67,6 +97,18 @@ def _ipc_stream(table: pa.Table) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
+def _build_delta(current: pa.Table, edits_by_id: dict[str, dict[str, object]]) -> pa.Table:
+    """The merge_insert source: current rows for the edited ids, editable fields
+    patched, everything else (geometry, provenance) carried forward. Same schema as
+    ``current`` so merge_insert updates in place."""
+    patched = [
+        {**row, **edits_by_id[row["id"]]}
+        for row in current.to_pylist()
+        if row["id"] in edits_by_id
+    ]
+    return pa.Table.from_pylist(patched, schema=current.schema)
+
+
 @router.get("/annotations/{doc_id}/{speech_id}/{chunk_id}")
 def annotations(
     state: StateDep,
@@ -98,3 +140,40 @@ def annotations(
         media_type=_ARROW_STREAM,
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.post("/annotations/{doc_id}/{speech_id}/{chunk_id}")
+def save_annotations(
+    state: StateDep,
+    doc_id: str,
+    speech_id: int,
+    chunk_id: int,
+    body: SaveAnnotations,
+    dataset: DatasetParam = None,
+) -> SaveResult:
+    """Flush a review delta to Lance — the local-first Save (NOT sync-per-edit).
+
+    Edits accumulate client-side (in-memory overlay + undo/redo); one Save patches
+    only the editable fields onto the current rows (geometry/provenance carried
+    forward) and ``merge_insert("id")`` commits them as ONE atomic new version —
+    the lakehouse "version IS the handshake". (The catalog-governed write path is
+    the merge step; this is the direct-write prototype, mirroring the direct read.)
+    """
+    handle = dataset_handle(state, dataset)
+    declared = handle.descriptor.declared
+    doc_id = validate_doc_key(declared, doc_id)
+    ds = table_dataset(handle, ANNOTATIONS_TABLE)  # raises NotFoundError if absent
+
+    where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
+    current = ds.to_table(filter=where)
+    edits_by_id: dict[str, dict[str, object]] = {
+        e.id: e.model_dump(include=set(_EDITABLE_FIELDS), exclude_none=True) for e in body.edits
+    }
+    delta = _build_delta(current, edits_by_id)
+    if delta.num_rows == 0:
+        return SaveResult(saved=0, version=int(ds.version))
+
+    ds.merge_insert("id").when_matched_update_all().execute(delta)
+    new_version = int(table_dataset(handle, ANNOTATIONS_TABLE).version)
+    logger.info("saved %d annotation edits → %s v%d", delta.num_rows, doc_id, new_version)
+    return SaveResult(saved=delta.num_rows, version=new_version)

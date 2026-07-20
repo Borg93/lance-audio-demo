@@ -59,6 +59,9 @@
       } else if (k === 'y') {
         e.preventDefault();
         controller.redo();
+      } else if (k === 's') {
+        e.preventDefault();
+        void controller.save();
       }
       return;
     }

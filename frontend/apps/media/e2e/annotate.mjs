@@ -56,6 +56,9 @@ await page
   .catch(() => {});
 await page.waitForTimeout(200);
 const afterAccept = await detailText();
+// Save button becomes enabled once dirty (non-destructive check — we don't click it;
+// the live POST→merge_insert round-trip is proven separately).
+const saveEnabled = await page.getByTitle(/^Save to Lance/).isEnabled().catch(() => false);
 await page
   .getByTitle(/^Undo/)
   .click()
@@ -63,7 +66,10 @@ await page
 await page.waitForTimeout(200);
 const afterUndo = await detailText();
 const undoOk =
-  /prediction/.test(before) && /accepted/.test(afterAccept) && /prediction/.test(afterUndo);
+  /prediction/.test(before) &&
+  /accepted/.test(afterAccept) &&
+  /prediction/.test(afterUndo) &&
+  saveEnabled;
 
 console.log("viewer status :", status.trim());
 console.log("canvas count  :", canvas);

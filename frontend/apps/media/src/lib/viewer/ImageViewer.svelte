@@ -15,8 +15,9 @@
     ctx.plugins.arrow.load(table);
     ctx.plugins.arrow.sync();
     // Lift the engine + data to the route-level facade so the annotator layout
-    // (toolbar/sidebar/zoom/layers) can bind to it. No-op when unwired.
-    controller?.attach(ctx, table);
+    // (toolbar/sidebar/zoom/layers) can bind to it. No-op when unwired. The
+    // annotations URL doubles as the Save (POST) target.
+    controller?.attach(ctx, table, unit.annotationsUrl);
     onload?.(table.numRows);
   }
 </script>

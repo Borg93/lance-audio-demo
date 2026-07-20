@@ -18,6 +18,7 @@
     Eraser,
     Undo2,
     Redo2,
+    Save,
   } from 'lucide-svelte';
   import { Button } from '$lib/components/ui';
   import { cn } from '$lib/utils';
@@ -103,6 +104,15 @@
     onclick={() => controller.redo()}
   >
     <Redo2 class="size-4" />
+  </Button>
+  <Button
+    variant={controller.canSave ? 'default' : 'ghost'}
+    size="icon-sm"
+    title={controller.saveError ?? (controller.dirty ? 'Save to Lance (Ctrl+S)' : 'No unsaved edits')}
+    disabled={!controller.canSave}
+    onclick={() => controller.save()}
+  >
+    <Save class={cn('size-4', controller.saving && 'animate-pulse', controller.saveError && 'text-destructive')} />
   </Button>
 
   <div class="my-1 h-px w-6 bg-border"></div>
