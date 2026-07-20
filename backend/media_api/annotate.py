@@ -15,7 +15,7 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 
 from backend.core.exceptions import ConflictError, NotFoundError
-from backend.deps import StateDep
+from backend.deps import AuthorDep, StateDep
 from backend.lancekit.descriptor import Declared
 from backend.lancekit.lineage_emit import emit_save
 from backend.lancekit.reader import open_reader
@@ -231,6 +231,7 @@ def annotations(
 @router.post("/annotations/{doc_id}/{speech_id}/{chunk_id}")
 def save_annotations(
     state: StateDep,
+    author: AuthorDep,
     doc_id: str,
     speech_id: int,
     chunk_id: int,
@@ -271,9 +272,13 @@ def save_annotations(
         )
     for tseg in body.temporal:
         edits_by_id.setdefault(tseg.id, {}).update({"t_start": tseg.t_start, "t_end": tseg.t_end})
+    # Governance: the SERVER stamps who wrote each touched row (not the client's claim) —
+    # the per-user seam. lance-ns's OpenFGA keys on this author at merge.
+    for fields in edits_by_id.values():
+        fields["reviewer"] = author
     parts = [_build_delta(current, edits_by_id)]
     if body.inserts:
-        ident = identity_values(declared, doc_id, (speech_id, chunk_id))
+        ident = {**identity_values(declared, doc_id, (speech_id, chunk_id)), "reviewer": author}
         parts.append(_new_rows(body.inserts, ident, current.schema))
     delta = pa.concat_tables(parts)
 

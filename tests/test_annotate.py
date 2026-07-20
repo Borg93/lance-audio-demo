@@ -130,6 +130,21 @@ def test_new_rows_stamps_identity_and_carries_geometry() -> None:
     assert r["confidence"] is None  # unspecified column → null via schema
 
 
+def test_get_author_seam_defaults_to_anon_and_trims() -> None:
+    from backend.deps import get_author
+
+    assert get_author(None) == "anon"  # no header → always an author
+    assert get_author("   ") == "anon"  # blank → anon
+    assert get_author("gabriel") == "gabriel"  # the X-User subject
+
+
+def test_new_rows_stamps_the_author_as_reviewer() -> None:
+    # save_annotations merges the author into the identity stamp; a new row carries it.
+    ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19, "reviewer": "gabriel"}
+    tbl = _new_rows([NewAnnotation(id="n1", shape_type="rectangle")], ident, _full_schema())
+    assert tbl.to_pylist()[0]["reviewer"] == "gabriel"  # server-stamped, not client-claimed
+
+
 def test_save_edit_insert_delete_round_trip(tmp_path: Path) -> None:
     schema = _full_schema()
     ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}

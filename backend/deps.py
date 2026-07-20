@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 
 from backend.state import AppState
 
@@ -21,3 +21,14 @@ def get_state(request: Request) -> AppState:
 
 
 StateDep = Annotated[AppState, Depends(get_state)]
+
+
+def get_author(x_user: Annotated[str | None, Header(alias="X-User")] = None) -> str:
+    """The write author — the per-user identity seam. Today a trusted ``X-User`` header
+    (dev / gateway-injected); at merge, lance-ns's auth swaps this for the VERIFIED token
+    subject (OpenFGA keys on it) — the downstream stamping of `reviewer` stays the same.
+    Defaults to ``anon`` so writes always carry an author."""
+    return (x_user or "").strip() or "anon"
+
+
+AuthorDep = Annotated[str, Depends(get_author)]
