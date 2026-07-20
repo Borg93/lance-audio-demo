@@ -18,7 +18,7 @@
  */
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { type Table, tableFromIPC } from "apache-arrow";
-import type { PixiContext, Tool } from "$lib/engine";
+import type { CommitShape, PixiContext, Tool } from "$lib/engine";
 import { LayerStore } from "$lib/engine";
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "$lib/labeling/types";
 import { PRODUCERS } from "$lib/labeling/producers";
@@ -57,6 +57,25 @@ interface FieldEdit {
   field: EditableField;
   before: string;
   after: string;
+}
+
+/** A newly drawn shape queued for the next Save (backend `NewAnnotation`). The chunk
+ *  identity is stamped server-side, so we send only geometry + attributes. */
+interface InsertRow {
+  id: string;
+  shape_type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  polygon: number[];
+  mask: string;
+  label: string;
+  text: string;
+  group: string;
+  status: string;
+  source: string;
 }
 
 const STRING_FIELD_CANDIDATES = ["label", "status", "source", "group", "reviewer"];
@@ -107,6 +126,13 @@ export class AnnotatorController {
   private _redo = $state<FieldEdit[]>([]);
   private _geoDirty = $state(false);
 
+  // Structural edits queued for the next Save: shapes drawn (onCommit) and ids
+  // deleted. Flushed by save() then reconciled by _reload() — no client-side Arrow
+  // surgery (which would corrupt the index-keyed overlay). The sidebar reflects
+  // deletes immediately (filtered from `rows`); new shapes render after save+reload.
+  private _inserts = $state<InsertRow[]>([]);
+  private _deletes = $state<string[]>([]);
+
   private _detachViewport: (() => void) | null = null;
   // POST target for Save (same URL the annotations are GET from). Null ⇒ read-only.
   private _saveUrl = $state<string | null>(null);
@@ -144,7 +170,8 @@ export class AnnotatorController {
         uncertainty: this._num(t, "uncertainty", i),
       });
     }
-    return out;
+    // deletes reflect immediately in the sidebar (the canvas reconciles on save+reload)
+    return this._deletes.length ? out.filter((r) => !this._deletes.includes(r.id)) : out;
   });
 
   /** Distinct groups for the current group-by column, with counts. */
@@ -170,8 +197,11 @@ export class AnnotatorController {
   readonly canDraw = $derived(this.mode === "edit");
   readonly canUndo = $derived(this._undo.length > 0);
   readonly canRedo = $derived(this._redo.length > 0);
-  /** Unsaved-edits flag: any pending field edit OR a geometry edit on the canvas. */
-  readonly dirty = $derived(this._undo.length > 0 || this._geoDirty);
+  /** Unsaved-edits flag: pending field edits, a canvas geometry edit, or queued
+   *  structural inserts/deletes. */
+  readonly dirty = $derived(
+    this._undo.length > 0 || this._geoDirty || this._inserts.length > 0 || this._deletes.length > 0,
+  );
   readonly canSave = $derived(this.dirty && !this.saving && this._saveUrl !== null);
 
   // ── engine lifecycle ──
@@ -195,8 +225,9 @@ export class AnnotatorController {
     im.onDirtyChange = (hasDirty) => {
       if (hasDirty) this._geoDirty = true;
     };
-    im.onCommit = () => {
-      this.count = ctx.plugins.arrow.getNumRows();
+    im.onCommit = (shape) => {
+      this._inserts = [...this._inserts, this._buildInsert(shape)];
+      this.count = ctx.plugins.arrow.getNumRows() + this._inserts.length;
       this._geoDirty = true;
     };
 
@@ -245,10 +276,34 @@ export class AnnotatorController {
     this._mirrorSelection(im?.getSelectedSet() ?? new Set());
   }
   deleteSelected(): void {
-    if (this.selectedIndex == null) return;
+    const i = this.selectedIndex;
+    if (i == null) return;
+    const t = this.table;
+    const id = t ? this._raw(t, "id", i) : null;
+    if (id) this._deletes = [...this._deletes, id]; // flushed on Save; sidebar drops it now
     this.ctx?.plugins.interaction.handleKeyDown("Delete");
     this._geoDirty = true;
     this.select(null);
+  }
+
+  /** Map a committed engine shape → the queued insert row (backend NewAnnotation). */
+  private _buildInsert(shape: CommitShape): InsertRow {
+    return {
+      id: crypto.randomUUID(),
+      shape_type: shape.type === "rect" ? "rectangle" : shape.type,
+      x: shape.x,
+      y: shape.y,
+      width: shape.width,
+      height: shape.height,
+      rotation: shape.rotation ?? 0,
+      polygon: shape.polygon ?? [],
+      mask: shape.mask ?? "",
+      label: "",
+      text: "",
+      group: "",
+      status: "accepted",
+      source: "human",
+    };
   }
   convertToPolygon(): void {
     if (this.ctx?.plugins.interaction.convertToPolygon()) this._geoDirty = true;
@@ -376,7 +431,7 @@ export class AnnotatorController {
       id: this._raw(t, "id", index) ?? String(index),
       ...fields,
     }));
-    if (edits.length === 0) return;
+    if (edits.length === 0 && this._inserts.length === 0 && this._deletes.length === 0) return;
 
     this.saving = true;
     this.saveError = null;
@@ -384,12 +439,14 @@ export class AnnotatorController {
       const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ edits }),
+        body: JSON.stringify({ edits, inserts: this._inserts, deletes: this._deletes }),
       });
       if (!res.ok) throw new Error(`save failed (HTTP ${res.status})`);
       await this._reload();
       this._undo = [];
       this._redo = [];
+      this._inserts = [];
+      this._deletes = [];
       this._geoDirty = false;
     } catch (e) {
       this.saveError = e instanceof Error ? e.message : String(e);
