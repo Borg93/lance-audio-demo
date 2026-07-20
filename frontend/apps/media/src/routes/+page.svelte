@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { page } from '$app/state';
+  import { goto } from '$app/navigation';
   import {
     search,
     listDocuments,
@@ -178,6 +179,14 @@
   function onMapSelectionHits(h: Hit[], total: number) {
     mapHits = h;
     mapSelectionTotal = total;
+  }
+
+  /** Read→annotate handoff: open the current map/search selection in the annotator
+   *  (deep-link the descriptor key-paths; the route steps through them). */
+  function annotateHits(reviewHits: Hit[]) {
+    const dv = activeView();
+    const keys = reviewHits.map((h) => dv.keyPath(h).join('/')).filter(Boolean);
+    if (keys.length) void goto(`/annotate?keys=${keys.join(',')}`);
   }
 
   // DIRECTION B (seed) — promote a map selection to the search's result set by
@@ -823,6 +832,13 @@
                           <span class="text-muted-foreground/70">· showing {mapHits.length}</span>
                         {/if}
                       </span>
+                      <button
+                        class="ml-auto rounded border border-border px-2 py-0.5 text-xs hover:bg-muted"
+                        title="Open this selection in the annotator"
+                        onclick={() => annotateHits(mapHits)}
+                      >
+                        Annotate {mapHits.length}
+                      </button>
                     {:else if hits.length > 0}
                       <span class="font-medium text-foreground">Search results</span>
                       <span class="text-muted-foreground">
