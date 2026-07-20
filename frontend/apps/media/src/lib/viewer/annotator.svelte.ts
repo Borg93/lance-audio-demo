@@ -19,7 +19,7 @@
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { type Table, tableFromIPC } from "apache-arrow";
 import type { CommitShape, PixiContext, Tool } from "$lib/engine";
-import { LayerStore } from "$lib/engine";
+import { LayerStore, buildBatchTable } from "$lib/engine";
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "$lib/labeling/types";
 import { PRODUCERS } from "$lib/labeling/producers";
 
@@ -248,8 +248,24 @@ export class AnnotatorController {
       if (hasDirty) this._geoDirty = true;
     };
     im.onCommit = (shape) => {
-      this._inserts = [...this._inserts, this._buildInsert(shape)];
-      this.count = ctx.plugins.arrow.getNumRows() + this._inserts.length;
+      const row = this._buildInsert(shape);
+      this._inserts = [...this._inserts, row];
+      const t = this.table;
+      if (t) {
+        // Optimistic render: append the drawn shape AT THE END (index = numRows, so
+        // the index-keyed overlay/selection stay valid) and re-render the WebGPU
+        // canvas. save()+_reload() later replace it with the server-canonical row.
+        const next = t.concat(
+          buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]),
+        );
+        ctx.plugins.arrow.load(next);
+        ctx.plugins.arrow.sync();
+        this.table = next;
+        this.count = next.numRows;
+        this._reapplyOverrides(); // sync() re-materialized caches → re-apply field patches
+      } else {
+        this.count = ctx.plugins.arrow.getNumRows() + this._inserts.length;
+      }
       this._geoDirty = true;
     };
 
@@ -463,6 +479,19 @@ export class AnnotatorController {
     this._overrides.set(`${index}:${field}`, value);
     this.ctx?.plugins.arrow.setFieldOverride(index, field, value);
     this.ctx?.plugins.arrow.sync();
+  }
+
+  /** Re-apply pending field edits to the canvas — a full re-materialize (after an
+   *  optimistic append) rebuilds column caches from this.table and wipes the in-place
+   *  setFieldOverride patches, so replay them once. */
+  private _reapplyOverrides(): void {
+    const arrow = this.ctx?.plugins.arrow;
+    if (!arrow || this._overrides.size === 0) return;
+    for (const [key, value] of this._overrides) {
+      const sep = key.indexOf(":");
+      arrow.setFieldOverride(Number(key.slice(0, sep)), key.slice(sep + 1), value);
+    }
+    arrow.sync();
   }
 
   // ── persistence: local-first Save → Lance merge_insert (NOT sync-per-edit) ──

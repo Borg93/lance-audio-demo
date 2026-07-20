@@ -99,7 +99,7 @@ function materializeTable(
  * Because the schema matches the base, the result `concat`s onto it cleanly —
  * O(rows), not O(total). Used by interactive appends AND streamed inference.
  */
-function buildBatchTable(schema: Schema, rows: Record<string, unknown>[]): Table {
+export function buildBatchTable(schema: Schema, rows: Record<string, unknown>[]): Table {
   const children: Data[] = [];
   for (const field of schema.fields) {
     const builder = makeBuilder({
