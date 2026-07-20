@@ -5,8 +5,8 @@ injected :class:`~backend.state.AppState`). Only env-varying values live here �
 algorithmic constants (RRF k, probe tokens, column-exclude sets) stay as module
 constants in their feature packages.
 
-Env vars are ``RAUDIO_*`` (see aliases). ``cors_origins`` accepts either a JSON
-list or a bare comma-separated string (``RAUDIO_CORS_ORIGINS=https://a,https://b``).
+Env vars are ``MEDIA_*`` (see aliases). ``cors_origins`` accepts either a JSON
+list or a bare comma-separated string (``MEDIA_CORS_ORIGINS=https://a,https://b``).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, AnyHttpUrl, Field, field_validator
+from pydantic import AnyHttpUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,26 +26,19 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # §4.4 names the encoder URLs MEDIA_EMBED_URL / MEDIA_RERANK_URL; the legacy
-    # RAUDIO_* aliases stay accepted (AliasChoices) so existing .env/launch
-    # scripts keep working through the transition.
-    embed_url: str = Field(
-        default="http://127.0.0.1:8001",
-        validation_alias=AliasChoices("MEDIA_EMBED_URL", "RAUDIO_EMBED_URL"),
-    )
-    rerank_url: str = Field(
-        default="http://127.0.0.1:8002",
-        validation_alias=AliasChoices("MEDIA_RERANK_URL", "RAUDIO_RERANK_URL"),
-    )
-    host: str = Field(default="127.0.0.1", alias="RAUDIO_HOST")
-    port: int = Field(default=8000, ge=1, le=65535, alias="RAUDIO_PORT")
-    db_path: Path = Field(default=Path("transcripts_v2.lance"), alias="RAUDIO_DB")
+    # Env vars are MEDIA_* (§4.4). The legacy RAUDIO_* aliases were dropped in the
+    # lance-media rename.
+    embed_url: str = Field(default="http://127.0.0.1:8001", alias="MEDIA_EMBED_URL")
+    rerank_url: str = Field(default="http://127.0.0.1:8002", alias="MEDIA_RERANK_URL")
+    host: str = Field(default="127.0.0.1", alias="MEDIA_HOST")
+    port: int = Field(default=8000, ge=1, le=65535, alias="MEDIA_PORT")
+    db_path: Path = Field(default=Path("transcripts_v2.lance"), alias="MEDIA_DB")
     # Multi-dataset serving (LANCE_MEDIA_MERGE §4.4): the registry root holds
     # one `<id>.lance` dir per dataset; `db_path`'s stem stays the default
     # dataset so the legacy single-DB routes keep their behavior.
     db_root: Path = Field(default=Path("."), alias="MEDIA_DB_ROOT")
     descriptor_dir: Path = Field(default=Path("config/descriptors"), alias="MEDIA_DESCRIPTOR_DIR")
-    cors_origins: list[str] = Field(default_factory=lambda: ["*"], alias="RAUDIO_CORS_ORIGINS")
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"], alias="MEDIA_CORS_ORIGINS")
 
     # Version-keyed search result cache (the read-fast tier). Number of result
     # sets to retain per app instance; 0 disables it entirely (then no per-request
@@ -103,7 +96,7 @@ class Settings(BaseSettings):
     # tunnel, reverse proxy). Unset = derive http://{host}:{port} locally.
     # AnyHttpUrl: this value lands verbatim in the clip app's CSP allow-list
     # and media src, so reject non-URL garbage at boot, not in the iframe.
-    media_base_url: AnyHttpUrl | None = Field(default=None, alias="RAUDIO_MEDIA_BASE_URL")
+    media_base_url: AnyHttpUrl | None = Field(default=None, alias="MEDIA_BASE_URL")
 
     @field_validator("cors_origins", mode="before")
     @classmethod

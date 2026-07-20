@@ -238,7 +238,7 @@ RERANK_MEM_FRAC ?= 0.45
 # Caption model — a generative VLM (Gemma 4) you ALREADY run locally on :8003.
 # raudio is only a CLIENT of it: `rmedia feature caption` POSTs frames to this
 # URL. We do NOT start the server (no Make target spins one up) — point these at
-# wherever your Gemma serves. The client also honours RAUDIO_CAPTION_URL/MODEL.
+# wherever your Gemma serves. The client also honours MEDIA_CAPTION_URL/MODEL.
 CAPTION_URL      ?= http://127.0.0.1:8003
 CAPTION_MODEL    ?= google/gemma-4-31B-it
 # Resume sidecar for captioning. A 145k-frame Gemma pass takes hours; this makes
@@ -353,7 +353,7 @@ rerank-server:        ## Start vLLM Qwen3-VL-Reranker-2B (port 8002) on GPU $(RE
 # Caption VLM — the live corpus was captioned by an external Gemma-4-31B on
 # :8003 (never started by this repo; no local weights). For local/baseline runs
 # serve a small Qwen3-VL instruct there instead and point the caption feature at
-# it via RAUDIO_CAPTION_MODEL=$(CAPTION_SERVE_MODEL). Parity (LANCE_MEDIA_MERGE
+# it via MEDIA_CAPTION_MODEL=$(CAPTION_SERVE_MODEL). Parity (LANCE_MEDIA_MERGE
 # P1.7) only needs the old and new pipeline runs to share the SAME captioner.
 CAPTION_SERVE_MODEL ?= Qwen/Qwen3-VL-2B-Instruct
 CAPTION_GPU         ?= 1

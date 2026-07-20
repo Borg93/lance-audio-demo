@@ -9,7 +9,7 @@ description becomes vector-searchable (mode ``scene``).
 Defaults target **Gemma 4** served by vLLM on port 8003 with an OpenAI-style
 chat-completions API, producing **Swedish** captions for the Riksarkivet corpus.
 Model / URL / instruction are overridable via the ``rmedia feature caption``
-CLI flags or the ``RAUDIO_CAPTION_*`` env vars, so the same client can drive a
+CLI flags or the ``MEDIA_CAPTION_*`` env vars, so the same client can drive a
 different VLM (e.g. ``Qwen/Qwen3-VL-Instruct-2B``) or language without code edits.
 """
 
@@ -24,15 +24,15 @@ from .schemas import ChatCompletionResponse, ChatMessage, ImagePart, ImageUrl, T
 
 # Gemma 4 instruction-tuned VLM that you already run locally at the OpenAI chat
 # endpoint on :8003 (the `rask-gemma` server). This client only POSTs to it — it
-# does not start a server. Override with RAUDIO_CAPTION_* or the CLI flags.
-CAPTION_MODEL = os.getenv("RAUDIO_CAPTION_MODEL", "google/gemma-4-31B-it")
-DEFAULT_CAPTION_URL = os.getenv("RAUDIO_CAPTION_URL", "http://127.0.0.1:8003")
+# does not start a server. Override with MEDIA_CAPTION_* or the CLI flags.
+CAPTION_MODEL = os.getenv("MEDIA_CAPTION_MODEL", "google/gemma-4-31B-it")
+DEFAULT_CAPTION_URL = os.getenv("MEDIA_CAPTION_URL", "http://127.0.0.1:8003")
 # Swedish, single factual sentence — the corpus is Swedish press/archival footage.
 # Explicitly forbid the "En bild av… / Bilden visar…" preamble: it repeats across
 # every caption, which both reads worse and dilutes the caption_embedding vectors
 # (every vector shares that lead-in). Ask for the scene content directly.
 CAPTION_INSTRUCTION = os.getenv(
-    "RAUDIO_CAPTION_INSTRUCTION",
+    "MEDIA_CAPTION_INSTRUCTION",
     "Beskriv sakligt vad som syns i videobilden, i en kort mening på svenska. "
     'Börja direkt med motivet — inte med "En bild", "Bilden visar" eller liknande. '
     "Svara endast med den beskrivande meningen.",

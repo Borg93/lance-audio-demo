@@ -71,7 +71,7 @@ up() {
   if healthy "$BACKEND_PORT" api/health; then
     log "• backend already up (:$BACKEND_PORT)"
   else
-    start_detached "backend" "$LOG_DIR/rmedia-backend.log" "DB=$DB BACKEND_PORT=$BACKEND_PORT RAUDIO_EMBED_URL=http://127.0.0.1:$EMBED_PORT RAUDIO_RERANK_URL=http://127.0.0.1:$RERANK_PORT make backend"
+    start_detached "backend" "$LOG_DIR/rmedia-backend.log" "DB=$DB BACKEND_PORT=$BACKEND_PORT MEDIA_EMBED_URL=http://127.0.0.1:$EMBED_PORT MEDIA_RERANK_URL=http://127.0.0.1:$RERANK_PORT make backend"
     wait_healthy "$BACKEND_PORT" api/health "backend" 120 || exit 1
   fi
 

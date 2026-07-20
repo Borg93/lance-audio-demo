@@ -16,7 +16,7 @@ Then serve the backend from it (no code change — env only):
 
     MEDIA_S3_ENDPOINT=http://127.0.0.1:9000 MEDIA_S3_ACCESS_KEY_ID=minioadmin \
     MEDIA_S3_SECRET_ACCESS_KEY=minioadmin MEDIA_S3_DB_ROOT=s3://lance-media-test \
-    RAUDIO_DB=<name>.lance uv run uvicorn backend.app:app --port 8091
+    MEDIA_DB=<name>.lance uv run uvicorn backend.app:app --port 8091
 """
 
 from __future__ import annotations

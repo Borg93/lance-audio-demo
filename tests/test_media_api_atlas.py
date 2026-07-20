@@ -93,7 +93,7 @@ def app_client(tmp_path: Path) -> tuple[FastAPI, TestClient]:
     _write_chunks(root / "atl.lance")
     (descriptor_dir / "atl.json").write_text(json.dumps(DESCRIPTOR))
     settings = Settings(
-        RAUDIO_DB=root / "atl.lance",
+        MEDIA_DB=root / "atl.lance",
         MEDIA_DB_ROOT=root,
         MEDIA_DESCRIPTOR_DIR=descriptor_dir,
     )

@@ -152,7 +152,7 @@ def client(tmp_path: Path) -> TestClient:
     _write_tables(root / "demo.lance", media_file)
     (descriptor_dir / "demo.json").write_text(json.dumps(DESCRIPTOR))
     settings = Settings(
-        RAUDIO_DB=root / "demo.lance",  # stem = the default dataset id
+        MEDIA_DB=root / "demo.lance",  # stem = the default dataset id
         MEDIA_DB_ROOT=root,
         MEDIA_DESCRIPTOR_DIR=descriptor_dir,
     )

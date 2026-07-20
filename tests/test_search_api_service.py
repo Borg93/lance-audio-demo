@@ -242,7 +242,7 @@ def corpus_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 def _state(root: Path, default: str) -> AppState:
     settings = Settings(
-        RAUDIO_DB=str(root / f"{default}.lance"),
+        MEDIA_DB=str(root / f"{default}.lance"),
         MEDIA_DB_ROOT=str(root),
         MEDIA_DESCRIPTOR_DIR=str(root / "descriptors"),
     )

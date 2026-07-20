@@ -66,12 +66,12 @@ def _require(schema_names: list[str], db: Path) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build Swedish topic layers on chunks via Toponymy.")
     ap.add_argument("--db", required=True, help="Lance DB dir (contains chunks.lance).")
-    ap.add_argument("--llm-url", default=os.getenv("RAUDIO_TOPICS_LLM_URL", "http://127.0.0.1:8003/v1"))
-    ap.add_argument("--llm-model", default=os.getenv("RAUDIO_TOPICS_LLM_MODEL", "google/gemma-4-31B-it"))
-    ap.add_argument("--embed-url", default=os.getenv("RAUDIO_TOPICS_EMBED_URL", "http://127.0.0.1:8001/v1"))
+    ap.add_argument("--llm-url", default=os.getenv("MEDIA_TOPICS_LLM_URL", "http://127.0.0.1:8003/v1"))
+    ap.add_argument("--llm-model", default=os.getenv("MEDIA_TOPICS_LLM_MODEL", "google/gemma-4-31B-it"))
+    ap.add_argument("--embed-url", default=os.getenv("MEDIA_TOPICS_EMBED_URL", "http://127.0.0.1:8001/v1"))
     ap.add_argument(
         "--embed-model",
-        default=os.getenv("RAUDIO_TOPICS_EMBED_MODEL", "Qwen/Qwen3-VL-Embedding-2B"),
+        default=os.getenv("MEDIA_TOPICS_EMBED_MODEL", "Qwen/Qwen3-VL-Embedding-2B"),
     )
     # base_min_cluster_size scaled for a large corpus: the raw default (10) would
     # make thousands of layer-0 clusters → thousands of LLM naming calls on 145k.

@@ -55,7 +55,7 @@ def _make_app(root: Path, declared: dict) -> FastAPI:
     (desc_dir / "corpus.json").write_text(json.dumps(declared))
     db = root / "corpus.lance"
     db.mkdir(exist_ok=True)
-    settings = Settings(RAUDIO_DB=db, MEDIA_DB_ROOT=root, MEDIA_DESCRIPTOR_DIR=desc_dir)
+    settings = Settings(MEDIA_DB=db, MEDIA_DB_ROOT=root, MEDIA_DESCRIPTOR_DIR=desc_dir)
     app = FastAPI()
     register_handlers(app)
     app.include_router(topics.router)

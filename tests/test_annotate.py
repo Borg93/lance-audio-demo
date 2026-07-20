@@ -8,7 +8,6 @@ frontend `tableFromIPC` depends on.
 from __future__ import annotations
 
 import pyarrow as pa
-
 from backend.media_api.annotate import _EMPTY_SCHEMA, _ipc_stream
 
 

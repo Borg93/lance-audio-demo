@@ -100,7 +100,7 @@ _include_groups(app)
 def run(db_path: str | None = None, *, host: str | None = None, port: int | None = None) -> None:
     """Start uvicorn on this module's ``app`` (the ``rmedia serve`` entry).
 
-    ``db_path`` overrides ``RAUDIO_DB`` for this process; settings are re-read
+    ``db_path`` overrides ``MEDIA_DB`` for this process; settings are re-read
     so lifespan picks the override up.
     """
     import os
@@ -108,13 +108,13 @@ def run(db_path: str | None = None, *, host: str | None = None, port: int | None
     import uvicorn
 
     if db_path is not None:
-        os.environ["RAUDIO_DB"] = str(db_path)
+        os.environ["MEDIA_DB"] = str(db_path)
     if host is not None:
-        os.environ["RAUDIO_HOST"] = str(host)
+        os.environ["MEDIA_HOST"] = str(host)
     if port is not None:
         # Write it back so settings.port (which media-clip's loopback source URL
         # reads) matches the actual bind port, not just uvicorn's argument.
-        os.environ["RAUDIO_PORT"] = str(port)
+        os.environ["MEDIA_PORT"] = str(port)
     if db_path is not None or host is not None or port is not None:
         get_settings.cache_clear()
     settings = get_settings()

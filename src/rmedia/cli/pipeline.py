@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 pipeline_app = typer.Typer(name="pipeline", help="Ray Data pipeline over the stage registry.")
 app.add_typer(pipeline_app)
 
-_DEFAULT_EMBED_URL = os.getenv("RAUDIO_EMBED_URL", "http://127.0.0.1:8001")
-_DEFAULT_SUMMARIZE_URL = os.getenv("RAUDIO_SUMMARIZE_URL", "http://127.0.0.1:8004")
-_DEFAULT_CAPTION_URL = os.getenv("RAUDIO_CAPTION_URL", "http://127.0.0.1:8003")
-_DEFAULT_CAPTION_MODEL = os.getenv("RAUDIO_CAPTION_MODEL", "google/gemma-4-31B-it")
+_DEFAULT_EMBED_URL = os.getenv("MEDIA_EMBED_URL", "http://127.0.0.1:8001")
+_DEFAULT_SUMMARIZE_URL = os.getenv("MEDIA_SUMMARIZE_URL", "http://127.0.0.1:8004")
+_DEFAULT_CAPTION_URL = os.getenv("MEDIA_CAPTION_URL", "http://127.0.0.1:8003")
+_DEFAULT_CAPTION_MODEL = os.getenv("MEDIA_CAPTION_MODEL", "google/gemma-4-31B-it")
 
 
 @pipeline_app.command("plan")

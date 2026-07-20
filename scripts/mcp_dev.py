@@ -12,7 +12,7 @@ uvicorn). The backend on :8000 keeps running independently — pick free ports:
     uv run fastmcp list scripts/mcp_dev.py
     uv run fastmcp call scripts/mcp_dev.py search_chunks query=skatt mode=fts n=3
 
-Note: this opens its own read-only Lance handles to RAUDIO_DB (default
+Note: this opens its own read-only Lance handles to MEDIA_DB (default
 ``transcripts_v2.lance``) — safe alongside the running backend.
 """
 
