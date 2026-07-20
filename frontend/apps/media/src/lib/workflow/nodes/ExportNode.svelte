@@ -3,9 +3,11 @@
    *  the columns chosen in the Inspector. Format + columns are configured there;
    *  the node itself shows a summary and a one-click Download. */
   import { Handle, Position, type NodeProps } from '@xyflow/svelte';
-  import { Download } from 'lucide-svelte';
+  import { Download, Tags } from 'lucide-svelte';
+  import { activeView } from '$lib/api';
   import { graph } from '$lib/workflow/graph.svelte';
   import { exportColumns, exportHits } from '$lib/workflow/export';
+  import { saveTagsAsAnnotations, tagBatchFromTaggedHits } from '$lib/labeling/tag-writer';
   import NodeShell from './NodeShell.svelte';
 
   let { id, selected }: NodeProps = $props();
@@ -15,6 +17,26 @@
   // Resolve the stored selection (`null` = every column the dataset offers).
   const cols = $derived(cfg ? (cfg.exportColumns ?? exportColumns()) : []);
   const canDownload = $derived(hits.length > 0 && cols.length > 0);
+
+  // Tag→annotation unification: persist the run's chunk-tags as real annotation ROWS
+  // (one merge_insert version) so they're reviewable in the annotator, not just an
+  // export column. Only tagged rows are sent (idempotent by deterministic id).
+  const taggedCount = $derived(hits.filter((h) => graph.tags.forHit(h).length > 0).length);
+  let tagMsg = $state<string | null>(null);
+  async function saveTags(): Promise<void> {
+    const batch = tagBatchFromTaggedHits(hits, activeView().keyFields, (h) => graph.tags.forHit(h));
+    if (!batch.adds.length) {
+      tagMsg = 'no tags to save';
+      return;
+    }
+    tagMsg = 'saving…';
+    try {
+      const r = await saveTagsAsAnnotations(batch, activeView().datasetParam() ?? undefined);
+      tagMsg = `saved ${r.saved} → v${r.version}`;
+    } catch (e) {
+      tagMsg = e instanceof Error ? e.message : 'save failed';
+    }
+  }
 </script>
 
 {#if rt && cfg}
@@ -45,6 +67,23 @@
         <Download class="size-3" />
         Download {cfg.exportFormat.toUpperCase()}
       </button>
+
+      <button
+        type="button"
+        class="nodrag inline-flex items-center justify-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+        disabled={taggedCount === 0}
+        title="Persist the run's chunk-tags as reviewable annotation rows"
+        onclick={(e) => {
+          e.stopPropagation();
+          void saveTags();
+        }}
+      >
+        <Tags class="size-3" />
+        Save {taggedCount || ''} tag{taggedCount === 1 ? '' : 's'} as annotations
+      </button>
+      {#if tagMsg}
+        <div class="font-mono text-[10px] text-muted-foreground">{tagMsg}</div>
+      {/if}
     </div>
   </NodeShell>
 {/if}

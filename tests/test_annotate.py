@@ -11,12 +11,20 @@ from typing import TYPE_CHECKING
 
 import lance
 import pyarrow as pa
+from backend.lancekit.descriptor import Declared
 from backend.media_api.annotate import (
     _EMPTY_SCHEMA,
     NewAnnotation,
+    TagWrite,
     _build_delta,
     _ipc_stream,
     _new_rows,
+    _tag_rows,
+    tag_id,
+)
+
+_MEDIA_DECLARED = Declared.model_validate(
+    {"identity": {"key_fields": ["doc_id", "speech_id", "chunk_id"]}}
 )
 
 if TYPE_CHECKING:
@@ -179,6 +187,69 @@ def test_save_edit_insert_delete_round_trip(tmp_path: Path) -> None:
     final = lance.dataset(uri)
     assert {r["id"] for r in final.to_table().to_pylist()} == {"a", "c"}
     assert final.version == v0 + 2
+
+
+def test_tag_id_is_deterministic_namespaced_and_collision_safe() -> None:
+    a = tag_id("d1", [0, 19], "speech")
+    assert a == tag_id("d1", [0, 19], "speech")  # deterministic → re-tag is idempotent
+    assert a.startswith("tag:")  # the guard: never equals a drawn shape's random id
+    assert tag_id("d1", [0, 19], "a:b") != tag_id("d1", [0, 19], "a")  # label sep can't collide
+    assert tag_id("d1", [0, 19], "x") != tag_id("d1", [0, 20], "x")  # per-chunk
+
+
+def test_tag_rows_stamp_identity_shape_and_author() -> None:
+    tbl = _tag_rows(
+        [TagWrite(doc_id="d1", keys=[0, 19], labels=["speech", "music"])],
+        _MEDIA_DECLARED,
+        "gabriel",
+        _full_schema(),
+    )
+    rows = tbl.to_pylist()
+    assert len(rows) == 2  # one row per label
+    r = rows[0]
+    assert (r["doc_id"], r["speech_id"], r["chunk_id"]) == ("d1", 0, 19)  # per-row identity
+    assert r["shape_type"] == "tag" and r["label"] == "speech"  # discriminator + value
+    assert r["source"] == "human" and r["status"] == "accepted"  # mode-blind human provenance
+    assert r["reviewer"] == "gabriel"  # server author, not client-claimed
+    assert (r["x"], r["y"], r["width"], r["height"]) == (0.0, 0.0, 0.0, 0.0)  # geometry zeroed
+    assert r["confidence"] is None  # unlisted column → null
+    assert r["id"] == tag_id("d1", [0, 19], "speech")  # deterministic id
+
+
+def test_tag_merge_insert_is_multi_unit_one_version_and_shape_safe(tmp_path: Path) -> None:
+    schema = _full_schema()
+    ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}
+    uri = str(tmp_path / "annotations.lance")
+    # a drawn shape already lives on the chunk
+    lance.write_dataset(
+        pa.Table.from_pylist([{**ident, "id": "a1", "shape_type": "rectangle", "x": 5.0}], schema=schema),
+        uri,
+    )
+    ds = lance.dataset(uri)
+    v0 = ds.version
+
+    # tag TWO different chunks in ONE merge_insert
+    delta = _tag_rows(
+        [
+            TagWrite(doc_id="d1", keys=[0, 19], labels=["speech"]),
+            TagWrite(doc_id="d1", keys=[0, 20], labels=["music"]),
+        ],
+        _MEDIA_DECLARED,
+        "gabriel",
+        schema,
+    )
+    ds.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(delta)
+    after = lance.dataset(uri)
+    got = {r["id"]: r for r in after.to_table().to_pylist()}
+    assert got["a1"]["x"] == 5.0  # drawn shape untouched — a tag: id never matches it
+    assert got[tag_id("d1", [0, 19], "speech")]["shape_type"] == "tag"
+    assert got[tag_id("d1", [0, 20], "music")]["chunk_id"] == 20  # the 2nd unit's tag
+    assert after.version == v0 + 1  # both units → one atomic version
+
+    # idempotent: re-applying the same tags adds no rows
+    before = after.count_rows()
+    after.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(delta)
+    assert lance.dataset(uri).count_rows() == before
 
 
 def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:

@@ -256,8 +256,13 @@ export class AnnotatorController {
 
   /** The label-class palette — distinct non-empty labels present in the data, so
    *  "quick label" needs no hardcoded class list (data-derived, like the groups). */
+  // The quick-label palette — drawn-shape classes only. Chunk TAG rows (shape_type=
+  // "tag", zero geometry) are annotations too but not a drawing class, so they'd just
+  // pollute the palette; excluded here (they still show in the review list/table).
   readonly labelClasses = $derived.by<string[]>(() =>
-    [...new Set(this.rows.map((r) => r.label).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [
+      ...new Set(this.rows.filter((r) => r.shape !== "tag").map((r) => r.label).filter(Boolean)),
+    ].sort((a, b) => a.localeCompare(b)),
   );
 
   readonly canDraw = $derived(this.mode === "edit");

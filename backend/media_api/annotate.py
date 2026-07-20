@@ -9,6 +9,7 @@ stream (a dataset with no annotations yet is not an error).
 
 import logging
 from collections.abc import Mapping, Sequence
+from urllib.parse import quote
 
 import pyarrow as pa
 from fastapi import APIRouter, Response
@@ -112,6 +113,28 @@ class SaveResult(BaseModel):
     saved: int
     version: int
 
+
+class TagWrite(BaseModel):
+    """One chunk (or its unit) + the tag labels to set on it. ``keys`` are the NON-doc
+    identity fields, positional — they pair with ``descriptor.identity.key_fields`` minus
+    the doc key, exactly like ``identity_values`` / ``chunk_key_filter`` (a chunk tag
+    sends ``keys=[speech_id, chunk_id]``)."""
+
+    doc_id: str
+    keys: list[int] = Field(default_factory=list)
+    labels: list[str] = Field(default_factory=list)
+
+
+class TagBatch(BaseModel):
+    """A workflow's chunk-tags promoted to annotation ROWS across many units, committed
+    in ONE version. ``removes`` untags (deletes the deterministic tag rows). Author is
+    stamped server-side; ``source``/``status`` are fixed for a human set."""
+
+    adds: list[TagWrite] = Field(default_factory=list)
+    removes: list[TagWrite] = Field(default_factory=list)
+    base_version: int | None = None
+
+
 #: The annotation contract — the schema of an EMPTY stream when a dataset has no
 #: annotations table yet (so the client still parses). Aligned to the engine
 #: (frontend/src/lib/engine/schema.ts) PLUS the active-learning columns
@@ -163,9 +186,7 @@ def _build_delta(current: pa.Table, edits_by_id: dict[str, dict[str, object]]) -
     patched, everything else (geometry, provenance) carried forward. Same schema as
     ``current`` so merge_insert updates in place."""
     patched = [
-        {**row, **edits_by_id[row["id"]]}
-        for row in current.to_pylist()
-        if row["id"] in edits_by_id
+        {**row, **edits_by_id[row["id"]]} for row in current.to_pylist() if row["id"] in edits_by_id
     ]
     return pa.Table.from_pylist(patched, schema=current.schema)
 
@@ -182,10 +203,58 @@ def identity_values(declared: Declared, doc_id: str, rest: Sequence[int]) -> dic
     return values
 
 
-def _new_rows(inserts: Sequence[NewAnnotation], ident: Mapping[str, object], schema: pa.Schema) -> pa.Table:
+def _new_rows(
+    inserts: Sequence[NewAnnotation], ident: Mapping[str, object], schema: pa.Schema
+) -> pa.Table:
     """Full new-annotation rows: identity stamped + shape fields; columns absent from
     the payload fall to null via the schema. Same schema ⇒ merge_insert can insert."""
     rows = [{**ident, **ins.model_dump()} for ins in inserts]
+    return pa.Table.from_pylist(rows, schema=schema)
+
+
+def tag_id(doc_id: str, keys: Sequence[int], label: str) -> str:
+    """Deterministic id for a chunk-level TAG row — ``tag:{doc}:{keys}:{enc(label)}``.
+    Idempotent (re-tagging the same chunk maps to the same id, so no duplicates); the
+    ``tag:`` prefix + percent-encoded label guarantee it can never collide with a drawn
+    shape's random id (so a tag merge_insert never clobbers a shape's geometry)."""
+    parts = [doc_id, *(str(k) for k in keys), quote(label, safe="")]
+    return "tag:" + ":".join(parts)
+
+
+def _tag_rows(
+    adds: Sequence[TagWrite], declared: Declared, author: str, schema: pa.Schema
+) -> pa.Table:
+    """Full annotation rows for chunk tags — the tag↔annotation unification: per-row
+    identity stamped, ``shape_type='tag'``, label carried, human provenance + server
+    author, geometry/temporal zeroed; unlisted columns fall to null via the schema.
+    Same schema ⇒ merge_insert inserts/replaces by the deterministic id."""
+    rows: list[dict[str, object]] = []
+    for w in adds:
+        doc = validate_doc_key(declared, w.doc_id)
+        ident = identity_values(declared, doc, w.keys)
+        for label in w.labels:
+            rows.append(
+                {
+                    **ident,
+                    "id": tag_id(doc, w.keys, label),
+                    "shape_type": "tag",
+                    "x": 0.0,
+                    "y": 0.0,
+                    "width": 0.0,
+                    "height": 0.0,
+                    "rotation": 0.0,
+                    "polygon": [],
+                    "t_start": 0.0,
+                    "t_end": 0.0,
+                    "label": label,
+                    "text": "",
+                    "group": "",
+                    "status": "accepted",
+                    "source": "human",
+                    "reviewer": author,
+                    "mask": "",
+                }
+            )
     return pa.Table.from_pylist(rows, schema=schema)
 
 
@@ -316,6 +385,66 @@ def save_annotations(
         new_version,
         delta.num_rows,
         len(body.deletes),
+    )
+    return SaveResult(saved=touched, version=new_version)
+
+
+@router.post("/annotations/tags")
+def add_tags(
+    state: StateDep,
+    author: AuthorDep,
+    body: TagBatch,
+    dataset: DatasetParam = None,
+) -> SaveResult:
+    """Promote workflow chunk-tags to annotation ROWS (the tag↔annotation unification) —
+    a human ``set`` over a chunk-level selection, written across MANY units in ONE
+    merge_insert version. Not a model deriver, so it does NOT funnel through the jobs
+    seam; the annotations table stays mode-blind (a tag is source='human'/status=
+    'accepted'). Idempotent by the deterministic tag id (a re-Save adds no duplicates)."""
+    handle = dataset_handle(state, dataset)
+    declared = handle.descriptor.declared
+    ds = table_dataset(handle, ANNOTATIONS_TABLE)  # raises NotFoundError if unseeded
+
+    # Optimistic concurrency degrades to table-GLOBAL for a cross-unit batch; optional +
+    # last-write-wins per deterministic id is the pragmatic contract.
+    if body.base_version is not None and body.base_version != int(ds.version):
+        raise ConflictError(
+            f"annotations changed on the server (loaded v{body.base_version}, now v{int(ds.version)})"
+        )
+
+    delta = _tag_rows(body.adds, declared, author, ds.schema)
+    writer = open_writer(
+        dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
+    )
+    touched = 0
+    if delta.num_rows:
+        writer.merge_upsert(delta, "id")
+        touched += delta.num_rows
+
+    remove_ids = [
+        tag_id(validate_doc_key(declared, w.doc_id), w.keys, label)
+        for w in body.removes
+        for label in w.labels
+    ]
+    if remove_ids:
+        quoted = ", ".join(_sql_quote(i) for i in remove_ids)
+        writer.delete(f"id IN ({quoted})")
+        touched += len(remove_ids)
+
+    if touched == 0:
+        return SaveResult(saved=0, version=int(ds.version))
+
+    fresh = table_dataset(handle, ANNOTATIONS_TABLE)
+    new_version = int(fresh.version)
+    emit_save(
+        ds=fresh,
+        table_uri=handle.table_uri(ANNOTATIONS_TABLE),
+        table_name=ANNOTATIONS_TABLE,
+        unit_key=f"tags:{len(body.adds)}+{len(body.removes)}",
+        sink=state.settings.lineage_sink,
+    )
+    logger.info(
+        "tagged → v%d (%d add-rows, %d remove)", new_version, delta.num_rows, len(remove_ids)
     )
     return SaveResult(saved=touched, version=new_version)
 
