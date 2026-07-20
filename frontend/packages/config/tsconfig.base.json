@@ -1,5 +1,5 @@
 {
-  "extends": "./.svelte-kit/tsconfig.json",
+  "//": "Shared TypeScript base for every app/package (@lance-media/config). Mirrors lance-ns's @lance/config. Apps extend this + their .svelte-kit/tsconfig.json.",
   "compilerOptions": {
     "allowJs": true,
     "checkJs": true,
@@ -11,7 +11,6 @@
     "strict": true,
     "moduleResolution": "bundler",
     "module": "esnext",
-    "target": "esnext",
-    "types": ["bun-types", "@webgpu/types"]
+    "target": "esnext"
   }
 }

@@ -191,17 +191,19 @@ FRONTEND_PORT ?= 5274
 backend:              ## Run the FastAPI backend (Lance reads, /api/*).
 	uv run rmedia --db $(DB) serve --host $(BACKEND_HOST) --port $(BACKEND_PORT)
 
+# Turborepo workspace: the app lives in apps/media, shared config in packages/config.
 FRONTEND_DIR    ?= ./frontend
-FRONTEND_BUILD  ?= $(FRONTEND_DIR)/build
+FRONTEND_APP    ?= $(FRONTEND_DIR)/apps/media
+FRONTEND_BUILD  ?= $(FRONTEND_APP)/build
 
-frontend-build:       ## Build the SvelteKit app (svelte-adapter-bun) into $(FRONTEND_BUILD).
+frontend-build:       ## Build the app via turbo (svelte-adapter-bun → apps/media/build).
 	cd $(FRONTEND_DIR) && bun install --silent && bun run build
 
-frontend-dev:         ## Run the SvelteKit dev server with HMR (vite, port 5173).
+frontend-dev:         ## Run the dev server with HMR via turbo (vite).
 	cd $(FRONTEND_DIR) && bun install --silent && bun run dev
 
-frontend: frontend-build  ## Build then serve the SvelteKit app via the Bun proxy.
-	cd $(FRONTEND_DIR) && bun run server.ts \
+frontend: frontend-build  ## Build then serve the app via the Bun proxy (server.ts).
+	cd $(FRONTEND_APP) && bun run server.ts \
 		--root ./build \
 		--api http://$(BACKEND_HOST):$(BACKEND_PORT) \
 		--port $(FRONTEND_PORT)
