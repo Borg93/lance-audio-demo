@@ -19,11 +19,11 @@ The data-evolution shape and the swap-points are in place; the plan mostly
 
 | Seam already present | Where | Why it matters |
 |---|---|---|
-| Column-creation core is **client-free** | `src/raudio/features/engine.py` (`upsert_scan_column` / `upsert_blob_column`, pure fns over a path + a `compute` callable) | A Ray/Ray Data driver can fan these out unchanged — the docstring even says so. |
-| Enrichment is a **registry**, one entry per column | `src/raudio/features/columns.py` (`FEATURES: dict[str, Feature]`, each `Feature{name, table, run}`) | Adding/altering an enrichment is local; the CLI is a thin loop over it. |
+| Column-creation core is **client-free** | `src/rmedia/features/engine.py` (`upsert_scan_column` / `upsert_blob_column`, pure fns over a path + a `compute` callable) | A Ray/Ray Data driver can fan these out unchanged — the docstring even says so. |
+| Enrichment is a **registry**, one entry per column | `src/rmedia/features/columns.py` (`FEATURES: dict[str, Feature]`, each `Feature{name, table, run}`) | Adding/altering an enrichment is local; the CLI is a thin loop over it. |
 | Model clients are **injected `Protocol`s** | `EmbeddingClient` / `CaptionClient` / `SummarizeClient`; tests inject fakes | The compute logic doesn't depend on vLLM — swap the impl (HTTP server → Ray Serve → Ray actor) without touching column logic. |
-| Online model access is a **factory by URL** | `backend/clients.py` (`ensure_embedder`/`ensure_reranker`, URL from `Settings`, 503 on failure) | Point it at a Ray Serve ingress via `RAUDIO_EMBED_URL` — no search-code change. |
-| One **transport**, shared online+offline | `src/raudio/vllm/base.py` (`VLLMTransport`: httpx POST + threadpool fan-out) | The online query path and offline backfill already hit the same server the same way. |
+| Online model access is a **factory by URL** | `backend/clients.py` (`ensure_embedder`/`ensure_reranker`, URL from `Settings`, 503 on failure) | Point it at a Ray Serve ingress via `MEDIA_EMBED_URL` — no search-code change. |
+| One **transport**, shared online+offline | `src/rmedia/vllm/base.py` (`VLLMTransport`: httpx POST + threadpool fan-out) | The online query path and offline backfill already hit the same server the same way. |
 | Search wire is **open dicts** | `backend/search/*` return `list[dict[str, Any]]` (`qb.to_list()`) | New columns can ride the payload without a typed-model change (the blocker is the `_HIT_COLUMNS` `SELECT`, not the envelope — see §5 of WHATS_LEFT). |
 | **FTS-only** path is GPU-free | deferred `raudio.vllm` imports in `backend/clients.py` + `state.py` | The "no Ray, no GPU" deployment already works structurally. |
 
@@ -169,7 +169,7 @@ class Olap(Protocol):
    `backend/system/router.py` `/api/columns`); the frontend renders from it.
 5. **OLAP module** is brand-new and stands alone — the DuckDB `lance` extension scanning the same
    Lance tables; nothing else depends on it (the UI calls it for stats/§12).
-6. **Ray Serve deployment** is config: `RAUDIO_EMBED_URL` → Serve ingress; the
+6. **Ray Serve deployment** is config: `MEDIA_EMBED_URL` → Serve ingress; the
    `backend/clients.py` factory already injects it.
 
 None of these requires touching another module's internals — that's the test of

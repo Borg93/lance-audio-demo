@@ -31,7 +31,7 @@
 
 | Axis | **raudio (us)** | **LightlyStudio (them)** |
 |---|---|---|
-| System of record | **One Lance dataset**, ~11 tables (`src/raudio/model/schema.py`) | **Relational**: DuckDB (default) / Postgres+pgvector, via SQLModel+SQLAlchemy+Alembic (`db_manager.py`) |
+| System of record | **One Lance dataset**, ~11 tables (`src/rmedia/model/schema.py`) | **Relational**: DuckDB (default) / Postgres+pgvector, via SQLModel+SQLAlchemy+Alembic (`db_manager.py`) |
 | Vectors | **Lance IVF_PQ** ANN + tuned `nprobes`/refine (`backend/search/constants.py`) | SQL column — pgvector `Vector()` / DuckDB `ARRAY(Float)`, cosine `<=>`, **no ANN index** (`db_vector.py`) |
 | Full-text | **Tantivy BM25** native FTS on `text`/`caption` | none of note (filtering is SQL `WHERE`) |
 | Lance / Arrow | the **whole store** | **interchange only** — Arrow serializes 2-D embeddings for HTTP; Lance touched in ~12 files, not the SoR |

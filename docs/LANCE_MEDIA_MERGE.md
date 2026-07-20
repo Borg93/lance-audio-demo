@@ -24,7 +24,7 @@ Repos: `~/Desktop/lance-audio` (**the only repo this goal changes**), `~/Desktop
 
 ## 3. Current state (condensed audit)
 
-**Pipeline** (`src/raudio/`): Makefile-orchestrated DAG of resumable single-process Typer commands. Concurrency = `ThreadPoolExecutor` HTTP fan-out to 4 vLLM servers (:8001 embed, :8002 rerank, :8003 caption, :8004 summarize), ffmpeg thread pools, and OS-level process sharding with `{table}_shard{i}.lance` staging + `fold_shards`. **Zero `ray` imports.** The good news: `features/engine.py` (upsert_scan_column / upsert_blob_column / ensure_*_index) is deliberately client-free, and `embed_columns.py` binds columns to structural client Protocols — the Ray seam already exists. Blob v2 is already in use (documents.media_blob = external-URI blob; thumbnails/frames = inline blob; all blob tables at `data_storage_version="2.2"`).
+**Pipeline** (`src/rmedia/`): Makefile-orchestrated DAG of resumable single-process Typer commands. Concurrency = `ThreadPoolExecutor` HTTP fan-out to 4 vLLM servers (:8001 embed, :8002 rerank, :8003 caption, :8004 summarize), ffmpeg thread pools, and OS-level process sharding with `{table}_shard{i}.lance` staging + `fold_shards`. **Zero `ray` imports.** The good news: `features/engine.py` (upsert_scan_column / upsert_blob_column / ensure_*_index) is deliberately client-free, and `embed_columns.py` binds columns to structural client Protocols — the Ray seam already exists. Blob v2 is already in use (documents.media_blob = external-URI blob; thumbnails/frames = inline blob; all blob tables at `data_storage_version="2.2"`).
 
 **Backend** (`backend/`): read-only FastAPI over one Lance DB. ~32 hardcoded schema couplings (table names in `state.py`, column lists in `search/constants.py`, `filters.py`, `atlas/points.py`, `voice/service.py`, …) but the load-bearing primitives are already generic: `media/blobs.py` (take_blobs + Range streaming), RFC 9457 handlers, `/api/columns` introspection. It **imports `raudio` in 12+ modules** (clients.py, deps.py, search/*, atlas/points.py, voice/encoder.py, mcp/tools.py, …) — not standalone.
 
@@ -93,7 +93,7 @@ Rules that make the later lift mechanical:
 |---|---|---|
 | `MEDIA_DB_ROOT` | namespace `dir` root containing the Lance DBs | repo root (so both `transcripts_v2.lance` and the sample DB are visible) |
 | `MEDIA_DESCRIPTOR_DIR` | config-file descriptor overrides | `config/descriptors/` |
-| `MEDIA_EMBED_URL` / `MEDIA_RERANK_URL` | query-encoder servers (renamed from `RAUDIO_*`) | `http://127.0.0.1:8001` / `:8002` |
+| `MEDIA_EMBED_URL` / `MEDIA_RERANK_URL` | query-encoder servers (renamed from `MEDIA_*`) | `http://127.0.0.1:8001` / `:8002` |
 
 ### 4.5 Frontend — descriptor-driven (Phase 3)
 
@@ -144,7 +144,7 @@ MUST = phase-gating; SHOULD = do when reached, may slip. Every criterion's Check
 
 - **P1.0 (MUST)** §5.1 media + §5.3 baselines in place; `scripts/sample_docs.txt`, `tests/fixtures/media/`, `baselines/` committed.
   **Check**: `ls` of the three paths + the sample doc_ids printed.
-- **P1.1 (MUST)** Package reshaped: `src/raudio` → `src/rmedia` with `core/` (engine, registry, driver), `modalities/` (av, image), `clients/` (vLLM HTTP); CLI `rmedia`; thin `raudio` shim re-exporting from `rmedia` keeps `backend/` importable; tests ported to `rmedia` with **no reduction in test count**.
+- **P1.1 (MUST)** Package reshaped: `src/rmedia` → `src/rmedia` with `core/` (engine, registry, driver), `modalities/` (av, image), `clients/` (vLLM HTTP); CLI `rmedia`; thin `raudio` shim re-exporting from `rmedia` keeps `backend/` importable; tests ported to `rmedia` with **no reduction in test count**.
   **Check**: `uv run rmedia --help` exits 0; core-purity gate `grep -rn "ffmpeg\|pyannote\|audio_path\|modalities\|subprocess" src/rmedia/core/ && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'` prints GATE OK; a contract test imports `rmedia.core` and asserts `sys.modules` contains no `rmedia.modalities`/`rmedia.clients`; pytest `N passed` line surfaced with N ≥ the pre-rename count.
 - **P1.2 (MUST)** Ray Data drivers for every per-row fan-out stage (embed text/frame, caption, summarize, frame extraction, diarize, voiceprint): `lance_ray.read_lance → map_batches(actor pool) → engine upsert / lance_ray.add_columns`, honoring §4.3 blob-flow + writer-topology rules. Old mechanisms gone.
   **Check**: negative gates `grep -rn "ThreadPoolExecutor" src/rmedia/ --exclude-dir=clients && echo FAIL || echo 'GATE OK'` and `grep -rn "_shard" src/rmedia/ && echo FAIL || echo 'GATE OK'`; positive gate `grep -rln "map_batches\|lance_ray" src/rmedia/core/` lists the driver module(s); one real stage executed on the smoke DB with Ray actor-pool progress lines surfaced; `uv run rmedia pipeline plan` prints the stage DAG with actor/GPU config.

@@ -327,14 +327,14 @@ studio/
 │  ├─ engine/                       # the generic SandboxEngine interface + mock helpers
 │  └─ audio/                        # audio-decoder.ts, audio-source.ts, transcript.ts [from demo proxy]
 └─ services/
-   └─ search-backend/               # ex-raudio backend/ + src/raudio/ (FastAPI + Lance + vLLM client)
+   └─ search-backend/               # ex-raudio backend/ + src/rmedia/ (FastAPI + Lance + vLLM client)
         (Python, uv, ruff, ty — unchanged; served remotely or as a sidecar per §5.3)
 ```
 
 **How the three fold in**
 - **ranymizer** → `apps/shell` (frame, router, Tauri base, CSP) **and** `apps/shell/.../sandboxes/anonymizer`.
 - **raudio frontend** → `apps/shell/.../sandboxes/search`; `api.ts` is its data layer verbatim. **raudio
-  backend + `src/raudio`** → `services/search-backend` essentially unchanged. The Bun `server.ts` proxy
+  backend + `src/rmedia`** → `services/search-backend` essentially unchanged. The Bun `server.ts` proxy
   role is replaced by Tauri transport (§5.3).
 - **multimodal-webgpu-demo** → `apps/shell/.../sandboxes/lab`, built against the **inferred** proxy shape;
   its worker co-located so Vite `worker.format='es'` + `optimizeDeps.exclude '@huggingface/transformers'`

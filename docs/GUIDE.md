@@ -33,7 +33,7 @@ sidecar JSON files or disk walks at query time.
 
 ```mermaid
 flowchart LR
-    subgraph WRITE["WRITE SIDE — offline, CLI (src/raudio/)"]
+    subgraph WRITE["WRITE SIDE — offline, CLI (src/rmedia/)"]
         direction TB
         CLI["raudio CLI<br/>transcribe → ingest → feature text_embedding<br/>→ extract-chunk-frames → feature frame_embedding"]
     end
@@ -64,15 +64,15 @@ flowchart LR
 ```
 
 > Both the CLI batch path and the backend serving path call the **same**
-> `src/raudio/vllm/embedding.py` client (the "shared seam", §7) → the same
+> `src/rmedia/vllm/embedding.py` client (the "shared seam", §7) → the same
 > out-of-process vLLM servers.
 
-- **Write side** = `src/raudio/` (the `raudio` Typer CLI + the ingest/extract
+- **Write side** = `src/rmedia/` (the `raudio` Typer CLI + the ingest/extract
   modules). Run offline, GPU-heavy, idempotent/resumable.
 - **Read side** = `backend/` (FastAPI) + `frontend/` (SvelteKit). Run online,
   mostly CPU; only the embedding step needs a GPU and that lives in a **separate
   vLLM process** reached over HTTP, so FTS-only use works with no GPU at all.
-- **`src/raudio/vllm/embedding.py` is the one module both sides share** — see §7.
+- **`src/rmedia/vllm/embedding.py` is the one module both sides share** — see §7.
 - **`demo/` is unrelated** — a standalone in-browser (transformers.js/WebGPU)
   transcription playground. It shares zero code with raudio. See §10.
 
@@ -104,7 +104,7 @@ for free. The CLI/backend are just HTTP clients of it.
 ## 4. The data model — four core Lance tables (+ a derived `topics.lance`)
 
 All four core tables live inside one `transcripts_v2.lance/` directory (gitignored —
-local working data). Schemas: [`src/raudio/model/schema.py`](src/raudio/model/schema.py).
+local working data). Schemas: [`src/rmedia/model/schema.py`](src/rmedia/model/schema.py).
 A fifth, single-row `topics.lance` is written on the read side by `feature topics`
 (its `hierarchy` column holds the nested topic tree) and is served by `/api/topics`
 (`backend/topics/router.py`) — see §6.
@@ -246,7 +246,7 @@ flowchart TD
 > models: [`docs/PIPELINE.md`](docs/PIPELINE.md).
 
 The corpus seed is a local, gitignored `video_batcher.csv`
-(`referenskod;namn;extraid;bildid`, ~1576 rows, never committed); `raudio download`
+(`referenskod;namn;extraid;bildid`, ~1576 rows, never committed); `rmedia download`
 pulls each row's `bildid` as `https://iiifintern-ai.ra.se/api/audiovideo/{bildid}.mp4`
 into `input/sv/`, then `detect-language` (Whisper-large-v3) sorts the Swedish files
 into `input/sv/sv/` and the pipeline continues sv-only.
@@ -297,7 +297,7 @@ flowchart TD
 key, not chained. `prefilter` (`spec.prefilter`, default True) is applied only to
 the `chunks`-table legs (`fts` / vector / `hybrid`); the frame legs
 (`visual` / `scene`) filter **after** ranking, in `_frames_to_chunk_hits`. The
-cross-encoder rerank (`src/raudio/vllm/reranker.py`) reads **only** the transcript
+cross-encoder rerank (`src/rmedia/vllm/reranker.py`) reads **only** the transcript
 `text` column over the top `rerank_n` hits and is a no-op for image-only queries.
 
 Detailed embedding/serving flow: [`docs/EMBEDDINGS.md`](docs/EMBEDDINGS.md).
@@ -344,7 +344,7 @@ they distinguish speakers within one recording, never across the corpus.
 ## 6. Where things live (navigation map)
 
 ```
-src/raudio/                Python pipeline — the WRITE side + search/embedding library
+src/rmedia/                Python pipeline — the WRITE side + search/embedding library
 ├── cli/                 Typer app: subcommands (the operator entry point)
 ├── __init__.py            library public API (re-exports model / ingest / retrieval)
 ├── model/                 DATA CONTRACTS
@@ -459,7 +459,7 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
   would share one mutable list across instances.
 - **Lazy *module* imports from CLI commands / the backend.** The heavy modules
   (`lance`, `torch`-backed ASR, the `vllm/` clients) are imported inside
-  the function body that needs them, so `raudio --help` stays instant and the
+  the function body that needs them, so `rmedia --help` stays instant and the
   optional `[multimodal]`/transcribe extras stay optional. Within those modules
   imports are normal top-level — the optionality comes from *the module not being
   imported at startup*, not from scattering imports inside methods. (Verified:
@@ -507,7 +507,7 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
 The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
 2-D scatter for an in-browser "map of the corpus" view. It has three parts:
 
-- **The features** (`src/raudio/features/columns.py`, `FEATURES` registry):
+- **The features** (`src/rmedia/features/columns.py`, `FEATURES` registry):
   - `atlas` — the **text** space. Fits an [EVōC](https://github.com/TutteInstitute/evoc)
     layout over `text_embedding` and writes `atlas_x` / `atlas_y` / `atlas_cluster`
     onto `chunks` via `add_columns`.
@@ -523,7 +523,7 @@ The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
   - `topics` — names the EVōC regions: runs in an isolated env and writes the
     `topic_l*` / `doc_topic` columns onto `chunks` plus the single-row `topics.lance`
     (the nested hierarchy served by `/api/topics`).
-  - The three atlas features delegate the EVōC fit to `src/raudio/features/projection.py`
+  - The three atlas features delegate the EVōC fit to `src/rmedia/features/projection.py`
     (`project_atlas_columns`). EVōC is CPU-only (numba / scikit-learn, no torch) and
     ships in the `[atlas]` optional extra.
 - **The columns on `chunks`:** the three triplets above — `atlas_x/y/cluster`
@@ -581,7 +581,7 @@ uvx ruff check src backend tests        # lint  (config in pyproject.toml; lint-
 uvx ruff check --fix src backend tests  # autofix
 uvx ty check                            # type-check
 uv run pytest                           # tests (unit always; backend smoke if dataset present)
-uv run raudio --help                    # CLI smoke
+uv run rmedia --help                    # CLI smoke
 
 # Frontend (and demo) — from frontend/ (or demo/)
 bun install
@@ -601,7 +601,7 @@ bun run build                # static SPA into build/
 | Python lint | `uvx ruff check src backend tests` | 0 issues |
 | Python types | `uvx ty check` | 0 diagnostics |
 | Python tests | `uv run pytest` | all pass (backend smoke auto-skips without a local dataset) |
-| CLI | `uv run raudio --help` | exit 0 |
+| CLI | `uv run rmedia --help` | exit 0 |
 | Frontend types | `cd frontend && bun run check` | 0 errors / 0 warnings |
 | Frontend build | `cd frontend && bun run build` | succeeds |
 
@@ -627,15 +627,15 @@ the authoritative, commented description of how every process fits together.
 
 | I want to… | Look at |
 |---|---|
-| Change the table schema | `src/raudio/model/schema.py` |
-| Change how transcripts become rows | `src/raudio/ingest/ingest.py` (`flatten_chunks`, `_document_row`) |
-| Add/modify a CLI command | `src/raudio/cli/` |
-| Add/modify a feature column (embed/summary/caption) | `src/raudio/features/columns.py` (+ `features/engine.py`) |
+| Change the table schema | `src/rmedia/model/schema.py` |
+| Change how transcripts become rows | `src/rmedia/ingest/ingest.py` (`flatten_chunks`, `_document_row`) |
+| Add/modify a CLI command | `src/rmedia/cli/` |
+| Add/modify a feature column (embed/summary/caption) | `src/rmedia/features/columns.py` (+ `features/engine.py`) |
 | Change search behavior / add a mode | `backend/search/service.py` (`run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`) + `backend/search/spec.py` (`SearchMode`) |
-| Touch the Atlas projection / map endpoints | `src/raudio/features/projection.py` (EVōC fit) + `backend/atlas/router.py` (`/api/atlas/*`) |
-| Touch speaker diarization (Speakers tab) | `src/raudio/media/diarize.py` (pyannote → `speaker_turns`) + `backend/diarization/router.py` (`/api/diarization/{doc_id}`) + `frontend/src/lib/components/diarization-timeline.svelte` |
+| Touch the Atlas projection / map endpoints | `src/rmedia/features/projection.py` (EVōC fit) + `backend/atlas/router.py` (`/api/atlas/*`) |
+| Touch speaker diarization (Speakers tab) | `src/rmedia/media/diarize.py` (pyannote → `speaker_turns`) + `backend/diarization/router.py` (`/api/diarization/{doc_id}`) + `frontend/src/lib/components/diarization-timeline.svelte` |
 | Add an API endpoint | the relevant router under `backend/` (`search/`, `media/`, `atlas/`, `system/`) |
-| Change the embedding/rerank wire format | `src/raudio/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
+| Change the embedding/rerank wire format | `src/rmedia/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
 | Touch the search UI | `frontend/src/routes/+page.svelte` + `frontend/src/lib/components/` |
 | Change the API client / response shapes | `frontend/src/lib/api.ts` (Zod schemas) |
 | Change how processes are launched | `Makefile` |

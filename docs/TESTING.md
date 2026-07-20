@@ -4,7 +4,7 @@ Audience: a developer who opened `tests/` and wants to know what these tests are
 protecting, where the seams are, and whether we're testing the right things.
 This document answers that directly. It judges **value**, not coverage %.
 
-All references use the current package layout — `src/raudio/{model,ingest,media,
+All references use the current package layout — `src/rmedia/{model,ingest,media,
 asr,vllm,features,retrieval,cli}/…` and the split FastAPI backend
 `backend/{app,state,deps,clients}.py` + `backend/{search,media,system}/`. Every
 behaviour called "verified" below runs offline (no GPU, no network, no ffmpeg)

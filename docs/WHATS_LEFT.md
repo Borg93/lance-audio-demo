@@ -159,7 +159,7 @@ flowchart TB
 
 | Claim in this doc | Status | Evidence |
 |---|---|---|
-| Lance is the system of record; Arrow schema is the registry | ✅ shipped | `backend/state.py:74-109` opens Lance tables; `src/raudio/model/schema.py` |
+| Lance is the system of record; Arrow schema is the registry | ✅ shipped | `backend/state.py:74-109` opens Lance tables; `src/rmedia/model/schema.py` |
 | Data evolution via `add_columns` (no migration) | ✅ shipped | `features/engine.py:128-137` (`@lance.batch_udf`, `add_columns(udf, read_columns=, batch_size=)` — **lance core**, not lancedb) |
 | One model layer, online + offline share a client `Protocol` | ✅ shipped | `vllm/base.py` `VLLMTransport`; online `backend/clients.py`, offline `features/columns.py:345-371` both build `VLLMEmbeddingClient(url)` |
 | ANN (IVF_PQ) + FTS (Tantivy) + reranker | ✅ shipped | `backend/search/*`, `vllm/reranker.py` |
@@ -220,7 +220,7 @@ not a rewrite.** The honest detail:
 > (diarize) → `topic_l*` (topics) → `typicality`/`is_near_dup` (selection). These
 > stages form a **dependency DAG** (embeddings need the transcript column; topics
 > need embeddings). The §1 rewrite isn't "swap the executor" — it's promoting
-> [`features/engine.py`](../src/raudio/features/engine.py)'s hand-rolled
+> [`features/engine.py`](../src/rmedia/features/engine.py)'s hand-rolled
 > `add_columns` + resume into a first-class engine where each stage declares
 > `input_columns → output_columns` and Ray walks the DAG incrementally and
 > idempotently on the GPU pool. This is exactly the workflow Lance is *designed*
@@ -232,15 +232,15 @@ not a rewrite.** The honest detail:
 Today inference is **split across two worlds** that don't share a runtime:
 
 - **Offline** (the write side): batch feature passes driven by the CLI
-  (`raudio feature text_embedding` / `frame_embedding`, captioning, summaries)
+  (`rmedia feature text_embedding` / `frame_embedding`, captioning, summaries)
   talk to a **long-running vLLM HTTP server** (`make embed-server` /
   `rerank-server`, pinned to ports 8001/8002 — see
   [`scripts/serve-all.sh`](../scripts/serve-all.sh)). The embedding client
-  ([`src/raudio/vllm/embedding.py`](../src/raudio/vllm/embedding.py)) fans out
+  ([`src/rmedia/vllm/embedding.py`](../src/rmedia/vllm/embedding.py)) fans out
   in-flight HTTP requests over a `ThreadPoolExecutor` (`TEXT_CONCURRENCY=32`,
   `IMAGE_CONCURRENCY=8`) and relies on vLLM's continuous batching. The
   **resume/checkpoint logic is hand-rolled** in
-  [`src/raudio/features/engine.py`](../src/raudio/features/engine.py): a Lance
+  [`src/rmedia/features/engine.py`](../src/rmedia/features/engine.py): a Lance
   `@batch_udf` with `merge_insert` null-fill for scan-derived columns, and a
   two-pass compute→attach with a **JSONL sidecar checkpoint** for blob-derived
   columns (frame embeds/captions). Orchestration is ad-hoc shell + Makefile
@@ -338,7 +338,7 @@ versions, so fragments and superseded manifests pile up on disk.
 
 **What exists today (and its gaps):**
 
-- A `raudio compact` command **already exists** (`cli/media.py`): it runs
+- A `rmedia compact` command **already exists** (`cli/media.py`): it runs
   `dataset.optimize.compact_files(target_rows_per_fragment=1M)` and rebuilds the
   **IVF_PQ vector + BTREE scalar** indices — **but it does not rebuild the
   Tantivy FTS index** (an oversight: the FTS tail silently goes stale after an
@@ -350,18 +350,18 @@ versions, so fragments and superseded manifests pile up on disk.
 **What's actually missing — the first-class maintenance story:**
 
 - **FTS reindex on compaction** — fold `create_fts_index(..., replace=True)` into
-  `raudio compact` so BM25 covers the new tail (recall otherwise degrades — cf.
+  `rmedia compact` so BM25 covers the new tail (recall otherwise degrades — cf.
   the `nprobes`/recall gotchas in [INVESTIGATION.md](INVESTIGATION.md)).
 - **Garbage collection across all tables** — `cleanup_old_versions(older_than=…)`
   with a real retention window, not just the KG table.
 - **Cover every dataset** — extend compaction/GC/reindex beyond `chunks` to the
   frames/voice/topics/KG tables that the backfills churn hardest.
-- **Scheduling** — a `raudio maintain` target / periodic job (a §1 Ray job?) so
+- **Scheduling** — a `rmedia maintain` target / periodic job (a §1 Ray job?) so
   it isn't a manual ritual.
 - **Mostly wiring existing SDK calls.** The LanceDB Table API already provides the
   whole toolkit: **`table.optimize(cleanup_older_than=…)`** does compaction +
   version prune + **incremental index optimization** (it folds *new* rows into the
-  existing IVF/FTS indices — the tail our current `raudio compact` leaves
+  existing IVF/FTS indices — the tail our current `rmedia compact` leaves
   unindexed; note the old `retrain=` flag is now a deprecated no-op);
   `cleanup_old_versions` for GC; `list_versions` / **`restore(version)`** for the
   "roll back a bad feature pass" case; `tags` / `branches` for named/experimental
@@ -382,7 +382,7 @@ jobs from §1.
 
 Right now every table is addressed by **hardcoded filesystem path** —
 `db / "chunks.lance"`, `db / "documents.lance"`, etc., with the root from
-`RAUDIO_DB` / the Makefile `DB`. There is **no catalog, no table registry, no
+`MEDIA_DB` / the Makefile `DB`. There is **no catalog, no table registry, no
 multi-dataset addressing** anywhere in the codebase. As the table count grows
 (already ~11) and variant builds appear, that flat directory of `.lance` folders
 stops scaling.
@@ -443,7 +443,7 @@ client while the server-side OLAP uses the extension over Lance.
 Both backend and frontend are **hardcoded against the current columns**
 (`doc_id`, `namn`, `referenskod`, `bildid`, `extraid`, `text`, `caption`,
 `text_embedding`, `frame_embedding`, … — see
-[`src/raudio/model/schema.py`](../src/raudio/model/schema.py)). Adding a field
+[`src/rmedia/model/schema.py`](../src/rmedia/model/schema.py)). Adding a field
 means touching the Pydantic models, API serializers, the zod schema, and the
 SvelteKit components. This is the main thing blocking schema evolution.
 
@@ -633,7 +633,7 @@ preserve curated, hand-tuned default views (title selection, default columns) as
 Chunking is currently **fixed upstream** by the ASR pipeline
 ([PIPELINE.md](PIPELINE.md)) — speech segments → ~30 s `AudioChunk`s. raudio
 itself **does not chunk at all**: `flatten_chunks()`
-([`src/raudio/ingest/ingest.py`](../src/raudio/ingest/ingest.py)) just iterates
+([`src/rmedia/ingest/ingest.py`](../src/rmedia/ingest/ingest.py)) just iterates
 the transcriber's pre-cut chunks and copies each one's `start`/`end`/`text`
 through verbatim — there are **no size limits, no windowing, no rechunking
 parameters**. Hence the known "one press conference floods the page" redundancy
@@ -762,7 +762,7 @@ is rebuilt or incrementally maintained under the new eventing model (§8).
 
 Retrieval today runs on **three separate embedding families**, all from
 Qwen3-VL-Embedding-2B over vLLM ([EMBEDDINGS.md](EMBEDDINGS.md),
-[`src/raudio/vllm/embedding.py`](../src/raudio/vllm/embedding.py)): `text_embedding`
+[`src/rmedia/vllm/embedding.py`](../src/rmedia/vllm/embedding.py)): `text_embedding`
 (transcript text), `frame_embedding` (chunk-level image vector), and
 `caption_embedding`. The search modes (semantic / visual / scene / hybrid /
 fused) exist partly *because* these are distinct vectors in distinct columns
@@ -795,7 +795,7 @@ licensing/serving (does it run under vLLM or need its own actor runtime?).
 
 The entire write side starts with **easytranscriber** (+ easyaligner) — the
 4-stage VAD → Whisper → wav2vec2 CTC → forced-alignment pipeline wrapped by
-`raudio transcribe` ([PIPELINE.md](PIPELINE.md)). It works, but it's a poor fit
+`rmedia transcribe` ([PIPELINE.md](PIPELINE.md)). It works, but it's a poor fit
 going forward: it's an **external dependency we don't control**, its stage-by-
 stage, directory-dumping design (`output/vad/`, `output/transcriptions/`,
 `output/emissions/`, …) is built for single-process batch runs, and it does **not
@@ -902,7 +902,7 @@ These bets reinforce each other, which is why they're one doc:
 
 Suggested sequencing: **§5 (schema flexibility)** and **§2 (maintenance)** are
 the highest leverage / lowest risk and unblock the most other work (and §2 is
-half-built — it's mostly finishing `raudio compact`). **§1 (Ray rewrite on
+half-built — it's mostly finishing `rmedia compact`). **§1 (Ray rewrite on
 KubeRay)** is the big foundational change to land before **§6/§9/§10/§11** build
 on it. **§10 (Jina Omni)** should start as an *evaluation* in parallel since it
 could simplify the schema §5 has to model. **§3/§4/§12** and the **§7/§8** infra
@@ -911,10 +911,10 @@ choices follow once the data and runtime shapes settle.
 ---
 
 > **A note on grounding:** the "today" descriptions above were written after a
-> full read of the inference stack (`src/raudio/vllm`, `features`, `ingest`,
+> full read of the inference stack (`src/rmedia/vllm`, `features`, `ingest`,
 > `cli`, `serve-all.sh`, the Makefile), the backend (`backend/**`), the
-> storage/schema layer (`src/raudio/model/schema.py`, every `lance.write_dataset`
+> storage/schema layer (`src/rmedia/model/schema.py`, every `lance.write_dataset`
 > / index call), the KG scripts (`scripts/kg/*`), and the SvelteKit frontend.
-> Where a capability already exists in embryo (`/api/columns`, `raudio compact`,
+> Where a capability already exists in embryo (`/api/columns`, `rmedia compact`,
 > the DI'd online embedder, the no-GPU FTS path) it's called out as such, so the
 > roadmap is about *finishing and reshaping* — not pretending the ground is bare.

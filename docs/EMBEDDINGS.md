@@ -9,15 +9,15 @@
 > own deep-dive in **[INVESTIGATION.md](INVESTIGATION.md)** (Part B) — read that
 > before you touch image resolution or vLLM warmup.
 
-Source of truth: [`src/raudio/vllm/embedding.py`](../src/raudio/vllm/embedding.py),
-[`src/raudio/vllm/reranker.py`](../src/raudio/vllm/reranker.py),
-[`src/raudio/vllm/image.py`](../src/raudio/vllm/image.py),
+Source of truth: [`src/rmedia/vllm/embedding.py`](../src/rmedia/vllm/embedding.py),
+[`src/rmedia/vllm/reranker.py`](../src/rmedia/vllm/reranker.py),
+[`src/rmedia/vllm/image.py`](../src/rmedia/vllm/image.py),
 [`Makefile`](../Makefile) (the `embed-server` / `rerank-server` / `*-docker`
-targets), [`src/raudio/cli/features.py`](../src/raudio/cli/features.py) +
-[`src/raudio/features/`](../src/raudio/features/) (the `feature text_embedding` /
+targets), [`src/rmedia/cli/features.py`](../src/rmedia/cli/features.py) +
+[`src/rmedia/features/`](../src/rmedia/features/) (the `feature text_embedding` /
 `feature frame_embedding` commands), [`backend/search/service.py`](../backend/search/service.py)
 (`run_search`), and the chat template
-[`src/raudio/retrieval/qwen3_vl_reranker.jinja`](../src/raudio/retrieval/qwen3_vl_reranker.jinja).
+[`src/rmedia/retrieval/qwen3_vl_reranker.jinja`](../src/rmedia/retrieval/qwen3_vl_reranker.jinja).
 
 ---
 
@@ -41,7 +41,7 @@ The Python defaults live in the client constructors (`VLLMEmbeddingClient` in
 `vllm/embedding.py`, `VLLMReranker` in `vllm/reranker.py`) and the module
 constants `EMBED_MODEL`, `RERANK_MODEL`, `DEFAULT_EMBED_URL`,
 `DEFAULT_RERANK_URL`. The vector width is `EMBED_DIM = 2048` in
-[`model/schema.py`](../src/raudio/model/schema.py) — the single source of truth.
+[`model/schema.py`](../src/rmedia/model/schema.py) — the single source of truth.
 
 **Why the full 2048-d (no Matryoshka truncation)?** Qwen3-VL-Embedding-2B emits a
 2048-d vector. You *could* slice to a shorter prefix to halve storage + index
@@ -104,7 +104,7 @@ flowchart LR
    together.
 2. **Cold start is expensive.** Loading a model takes tens of seconds and pins
    several GB of GPU memory. If that happened per CLI invocation, every
-   `raudio feature text_embedding` resume would re-pay it, and every FastAPI
+   `rmedia feature text_embedding` resume would re-pay it, and every FastAPI
    restart would re-load. A long-lived server amortizes the load — the model
    stays *warm* across all uses.
 3. **Free throughput.** A persistent server gives vLLM's continuous batcher
@@ -189,7 +189,7 @@ CDI spec not found" on NVIDIA-only hosts.
 --hf_overrides '{"architectures":["Qwen3VLForSequenceClassification"],
                  "classifier_from_token":["no","yes"],
                  "is_original_qwen3_reranker":true}'
---chat-template ./src/raudio/retrieval/qwen3_vl_reranker.jinja
+--chat-template ./src/rmedia/retrieval/qwen3_vl_reranker.jinja
 ```
 
 The reranker is **not** an embedding model — the `hf_overrides` reconfigure it as
@@ -320,7 +320,7 @@ body = {
 }
 ```
 
-On the server, [`qwen3_vl_reranker.jinja`](../src/raudio/retrieval/qwen3_vl_reranker.jinja)
+On the server, [`qwen3_vl_reranker.jinja`](../src/rmedia/retrieval/qwen3_vl_reranker.jinja)
 applies the **same** system text and the same `<Instruct>` / `<Query>` /
 `<Document>` layout. The default instruction in both places is
 `RERANK_INSTRUCTION = "Given a search query, retrieve relevant candidates that
@@ -510,20 +510,20 @@ keep the Makefile `min_pixels`/`max_pixels` pin equal to `side²`, and ensure
 
 ## 8. The offline embed CLI commands
 
-Both columns are built with one CLI verb — `raudio feature <name>` — driven by the
-`FEATURES` registry in [`features/columns.py`](../src/raudio/features/columns.py).
+Both columns are built with one CLI verb — `rmedia feature <name>` — driven by the
+`FEATURES` registry in [`features/columns.py`](../src/rmedia/features/columns.py).
 Adding a column is one entry in that dict.
 
 | Command | Reads | Writes | Index | Resumable |
 |---|---|---|---|---|
-| `raudio feature text_embedding` | `chunks.text` | `chunks.text_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
-| `raudio feature frame_embedding` | `chunk_frames.frame_blob` | `chunk_frames.frame_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | all-or-nothing (skips if column exists; `--all` rebuilds) |
-| `raudio feature caption` | `chunk_frames.frame_blob` | `chunk_frames.caption` (Gemma 4 Swedish string) via `add_columns` | FTS-able string | all-or-nothing (skips if column exists; `--all` rebuilds) |
-| `raudio feature caption_embedding` | `chunk_frames.caption` | `chunk_frames.caption_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
+| `rmedia feature text_embedding` | `chunks.text` | `chunks.text_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
+| `rmedia feature frame_embedding` | `chunk_frames.frame_blob` | `chunk_frames.frame_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | all-or-nothing (skips if column exists; `--all` rebuilds) |
+| `rmedia feature caption` | `chunk_frames.frame_blob` | `chunk_frames.caption` (Gemma 4 Swedish string) via `add_columns` | FTS-able string | all-or-nothing (skips if column exists; `--all` rebuilds) |
+| `rmedia feature caption_embedding` | `chunk_frames.caption` | `chunk_frames.caption_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
 
 `caption` is a **generative** feature: it POSTs each existing frame to the Gemma 4
 VLM you already run on `:8003` (`--url`/`--model`/`--instruction` or the
-`RAUDIO_CAPTION_*` env vars override the defaults) and stores one Swedish
+`MEDIA_CAPTION_*` env vars override the defaults) and stores one Swedish
 sentence per frame — it never re-extracts frames. `caption_embedding` then embeds
 that text into the shared 2048-d space (reusing the embed server, same as
 `text_embedding`) so `mode=scene` can search it. The Makefile wraps the pair as
@@ -566,15 +566,15 @@ rebuilding the indexes after the bulk writes.
 
 | I want to… | Look at |
 |---|---|
-| Change the embed/rerank wire format | [`vllm/embedding.py`](../src/raudio/vllm/embedding.py) / [`vllm/reranker.py`](../src/raudio/vllm/reranker.py) **and** [`qwen3_vl_reranker.jinja`](../src/raudio/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
-| Change the embedding dim / normalization | `EMBED_DIM` in [`model/schema.py`](../src/raudio/model/schema.py); `l2_normalize()` in [`vllm/image.py`](../src/raudio/vllm/image.py) |
-| Change embed image resolution | `_IMAGE_SIDE`, `_square_crop()` in [`vllm/image.py`](../src/raudio/vllm/image.py) + the Makefile pixel pin + [INVESTIGATION.md](INVESTIGATION.md) |
-| Change caption image resolution | `frame_to_data_url` / `_CAPTION_MAX_SIDE` in [`vllm/image.py`](../src/raudio/vllm/image.py) (full frame, no square crop) |
-| Change the caption model / prompt / language | `RAUDIO_CAPTION_*` env or `feature caption --model/--instruction/--url`; defaults in [`vllm/caption.py`](../src/raudio/vllm/caption.py) |
+| Change the embed/rerank wire format | [`vllm/embedding.py`](../src/rmedia/vllm/embedding.py) / [`vllm/reranker.py`](../src/rmedia/vllm/reranker.py) **and** [`qwen3_vl_reranker.jinja`](../src/rmedia/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
+| Change the embedding dim / normalization | `EMBED_DIM` in [`model/schema.py`](../src/rmedia/model/schema.py); `l2_normalize()` in [`vllm/image.py`](../src/rmedia/vllm/image.py) |
+| Change embed image resolution | `_IMAGE_SIDE`, `_square_crop()` in [`vllm/image.py`](../src/rmedia/vllm/image.py) + the Makefile pixel pin + [INVESTIGATION.md](INVESTIGATION.md) |
+| Change caption image resolution | `frame_to_data_url` / `_CAPTION_MAX_SIDE` in [`vllm/image.py`](../src/rmedia/vllm/image.py) (full frame, no square crop) |
+| Change the caption model / prompt / language | `MEDIA_CAPTION_*` env or `feature caption --model/--instruction/--url`; defaults in [`vllm/caption.py`](../src/rmedia/vllm/caption.py) |
 | Launch / configure the vLLM servers | [`Makefile`](../Makefile) — `embed-server*`, `rerank-server*` targets (the caption VLM is run externally; raudio is only its client) |
 | Change which GPU the servers use | `VLLM_GPU` (both default here) — or `EMBED_GPU` / `RERANK_GPU` to split them — in the Makefile |
 | Change search fusion / add a mode | [`backend/search/service.py`](../backend/search/service.py) — `run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`; modes in [`backend/search/spec.py`](../backend/search/spec.py) |
-| Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/raudio/vllm/) satisfying `EmbeddingClient`, wire it via `backend/clients.py` / `features/columns.py` |
-| Add a new derived column | one entry in `FEATURES` in [`features/columns.py`](../src/raudio/features/columns.py) |
-| Run the offline embed passes | `raudio feature text_embedding` / `frame_embedding` / `caption` / `caption_embedding` ([`cli/features.py`](../src/raudio/cli/features.py)) |
+| Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/rmedia/vllm/) satisfying `EmbeddingClient`, wire it via `backend/clients.py` / `features/columns.py` |
+| Add a new derived column | one entry in `FEATURES` in [`features/columns.py`](../src/rmedia/features/columns.py) |
+| Run the offline embed passes | `rmedia feature text_embedding` / `frame_embedding` / `caption` / `caption_embedding` ([`cli/features.py`](../src/rmedia/cli/features.py)) |
 | Understand the open blockers | [TODO.md](TODO.md) and [INVESTIGATION.md](INVESTIGATION.md) |

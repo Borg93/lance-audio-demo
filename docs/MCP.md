@@ -116,7 +116,7 @@ The workspace ships `.vscode/mcp.json` (gitignored) with:
   auto-deactivates tools and the model reports them "disabled".
 - **Claude Code / Desktop**: `claude mcp add raudio --transport http
   http://localhost:8000/mcp/`
-- **Remote hosts**: set `RAUDIO_MEDIA_BASE_URL` (validated `AnyHttpUrl`) to an
+- **Remote hosts**: set `MEDIA_MEDIA_BASE_URL` (validated `AnyHttpUrl`) to an
   origin the *user's browser* can reach — it lands in the clip app's CSP and
   media URLs. Unset = `http://127.0.0.1:8000`.
 

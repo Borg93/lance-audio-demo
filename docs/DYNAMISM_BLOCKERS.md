@@ -5,7 +5,7 @@
 > action** — i.e. what blocks the dynamic, modality-agnostic, schema-driven model
 > in [WHATS_LEFT §0/§5](WHATS_LEFT.md) and the low-coupling design in
 > [MODULAR_PLAN.md](MODULAR_PLAN.md). Findings are from a full read of `backend/`,
-> `frontend/`, and `src/raudio/{model,features,ingest,cli}`. Three kinds of
+> `frontend/`, and `src/rmedia/{model,features,ingest,cli}`. Three kinds of
 > coupling, deepest first:
 >
 > - **Modality** — the data model assumes *audio/transcript* (deepest; blocks
@@ -42,7 +42,7 @@ Almost every blocker is one of these. Fix the pattern, not the instance:
 
 ## Layer 1 — Schema / data model (deepest: modality coupling)
 
-`src/raudio/model/schema.py`, `features/columns.py`, `ingest/ingest.py`.
+`src/rmedia/model/schema.py`, `features/columns.py`, `ingest/ingest.py`.
 
 | # | Blocker | file:line | Blocks | Fix |
 |---|---|---|---|---|

@@ -9,11 +9,11 @@
 > [EMBEDDINGS.md](EMBEDDINGS.md) — different model, different dimension,
 > different table. Open backlog: [TODO.md](TODO.md).
 
-Source of truth: [`src/raudio/media/voiceprint.py`](../src/raudio/media/voiceprint.py)
+Source of truth: [`src/rmedia/media/voiceprint.py`](../src/rmedia/media/voiceprint.py)
 (the encoder + slicing/batching/centroid logic),
-[`src/raudio/cli/speaker.py`](../src/raudio/cli/speaker.py) (`embed-speaker-turns`,
+[`src/rmedia/cli/speaker.py`](../src/rmedia/cli/speaker.py) (`embed-speaker-turns`,
 `merge-speaker-embeddings`, `build-speakers`, `cluster-speakers`),
-[`src/raudio/model/schema.py`](../src/raudio/model/schema.py) (`VOICE_EMBED_DIM`,
+[`src/rmedia/model/schema.py`](../src/rmedia/model/schema.py) (`VOICE_EMBED_DIM`,
 `SPEAKER_EMBEDDINGS_SCHEMA`, `SPEAKERS_SCHEMA`),
 [`backend/voice/service.py`](../backend/voice/service.py) +
 [`backend/voice/router.py`](../backend/voice/router.py) +
@@ -105,7 +105,7 @@ similarity badges carry a calibration caveat.
 ## 3. The tables
 
 Two new Lance tables, both inside `transcripts_v2.lance/`, schemas in
-[`model/schema.py`](../src/raudio/model/schema.py). `VOICE_EMBED_DIM = 256` is
+[`model/schema.py`](../src/rmedia/model/schema.py). `VOICE_EMBED_DIM = 256` is
 deliberately a separate constant from the Qwen `EMBED_DIM = 2048` — the two
 spaces must never be compared.
 
@@ -116,7 +116,7 @@ spaces must never be compared.
 | Vector | `embedding` — L2-normalized 256-d float32 | `embedding` — the **duration-weighted mean** of the speaker's turn embeddings, re-L2-normalized (`voiceprint.py::duration_weighted_centroid`) |
 | Indexes | IVF_PQ cosine (`num_partitions=256`, `num_sub_vectors=16` — 16 dims each) + BTREE on `doc_id` | BTREE on `doc_id` (tiny table — kNN over it is a flat scan) |
 | Write discipline | **append-only**, one flush per video (`write_speaker_embeddings`); shards stage to `speaker_embeddings_shard{i}` | **overwrite wholesale** each `build-speakers` / `cluster-speakers` run — the table is tiny, rebuild beats merge |
-| Built by | `raudio embed-speaker-turns` (+ `merge-speaker-embeddings`) | `raudio build-speakers`, then `raudio cluster-speakers` fills `speaker_cluster` |
+| Built by | `rmedia embed-speaker-turns` (+ `merge-speaker-embeddings`) | `rmedia build-speakers`, then `rmedia cluster-speakers` fills `speaker_cluster` |
 
 ```mermaid
 flowchart TD
@@ -129,7 +129,7 @@ flowchart TD
 Both follow the `speaker_turns` rationale ([GUIDE.md §4](GUIDE.md)): separate
 append-only tables, never `merge_insert` into the wide `chunks` schema. The
 backend opens them **optionally** (`backend/state.py`) — every `/api/voice`
-route degrades to a structured 503 ("not built yet — run `raudio …`") when a
+route degrades to a structured 503 ("not built yet — run `rmedia …`") when a
 table is absent, never a 500.
 
 ---
@@ -141,16 +141,16 @@ actionable error):
 
 ```bash
 # 0. prerequisite — diarization (see REPRODUCE.md §B.5)
-uv run raudio --db transcripts_v2.lance extract-speaker-turns --audio-root input/sv
-uv run raudio --db transcripts_v2.lance merge-speaker-turns          # if sharded
+uv run rmedia --db transcripts_v2.lance extract-speaker-turns --audio-root input/sv
+uv run rmedia --db transcripts_v2.lance merge-speaker-turns          # if sharded
 
 # 1. per-turn voiceprints (GPU; shardable — one process per --shard-index)
-uv run raudio --db transcripts_v2.lance embed-speaker-turns \
+uv run rmedia --db transcripts_v2.lance embed-speaker-turns \
     --audio-root input/sv --num-shards 12 --shard-index 0   # … repeat for 1..11
-uv run raudio --db transcripts_v2.lance merge-speaker-embeddings
+uv run rmedia --db transcripts_v2.lance merge-speaker-embeddings
 
 # 2. per-speaker centroids (CPU, seconds)
-uv run raudio --db transcripts_v2.lance build-speakers
+uv run rmedia --db transcripts_v2.lance build-speakers
 
 # 3. global identity clusters (CPU, needs the [atlas] extra for EVōC)
 uv run --extra atlas raudio --db transcripts_v2.lance cluster-speakers --seed 42 --validate
@@ -389,10 +389,10 @@ page, an atlas voice space) is tracked in [TODO.md](TODO.md).
 
 | I want to… | Look at |
 |---|---|
-| Change the voice encoder / batching / centroid math | [`media/voiceprint.py`](../src/raudio/media/voiceprint.py) (`VoiceEncoder`, `embed_turn_slices`, `duration_weighted_centroid`) |
-| Change the voice vector width / table schemas | `VOICE_EMBED_DIM`, `SPEAKER_EMBEDDINGS_SCHEMA`, `SPEAKERS_SCHEMA` in [`model/schema.py`](../src/raudio/model/schema.py) |
-| Run / resume the offline passes | `embed-speaker-turns`, `merge-speaker-embeddings`, `build-speakers`, `cluster-speakers` in [`cli/speaker.py`](../src/raudio/cli/speaker.py) |
-| Change the identity-layer selection / validation pair | `select_identity_layer`, `same_doc_merge_rate`, `VALIDATION_CONFIRMED_PAIR` in [`media/cluster.py`](../src/raudio/media/cluster.py) |
+| Change the voice encoder / batching / centroid math | [`media/voiceprint.py`](../src/rmedia/media/voiceprint.py) (`VoiceEncoder`, `embed_turn_slices`, `duration_weighted_centroid`) |
+| Change the voice vector width / table schemas | `VOICE_EMBED_DIM`, `SPEAKER_EMBEDDINGS_SCHEMA`, `SPEAKERS_SCHEMA` in [`model/schema.py`](../src/rmedia/model/schema.py) |
+| Run / resume the offline passes | `embed-speaker-turns`, `merge-speaker-embeddings`, `build-speakers`, `cluster-speakers` in [`cli/speaker.py`](../src/rmedia/cli/speaker.py) |
+| Change the identity-layer selection / validation pair | `select_identity_layer`, `same_doc_merge_rate`, `VALIDATION_CONFIRMED_PAIR` in [`media/cluster.py`](../src/rmedia/media/cluster.py) |
 | Change anchor resolution / the kNN / the chunk join | [`backend/voice/service.py`](../backend/voice/service.py) (`similar_voices`, `rank_similar_turns`, `_chunk_for_turn`) |
 | Change the upload caps / decode path | `_MAX_UPLOAD_BYTES`, `_UPLOAD_EMBED_CAP_S`, `_decode_upload_wav` in [`backend/voice/service.py`](../backend/voice/service.py) + [`backend/voice/encoder.py`](../backend/voice/encoder.py) |
 | Change the response shapes | [`backend/schemas/voice.py`](../backend/schemas/voice.py) + the Zod mirrors in [`frontend/src/lib/api.ts`](../frontend/src/lib/api.ts) |

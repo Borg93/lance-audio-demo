@@ -23,7 +23,7 @@ paths. Pick one:
 
 > [!NOTE]
 > **Database name.** The default DB is already **`transcripts_v2.lance`** (the
-> `Makefile` `DB ?=` default and the `raudio --db` CLI default both point at it).
+> `Makefile` `DB ?=` default and the `rmedia --db` CLI default both point at it).
 > The commands below still pass `DB=transcripts_v2.lance` explicitly for clarity;
 > override `DB=…` only to build a throwaway or alternate corpus.
 
@@ -172,7 +172,7 @@ flowchart TD
 
 | Column(s) | Written by | From |
 |---|---|---|
-| `doc_id · speech_id · chunk_id · audio_path · start · end · duration · text · sample_rate · audio_duration · audio_frames · num_logits · language · language_prob · alignments_json · metadata` | `make ingest-full` (`raudio ingest`) | the per-video **alignment JSON** from `make transcribe` (easytranscriber 0.2.3 + easyaligner 0.2.3: pyannote VAD → KB-Whisper → wav2vec2-large-voxrex-swedish CTC emissions → forced align). `doc_id`=SHA1(audio_path); `text` is Swedish-FTS-indexed; `alignments_json` is word-level JSONB |
+| `doc_id · speech_id · chunk_id · audio_path · start · end · duration · text · sample_rate · audio_duration · audio_frames · num_logits · language · language_prob · alignments_json · metadata` | `make ingest-full` (`rmedia ingest`) | the per-video **alignment JSON** from `make transcribe` (easytranscriber 0.2.3 + easyaligner 0.2.3: pyannote VAD → KB-Whisper → wav2vec2-large-voxrex-swedish CTC emissions → forced align). `doc_id`=SHA1(audio_path); `text` is Swedish-FTS-indexed; `alignments_json` is word-level JSONB |
 | `referenskod · namn · bildid · extraid` | `make ingest-full` | **`video_batcher.csv`**, keyed by `bildid` (= `audio_path` stem) |
 | `text_embedding` (2048-d) | `make embed-chunks` (`feature text_embedding`) | `chunks.text` → embed server `:8001` (Qwen3-VL-Embedding-2B) |
 | `frame_embedding` (2048-d) | `make atlas-visual` (join) | `chunk_frames.frame_embedding` @ frame_idx=0 |
@@ -181,7 +181,7 @@ flowchart TD
 | `atlas_img_x/y/cluster` | `make atlas-visual` | EVōC over `frame_embedding` |
 | `atlas_cap_x/y/cluster` | `make atlas-caption` | EVōC over `caption_embedding` |
 | `topic_l0…topic_l{N} · doc_topic` | `make topics` (`feature topics`) | Toponymy clusters over the atlas map, named by Gemma `:8003` (isolated PEP-723 worker) |
-| `summary` *(not built on live DB)* | `raudio feature summary` | `chunks.text` → instruct LLM |
+| `summary` *(not built on live DB)* | `rmedia feature summary` | `chunks.text` → instruct LLM |
 
 **`chunk_frames.lance`** — one representative frame per chunk (append-only, separate table).
 
@@ -208,7 +208,7 @@ flowchart TD
 
 | Column(s) | Written by | From |
 |---|---|---|
-| `doc_id · turn_id · speaker_label · start · end` | `make speaker-turns` (`raudio extract-speaker-turns`) | source MP4 (`--audio-root`) → **pyannote** `speaker-diarization-community-1`, in-process. `speaker_label` is anonymous & **per-video only**. No vector column → no IVF index (optional `doc_id` BTREE) |
+| `doc_id · turn_id · speaker_label · start · end` | `make speaker-turns` (`rmedia extract-speaker-turns`) | source MP4 (`--audio-root`) → **pyannote** `speaker-diarization-community-1`, in-process. `speaker_label` is anonymous & **per-video only**. No vector column → no IVF index (optional `doc_id` BTREE) |
 
 > **`video_batcher.csv`** (local-only, **gitignored** — `.gitignore:32`; a fresh
 > clone does **not** have it) is the one human-curated bootstrap input,
@@ -317,7 +317,7 @@ print('turns:', ds.count_rows(), '| videos:', len(set(ds.to_table(columns=['doc_
 
 > **No vector reindex.** `speaker_turns` carries **no** embedding column, so there
 > is nothing to IVF-index and **no `feature … embedding` step** for it. Optional
-> housekeeping only: `make compact DB=$DB TABLE=speaker_turns` (=`raudio --db $DB
+> housekeeping only: `make compact DB=$DB TABLE=speaker_turns` (=`rmedia --db $DB
 > --table speaker_turns compact`) consolidates the per-video append fragments
 > (exactly like `chunk_frames`), and a scalar **BTREE on `doc_id`** speeds the
 > per-video lookup at full-corpus scale.
@@ -391,7 +391,7 @@ What it brings up (idempotent — skips any port already healthy):
 |---|---|---|---|
 | vLLM embed | 8001 | `make embed-server` | `VLLM_GPU` (default 0) |
 | vLLM rerank | 8002 | `make rerank-server` | `VLLM_GPU` |
-| FastAPI backend | 8000 | `raudio --db $DB serve` | — |
+| FastAPI backend | 8000 | `rmedia --db $DB serve` | — |
 | Frontend (Bun) | 5274 | `frontend/server.ts` (prod build, proxies `/api`) | — |
 
 > FTS-only / search-only? You can skip the vLLM servers and run just `make
@@ -420,7 +420,7 @@ uv run --with numpy python scripts/move_to_s3.py transcripts_v2.lance \
 # 3. Serve the backend from S3 (env only — no code change).
 MEDIA_S3_ENDPOINT=http://127.0.0.1:9000 \
 MEDIA_S3_ACCESS_KEY_ID=<key> MEDIA_S3_SECRET_ACCESS_KEY=<secret> \
-MEDIA_S3_DB_ROOT=s3://lance-media RAUDIO_DB=transcripts_v2.lance \
+MEDIA_S3_DB_ROOT=s3://lance-media MEDIA_DB=transcripts_v2.lance \
     uv run uvicorn backend.app:app --host 127.0.0.1 --port 8000
 ```
 

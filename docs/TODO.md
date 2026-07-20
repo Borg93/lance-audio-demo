@@ -18,9 +18,9 @@ This file replaces the old root `TODO.md` (a closed-item changelog) and `todo2.m
 - The `make speaker-turns` batch is backfilling `speaker_turns.lance` (resumable,
   ~2–4 min/video on a shared GPU → ~1–2 days for all ~1,576). Shipped + live for
   done videos (Speakers tab).
-- ✅ **Sharded diarization is shipped** — `raudio extract-speaker-turns --num-shards N
+- ✅ **Sharded diarization is shipped** — `rmedia extract-speaker-turns --num-shards N
   --shard-index i` writes each disjoint slice to `speaker_turns_shard{i}.lance`, folded
-  back with `raudio merge-speaker-turns` (no concurrent-write race). NOTE: the
+  back with `rmedia merge-speaker-turns` (no concurrent-write race). NOTE: the
   `make speaker-turns` target itself does not pass shard flags; sharding is a manual
   N-process launch (one per GPU).
 - 📋 **On-demand diarization** — diarize a video the first time it's opened + cache,
@@ -37,7 +37,7 @@ floods the page" redundancy (adjacent 30 s clips are near-identical).
 
 1. 📋 **Group-by-video** (S, high) — collapse the result list by `doc_id` (frontend
    reshape; optional backend `per_doc_cap`). Hits already carry `doc_id`+`namn`.
-2. 📋 **Uniqueness / near-dup collapse** (M, high) — `raudio feature uniqueness` over an
+2. 📋 **Uniqueness / near-dup collapse** (M, high) — `rmedia feature uniqueness` over an
    embedding column; retrieval-level dedup of adjacent chunks.
 3. 📋 **More-like-this** (M, high) — similarity sort from a hit (reuses `_vector_search`/
    stored embeddings; zero new data/GPU).
