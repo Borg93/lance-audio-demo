@@ -195,10 +195,12 @@
   // its own controls only at init — so bump this key to REMOUNT it, re-initializing the
   // query box / mode dials from the applied view (else the controls show the old query
   // and the next manual search would silently discard the view).
-  let searchBarKey = $state(0);
+  // Bumped on every EXTERNAL spec replacement so the SearchBar re-adopts it
+  // (its own submit echoes must not — see the bar's adoptSignal prop).
+  let searchBarAdopt = $state(0);
   function applySavedView(next: SearchSpec) {
     void runSearch(next);
-    searchBarKey += 1;
+    searchBarAdopt += 1;
   }
 
   // Read→BATCH handoff (bulk/auto-labeling, the 3rd LabelOp mode): enqueue a producer
@@ -719,9 +721,7 @@
 
 <div class="grid h-full grid-rows-[auto_1fr] min-h-0">
   <div class="border-b border-border bg-card/40">
-    {#key searchBarKey}
-      <SearchBar bind:spec onsubmit={runSearch} />
-    {/key}
+    <SearchBar bind:spec onsubmit={runSearch} adoptSignal={searchBarAdopt} />
     <div class="flex items-center justify-end px-6 pb-1">
       <SavedViews {spec} onapply={applySavedView} />
     </div>

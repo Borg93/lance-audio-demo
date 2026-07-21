@@ -7,7 +7,11 @@
   import { activeView } from '$lib/api';
   import { graph } from '$lib/workflow/graph.svelte';
   import { exportColumns, exportHits } from '$lib/workflow/export';
-  import { saveTagsAsAnnotations, tagBatchFromTaggedHits } from '$lib/labeling/tag-writer';
+  import {
+    saveTagsAsAnnotations,
+    tagBatchFromTaggedHits,
+    tagRemovesFromEntries,
+  } from '$lib/labeling/tag-writer';
   import NodeShell from './NodeShell.svelte';
 
   let { id, selected }: NodeProps = $props();
@@ -22,19 +26,31 @@
   // (one merge_insert version) so they're reviewable in the annotator, not just an
   // export column. Only tagged rows are sent (idempotent by deterministic id).
   const taggedCount = $derived(hits.filter((h) => graph.tags.forHit(h).length > 0).length);
+  // Un-tags queue independently of the visible hits — a removes-only save must stay reachable.
+  const removedCount = $derived(graph.tags.removedEntries().length);
   let tagMsg = $state<string | null>(null);
+  let tagSaving = $state(false);
   async function saveTags(): Promise<void> {
+    if (tagSaving) return; // double-click guard — one batch, one Lance version
     const batch = tagBatchFromTaggedHits(hits, activeView().keyFields, (h) => graph.tags.forHit(h));
-    if (!batch.adds.length) {
+    // Snapshot the queue at build time: only THESE entries are flushed on success,
+    // so an un-tag queued while this save is in flight survives for the next one.
+    const sentRemoved = graph.tags.removedEntries();
+    batch.removes = tagRemovesFromEntries(sentRemoved, activeView().keyFields);
+    if (!batch.adds.length && !batch.removes.length) {
       tagMsg = 'no tags to save';
       return;
     }
+    tagSaving = true;
     tagMsg = 'saving…';
     try {
       const r = await saveTagsAsAnnotations(batch, activeView().datasetParam() ?? undefined);
+      graph.tags.flushRemoved(sentRemoved);
       tagMsg = `saved ${r.saved} → v${r.version}`;
     } catch (e) {
       tagMsg = e instanceof Error ? e.message : 'save failed';
+    } finally {
+      tagSaving = false;
     }
   }
 </script>
@@ -71,7 +87,7 @@
       <button
         type="button"
         class="nodrag inline-flex items-center justify-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-        disabled={taggedCount === 0}
+        disabled={tagSaving || (taggedCount === 0 && removedCount === 0)}
         title="Persist the run's chunk-tags as reviewable annotation rows"
         onclick={(e) => {
           e.stopPropagation();

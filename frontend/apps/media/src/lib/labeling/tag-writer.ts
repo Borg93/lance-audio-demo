@@ -53,6 +53,24 @@ export function tagBatchFromTaggedHits(
   return { adds };
 }
 
+/**
+ * Map queued un-tags → the batch's `removes` leg, with the same raw-key-column
+ * identity mapping as the adds. Entries carry the hit captured at removal time.
+ */
+export function tagRemovesFromEntries(
+  entries: readonly { hit: Record<string, unknown>; labels: readonly string[] }[],
+  keyFields: readonly string[],
+): TagWrite[] {
+  const [docKey, ...rest] = keyFields;
+  return entries
+    .filter((e) => e.labels.length)
+    .map((e) => ({
+      doc_id: String(e.hit[docKey ?? ""] ?? ""),
+      keys: rest.map((k) => Number(e.hit[k])),
+      labels: [...e.labels],
+    }));
+}
+
 /** POST a TagBatch to persist chunk tags as annotation rows (one Lance version). */
 export async function saveTagsAsAnnotations(batch: TagBatch, dataset?: string): Promise<SaveResult> {
   const q = dataset ? `?dataset=${encodeURIComponent(dataset)}` : "";

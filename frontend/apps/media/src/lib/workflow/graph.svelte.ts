@@ -221,6 +221,7 @@ class WorkflowGraph {
       "search-scene": query("scene", "talarstol"),
       "search-said": query("fts", "skatt"),
       results: defaultConfig(),
+      export: defaultConfig(),
     };
     this.runtime = Object.fromEntries(Object.keys(this.config).map((id) => [id, blankRuntime()]));
     this.tags.reset();
@@ -231,6 +232,7 @@ class WorkflowGraph {
       { id: "search-scene", type: "search", position: { x: 560, y: 100 }, data: {} },
       { id: "search-said", type: "search", position: { x: 880, y: 160 }, data: {} },
       { id: "results", type: "results", position: { x: 1200, y: 100 }, data: {} },
+      { id: "export", type: "export", position: { x: 1520, y: 100 }, data: {} },
     ];
     // No `animated` here — edge animation is now run-driven (the canvas pulses
     // edges feeding a running node), so seeding it would just be stripped.
@@ -259,6 +261,7 @@ class WorkflowGraph {
         label: "refine",
       },
       { id: "e-said-res", source: "search-said", target: "results" },
+      { id: "e-res-exp", source: "results", target: "export" },
     ];
     this.seq = 0;
     this.running = false;

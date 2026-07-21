@@ -4,14 +4,20 @@
   import HelpPopover from './help-popover.svelte';
   import SearchSettings from './search-settings.svelte';
   import { activeView, type SearchSpec, type SearchMode } from '$lib/api';
+  import { untrack } from 'svelte';
   import { voiceSearch } from '$lib/voice-search.svelte';
   import { AudioLines, Loader2, Paperclip, Search, X, ImagePlus } from 'lucide-svelte';
 
   type Props = {
     spec: SearchSpec;
     onsubmit?: (spec: SearchSpec) => void;
+    /** Bump when the spec was replaced EXTERNALLY (SavedViews apply, voice flows):
+     *  the bar re-adopts the spec into its dials. Echoes of the bar's own submit
+     *  must NOT bump — adoptSpec is a lossy inverse of buildSpec, so adopting an
+     *  echo would flip custom vector-space/image modes and reset latent dials. */
+    adoptSignal?: number;
   };
-  let { spec = $bindable(), onsubmit }: Props = $props();
+  let { spec = $bindable(), onsubmit, adoptSignal = 0 }: Props = $props();
 
   /**
    * `kind` (Keyword | Vector | Hybrid) maps to the backend mode; `style`
@@ -19,29 +25,56 @@
    * plain strings so they bind cleanly to the shadcn Select/RadioGroup.
    * Internal values stay 'meaning'/'both' to map onto modes semantic/hybrid.
    */
-  let kind = $state<string>(
-    spec.mode === 'semantic'
-      ? 'meaning'
-      : spec.mode === 'scene' || spec.mode === 'scene_fts'
-        ? 'scene'
-        : spec.mode === 'fts'
-          ? 'keyword'
-          : 'both',
-  );
+  let kind = $state<string>('keyword');
   // For the Scene kind: search the caption field by meaning (vector) or keyword (BM25).
-  let sceneMethod = $state<string>(spec.mode === 'scene_fts' ? 'fts' : 'vector');
-  let style = $state<string>(spec.phrase ? 'phrase' : spec.fuzziness === 2 ? 'fuzzy' : 'loose');
-  let rerank = $state(spec.rerank ?? false);
-  let rerankN = $state(String(spec.rerankN ?? 20));
-  let resultN = $state(String(spec.n ?? 100));
+  let sceneMethod = $state<string>('vector');
+  let style = $state<string>('loose');
+  let rerank = $state(false);
+  let rerankN = $state('20');
+  let resultN = $state('100');
   // Hybrid blend: 0 = pure FTS, 100 = pure vector; null = parameter-free RRF.
-  let weightPct = $state<number | null>(
-    spec.weight === undefined || spec.weight === null ? null : Math.round(spec.weight * 100),
-  );
-  let q = $state(spec.q);
+  let weightPct = $state<number | null>(null);
+  let q = $state('');
   // Optional separate text for the VECTOR leg of hybrid; falls back to `q`.
-  let qVec = $state(spec.qVec ?? '');
-  let imageFile = $state<File | null>(spec.image ?? null);
+  let qVec = $state('');
+  let imageFile = $state<File | null>(null);
+
+  /** The ONE spec→locals mapping — at init and whenever the spec is replaced
+   *  externally (SavedViews apply, voice/atlas flows), so the bar always shows
+   *  what will actually run. Replaces the parent's old force-remount hack. */
+  function adoptSpec(s: SearchSpec): void {
+    kind =
+      s.mode === 'semantic'
+        ? 'meaning'
+        : s.mode === 'scene' || s.mode === 'scene_fts'
+          ? 'scene'
+          : s.mode === 'fts'
+            ? 'keyword'
+            : 'both';
+    sceneMethod = s.mode === 'scene_fts' ? 'fts' : 'vector';
+    style = s.phrase ? 'phrase' : s.fuzziness === 2 ? 'fuzzy' : 'loose';
+    rerank = s.rerank ?? false;
+    rerankN = String(s.rerankN ?? 20);
+    resultN = String(s.n ?? 100);
+    weightPct = s.weight === undefined || s.weight === null ? null : Math.round(s.weight * 100);
+    q = s.q;
+    qVec = s.qVec ?? '';
+    imageFile = s.image ?? null;
+  }
+  adoptSpec(spec);
+
+  // Resync ONLY when the parent signals an external replacement. Value-based echo
+  // detection is inherently ambiguous (applying a saved view identical to the last
+  // submit looks exactly like the submit's own echo), so the signal is explicit.
+  // `untrack` keeps `spec` out of the effect's deps — echoes never re-run it.
+  // Initial value IS the intent (baseline at mount) — untrack documents that.
+  let lastSignal = untrack(() => adoptSignal);
+  $effect(() => {
+    if (adoptSignal !== lastSignal) {
+      lastSignal = adoptSignal;
+      untrack(() => adoptSpec(spec));
+    }
+  });
 
   // Title-case a raw vector-space key for a dial label ('audio' → 'Audio',
   // 'voice_print' → 'Voice Print').
