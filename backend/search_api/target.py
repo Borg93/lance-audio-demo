@@ -111,13 +111,20 @@ def resolve_target(handle: DatasetHandle) -> SearchTarget:
     search = declared.search
     if search is None:
         raise ValidationError("dataset has no search bindings")
-    row_info = handle.descriptor.tables.get(search.row_table)
-    if row_info is None:
-        # The registry validates descriptors at load, so this is a stale-handle
-        # race (table dropped after load), surfaced as a client-visible 400.
-        raise ValidationError("search row table missing from dataset")
 
-    row_tbl = handle.db.open_table(search.row_table)
+    # Open FIRST, then consult the cached descriptor: the open is ground truth,
+    # and syncing it into the cache heals the stale-handle race (a row table
+    # rebuilt or created after the dataset was first opened). Only a genuinely
+    # missing table maps to 400 — infra faults (S3, corrupt manifest) stay 500s.
+    try:
+        row_tbl = handle.db.open_table(search.row_table)
+    except (ValueError, FileNotFoundError, OSError) as e:
+        msg = str(e).lower()
+        if "not found" in msg or "does not exist" in msg:
+            raise ValidationError("search row table missing from dataset") from e
+        raise
+    handle.sync_table_info(search.row_table, int(row_tbl.version))
+    row_info = handle.descriptor.tables[search.row_table]
     tables: dict[str, Any] = {search.row_table: row_tbl}
     for binding in search.vectors.values():
         if binding.table in tables:

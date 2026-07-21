@@ -68,9 +68,12 @@ def doc_id_for_audio_path(db_path: Path, table: str, audio_path: str) -> str | N
     chunks_path = db_path / f"{table}.lance"
     if not chunks_path.exists():
         return None
+    # Escape quotes at render time (rmedia can't import backend.lancekit.predicate);
+    # % / _ stay live — the suffix wildcard IS the semantics here.
+    escaped = audio_path.replace("'", "''")
     rows = (
         lance.dataset(str(chunks_path))
-        .to_table(columns=["doc_id"], filter=f"audio_path LIKE '%{audio_path}'", limit=1)
+        .to_table(columns=["doc_id"], filter=f"audio_path LIKE '%{escaped}'", limit=1)
         .to_pylist()
     )
     return rows[0]["doc_id"] if rows else None

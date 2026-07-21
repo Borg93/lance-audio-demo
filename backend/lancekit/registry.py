@@ -15,10 +15,11 @@ import threading
 from pathlib import Path
 
 import lancedb
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from backend.lancekit import store
 from backend.lancekit.descriptor import DatasetDescriptor, load_dataset_descriptor
+from backend.lancekit.introspect import table_info
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +42,41 @@ class DatasetHandle(BaseModel):
     descriptor: DatasetDescriptor
     storage_options: dict[str, str] | None = None
 
+    _sync_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
     def table_uri(self, table: str) -> str:
         """The ``<name>.lance`` URI of one table (URI-safe join, no Path collapse)."""
         return store.join(self.uri, f"{table}.lance")
 
-    def refresh_descriptor(self, descriptor_dir: str | Path) -> None:
-        self.descriptor = load_dataset_descriptor(
-            self.uri, self.id, descriptor_dir, storage_options=self.storage_options
-        )
+    def sync_table_info(self, table: str, observed_version: int) -> None:
+        """Fold runtime drift back into the cached descriptor — best-effort.
+
+        Called by the per-request open seams when they observe a table version the
+        cached :class:`TableInfo` doesn't know (a write bumped it) or a table the
+        descriptor has never seen (created after first ``get()``). Re-introspects
+        ONLY that table — a full descriptor reload would rescan every table after
+        every annotations save.
+
+        The tables dict is rebound copy-on-write (never mutated in place) so
+        concurrent readers iterating it can't hit ``RuntimeError``. An identity
+        re-check under the lock makes any concurrent refresh satisfy the waiting
+        observers instead of stampeding serial re-introspections. Introspection
+        failures are swallowed (warning): the caller already holds a good open —
+        a stale cache must never fail its request. Known limit: a drop+re-create
+        landing on the same version number is indistinguishable from no drift.
+        """
+        info = self.descriptor.tables.get(table)
+        if info is not None and info.version == observed_version:
+            return
+        with self._sync_lock:
+            if self.descriptor.tables.get(table) is not info:
+                return  # someone refreshed while we waited — their read is current
+            try:
+                fresh = table_info(self.table_uri(table), storage_options=self.storage_options)
+            except Exception:  # noqa: BLE001 — freshness is opportunistic, never fatal
+                logger.warning("table_info sync failed for %s/%s", self.id, table, exc_info=True)
+                return
+            self.descriptor.tables = {**self.descriptor.tables, table: fresh}
 
 
 class UnknownDatasetError(LookupError):

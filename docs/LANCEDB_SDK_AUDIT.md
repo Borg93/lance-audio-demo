@@ -110,11 +110,21 @@ real blob item is **data-side and already built**: run `rmedia materialize-blobs
 
 ## Backlog summary (order of value)
 
-1. **[P1] Shared predicate helper in lancekit** + `validate_doc_key` validation-only +
-   `cluster.py` LIKE fix (kills the 7-way drift and the latent escaped-identity bug).
-2. **[P1] Wire `DatasetHandle.refresh_descriptor`** on observed version drift (the real
-   stale-state residue; no SDK knob fixes an app-level cache).
+1. **[P1] Shared predicate helper in lancekit — DONE** (`lancekit/predicate.py`:
+   `quote_literal/eq/ne/isin/and_`; ten sites migrated — the sweep found three more than
+   the probe's seven — `validate_doc_key` validation-only, `cluster.py` LIKE fixed).
+   Migration note: for quote-containing keys under a *permissive* descriptor pattern,
+   stored identity/tag-id bytes change from escaped to raw (the correct bytes); the
+   default pattern admits no quotes, so shipped datasets are byte-identical.
+2. **[P1] Descriptor drift-sync — DONE** (`DatasetHandle.sync_table_info`, replacing the
+   dead `refresh_descriptor`): per-table re-introspection on observed version drift at
+   both open seams (`table_dataset`, `resolve_target`); copy-on-write, best-effort,
+   stampede-guarded.
 3. **[P2] Annotations version GC** (`cleanup_old_versions` with retention ≥ audit
    horizon) + version tags for review milestones — as a scheduled maintain step.
 4. **[P2] `rmedia materialize-blobs`** run for the S3 dataset (data-side; path exists).
-5. **[watch] `Session` shared cache** — only if per-request open cost profiles hot.
+5. **[P3] `describe_indices()` migration** — pylance 7.0 deprecates `list_indices()`
+   (used in `lancekit/introspect.py`). NOT drop-in: the new `IndexDescription` renames
+   `type`→`type_url` (a proto URL, needs parsing) and `fields` becomes numeric ids
+   (`field_names` carries the names) — migrate deliberately with IndexInfo consumers.
+6. **[watch] `Session` shared cache** — only if per-request open cost profiles hot.

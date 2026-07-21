@@ -12,25 +12,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from backend.lancekit.predicate import eq
+
 # The one filterable with non-equality semantics: a topic name exact-matches ANY
 # of the row table's nested topic layer columns (``topic_l0`` … ``topic_lN``),
 # so a treemap node at any depth filters the rows tagged with that name.
 TOPIC_FILTER = "topic"
 _TOPIC_LAYER_PREFIX = "topic_l"
-
-
-def sql_quote(value: str) -> str:
-    """Escape single quotes for inlining a value in a SQL string literal."""
-    return value.replace("'", "''")
-
-
-def sql_literal(value: object) -> str:
-    """Render a Python key/filter value as a SQL literal (str quoted, numbers bare)."""
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, int | float):
-        return str(value)
-    return f"'{sql_quote(str(value))}'"
 
 
 def topic_layer_columns(schema_names: Sequence[str]) -> list[str]:
@@ -90,10 +78,10 @@ def build_where_clause(
             continue
         if field == TOPIC_FILTER:
             if topic_columns:
-                ors = " OR ".join(f"{col} = '{sql_quote(value)}'" for col in topic_columns)
+                ors = " OR ".join(eq(col, value) for col in topic_columns)
                 clauses.append(f"({ors})")
             continue
-        clauses.append(f"{field} = '{sql_quote(value)}'")
+        clauses.append(eq(field, value))
     if raw and raw.strip():
         clauses.append(f"({raw})")
     return " AND ".join(clauses) if clauses else None

@@ -13,8 +13,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from backend.lancekit.predicate import and_, eq, isin
 from backend.search_api.constants import REPRESENTATIVE_FRAME_INDEX
-from backend.search_api.filters import sql_literal
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -93,8 +93,9 @@ def attach_captions(
     # scan (~75ms, 2.4x faster, verified identical output). We over-fetch the
     # matched docs' frame-0 rows and pick out the exact keys in Python below.
     doc_field = key_fields[0]
-    doc_list = ",".join(sorted({sql_literal(k[0]) for k in keys}))
-    key_filter = f"{doc_field} IN ({doc_list}) AND frame_idx = {REPRESENTATIVE_FRAME_INDEX}"
+    key_filter = and_(
+        isin(doc_field, (k[0] for k in keys)), eq("frame_idx", REPRESENTATIVE_FRAME_INDEX)
+    )
     try:
         rows = (
             frame_tbl.to_lance()

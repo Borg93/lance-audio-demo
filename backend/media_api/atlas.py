@@ -26,6 +26,7 @@ from backend.core.exceptions import NotFoundError, ValidationError
 from backend.deps import StateDep
 from backend.lancekit.alignments import parse_alignments_json
 from backend.lancekit.descriptor import AtlasSpace, Declared
+from backend.lancekit.predicate import and_, eq, isin
 from backend.lancekit.registry import DatasetHandle
 from backend.media_api.media import (
     FRAME_INDEX_COLUMN,
@@ -201,11 +202,10 @@ def _attach_frame_captions(handle: DatasetHandle, rows: list[dict[str, Any]]) ->
             # membership scan (~2.4x faster, verified on the old corpus). We
             # over-fetch the matched docs' frame-0 rows and pick out the exact
             # chunks in Python. frame_idx=0 = the representative caption frame.
-            docs = {str(r[identity.doc_key]).replace("'", "''") for r in batch}
-            doc_list = ",".join(f"'{d}'" for d in docs)
+            docs = {str(r[identity.doc_key]) for r in batch}
             frame_rows = ds.to_table(
                 columns=[identity.doc_key, *other_keys, column],
-                filter=f"{identity.doc_key} IN ({doc_list}) AND {FRAME_INDEX_COLUMN} = 0",
+                filter=and_(isin(identity.doc_key, docs), eq(FRAME_INDEX_COLUMN, 0)),
             ).to_pylist()
             by_key = {hit_key(r): r.get(column) for r in frame_rows}
             for hit in batch:

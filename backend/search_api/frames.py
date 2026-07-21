@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING, Any
 from lancedb.query import MatchQuery
 
 from backend.core.exceptions import ValidationError
+from backend.lancekit.predicate import eq
 from backend.search_api.constants import (
     VECTOR_MAX_NPROBES,
     VECTOR_NPROBES,
     VECTOR_REFINE_FACTOR,
 )
-from backend.search_api.filters import sql_literal
 from backend.search_api.postprocess import RowKey, row_key
 
 #: Cap on OR-of-ANDs composite-key clauses in the frame→row join — Lance's
@@ -175,7 +175,7 @@ def frames_to_row_hits(
     key_filter = " OR ".join(
         "("
         + " AND ".join(
-            f"{field} = {sql_literal(value)}"
+            eq(field, value)
             for field, value in zip(target.key_fields, key, strict=True)
         )
         + ")"

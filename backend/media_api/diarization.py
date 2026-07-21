@@ -20,6 +20,7 @@ from fastapi import APIRouter
 from backend.core.exceptions import ValidationError
 from backend.deps import StateDep
 from backend.lancekit import store
+from backend.lancekit.predicate import eq
 from backend.schemas.diarization import DiarizationResponse, SpeakerTurn
 from backend.state import dataset_handle
 
@@ -58,7 +59,7 @@ def get_diarization(doc_id: str, state: StateDep, dataset: str | None = None) ->
         return _not_built(doc_id)
     rows = (
         lance.dataset(uri, storage_options=handle.storage_options)
-        .to_table(filter=f"{_TURN_DOC} = '{doc_id}'")
+        .to_table(filter=eq(_TURN_DOC, doc_id))
         .to_pylist()
     )
     if not rows:

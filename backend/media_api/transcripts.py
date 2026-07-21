@@ -18,6 +18,7 @@ from backend.core.exceptions import NotFoundError
 from backend.deps import StateDep
 from backend.lancekit.alignments import parse_alignments_json
 from backend.lancekit.descriptor import Declared
+from backend.lancekit.predicate import eq
 from backend.media_api.media import (
     DatasetParam,
     chunk_key_filter,
@@ -69,7 +70,7 @@ def doc_transcript(doc_id: str, state: StateDep, dataset: DatasetParam = None) -
 
     ds = table_dataset(handle, row_table)
     rows = ds.to_table(
-        columns=columns, filter=f"{identity.doc_key} = '{doc_id}'"
+        columns=columns, filter=eq(identity.doc_key, doc_id)
     ).to_pylist()
     # Order by the contract field (declared start time) directly — key fields are
     # source-assigned ids, not sequential indexes, so they are only the stable

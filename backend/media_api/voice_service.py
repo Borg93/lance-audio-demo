@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from backend.core.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
 from backend.lancekit import store
+from backend.lancekit.predicate import and_, eq, isin, ne
 from backend.media_api.wespeaker import (
     MIN_TURN_DURATION_S,
     TARGET_SAMPLE_RATE,
@@ -100,11 +101,6 @@ _IDENTITY_COLUMNS = [_TURN_DOC, _TURN_SPEAKER, _SPEAKER_N_TURNS, _SPEAKER_TOTAL_
 
 # Frames-capability writer contract: the representative caption frame is index 0.
 _FRAME_IDX = "frame_idx"
-
-
-def _sql_quote(value: str) -> str:
-    """Escape single quotes for inlining a value in a SQL string literal."""
-    return value.replace("'", "''")
 
 
 class VoiceBindings(BaseModel):
@@ -251,7 +247,7 @@ def _turn_row_to_anchor(
 def _resolve_turn_anchor(
     emb_tbl: Any, doc_id: str, turn_id: int, embedding_column: str
 ) -> tuple[list[float], VoiceAnchor]:
-    rows = _anchor_rows(emb_tbl, f"{_TURN_DOC} = '{doc_id}' AND {_TURN_ID} = {int(turn_id)}")
+    rows = _anchor_rows(emb_tbl, and_(eq(_TURN_DOC, doc_id), eq(_TURN_ID, int(turn_id))))
     if not rows:
         raise NotFoundError("anchor turn not found")
     return _turn_row_to_anchor(rows[0], doc_id, embedding_column)
@@ -262,7 +258,7 @@ def _resolve_time_anchor(
 ) -> tuple[list[float], VoiceAnchor]:
     rows = _anchor_rows(
         emb_tbl,
-        f"{_TURN_DOC} = '{doc_id}' AND {_TURN_START} <= {float(t)} AND {_TURN_END} >= {float(t)}",
+        and_(eq(_TURN_DOC, doc_id), f"{_TURN_START} <= {float(t)}", f"{_TURN_END} >= {float(t)}"),
     )
     if not rows:
         raise NotFoundError("no speaker turn at that time")
@@ -279,7 +275,7 @@ def _resolve_speaker_anchor(
     if speakers_tbl is None:
         raise ServiceUnavailableError("speakers table not built yet — run `rmedia build-speakers`")
     rows = _anchor_rows(
-        speakers_tbl, f"{_TURN_DOC} = '{doc_id}' AND {_TURN_SPEAKER} = '{_sql_quote(speaker)}'"
+        speakers_tbl, and_(eq(_TURN_DOC, doc_id), eq(_TURN_SPEAKER, speaker))
     )
     if not rows:
         raise NotFoundError("anchor speaker not found")
@@ -307,9 +303,7 @@ def _search_turns(
             .limit(n)
         )
         if exclude_doc_id is not None:
-            # doc_id is whitelisted against the descriptor pattern by the
-            # router — safe to inline.
-            qb = qb.where(f"{_TURN_DOC} != '{exclude_doc_id}'", prefilter=True)
+            qb = qb.where(ne(_TURN_DOC, exclude_doc_id), prefilter=True)
         return qb.to_list()
     except Exception as e:
         logger.warning("voice search failed", exc_info=True)
@@ -320,9 +314,10 @@ def _chunk_for_turn(
     row_ds: Any, bindings: VoiceBindings, doc_id: str, turn_start: float, turn_end: float
 ) -> dict[str, Any] | None:
     """The max-overlap row-table row for a turn span (None if no chunk overlaps)."""
-    flt = (
-        f"{bindings.doc_key} = '{_sql_quote(doc_id)}' "
-        f"AND {bindings.time_start} < {turn_end} AND {bindings.time_end} > {turn_start}"
+    flt = and_(
+        eq(bindings.doc_key, doc_id),
+        f"{bindings.time_start} < {turn_end}",
+        f"{bindings.time_end} > {turn_start}",
     )
     rows = row_ds.to_table(columns=bindings.payload_columns, filter=flt).to_pylist()
     if not rows:
@@ -355,14 +350,13 @@ def _attach_captions(handle: DatasetHandle, bindings: VoiceBindings, hits: list[
     frames_tbl: Any = handle.db.open_table(bindings.captions_table)
     if bindings.captions_column not in frames_tbl.schema.names:
         return
-    docs = sorted({_sql_quote(str(h[bindings.doc_key])) for h in hits})
-    doc_list = ",".join(f"'{d}'" for d in docs)
+    doc_filter = isin(bindings.doc_key, (str(h[bindings.doc_key]) for h in hits))
     try:
         rows = (
             frames_tbl.to_lance()
             .to_table(
                 columns=[*bindings.key_fields, _FRAME_IDX, bindings.captions_column],
-                filter=f"{bindings.doc_key} IN ({doc_list})",
+                filter=doc_filter,
             )
             .to_pylist()
         )
@@ -395,15 +389,13 @@ def _attach_speaker_clusters(
     speakers_tbl: Any = handle.db.open_table(bindings.speakers_table)
     if _SPEAKER_CLUSTER not in speakers_tbl.schema.names:
         return
-    doc_list = ",".join(
-        f"'{_sql_quote(str(d))}'" for d in sorted({str(h[bindings.doc_key]) for h in hits})
-    )
+    doc_filter = isin(_TURN_DOC, (str(h[bindings.doc_key]) for h in hits))
     try:
         rows = (
             speakers_tbl.to_lance()
             .to_table(
                 columns=[_TURN_DOC, _TURN_SPEAKER, _SPEAKER_CLUSTER],
-                filter=f"{_TURN_DOC} IN ({doc_list})",
+                filter=doc_filter,
             )
             .to_pylist()
         )
@@ -539,7 +531,7 @@ def speaker_identity(handle: DatasetHandle, *, doc_id: str, speaker: str) -> Voi
     columns = _IDENTITY_COLUMNS + ([_SPEAKER_CLUSTER] if has_cluster else [])
     rows = ds.to_table(
         columns=columns,
-        filter=f"{_TURN_DOC} = '{doc_id}' AND {_TURN_SPEAKER} = '{_sql_quote(speaker)}'",
+        filter=and_(eq(_TURN_DOC, doc_id), eq(_TURN_SPEAKER, speaker)),
     ).to_pylist()
     if not rows:
         raise NotFoundError("speaker not found")

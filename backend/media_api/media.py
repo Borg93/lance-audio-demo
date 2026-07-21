@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from backend.core.exceptions import NotFoundError, ValidationError
 from backend.deps import StateDep
 from backend.lancekit.descriptor import Declared
+from backend.lancekit.predicate import and_, eq
 from backend.lancekit.registry import DatasetHandle
 from backend.media_api.clips import MAX_CLIP_S, build_clip
 from backend.state import dataset_handle
@@ -46,30 +47,33 @@ FRAME_INDEX_COLUMN = "frame_idx"
 
 
 def validate_doc_key(declared: Declared, doc_id: str) -> str:
-    """Whitelist-validate a doc key against the descriptor's pattern.
+    """Whitelist-validate a doc key against the descriptor's pattern — validation
+    ONLY, returning the raw key.
 
-    This is the SQL-injection guard for every filter that interpolates the doc
-    key; the returned value additionally has single quotes doubled so even a
-    permissive descriptor pattern can't break out of the SQL string literal.
+    The returned value is stamped into stored row identity and deterministic tag
+    ids, so it must never be SQL-escaped here; escaping happens where a predicate
+    is rendered (``lancekit.predicate``). The pattern is still the first injection
+    guard for every filter that interpolates the key.
     """
     if not re.fullmatch(declared.identity.doc_key_pattern, doc_id):
         raise ValidationError("invalid doc_id")
-    return doc_id.replace("'", "''")
+    return doc_id
 
 
 def chunk_key_filter(declared: Declared, doc_id: str, rest: Sequence[int]) -> str:
     """SQL predicate for one row keyed by (doc key, *other identity fields).
 
-    ``doc_id`` must already be validated; ``rest`` values pair positionally
-    with the non-doc key fields (int-cast, so they can't inject).
+    ``doc_id`` must already be validated (and is escaped here at render time);
+    ``rest`` values pair positionally with the non-doc key fields (int-cast, so
+    they can't inject).
     """
     identity = declared.identity
-    clauses = [f"{identity.doc_key} = '{doc_id}'"]
+    clauses = [eq(identity.doc_key, doc_id)]
     others = [f for f in identity.key_fields if f != identity.doc_key]
     # strict=False: pairs positionally, tolerating identities with fewer
     # non-doc key fields than the legacy 3-segment route shape provides.
-    clauses.extend(f"{field} = {int(value)}" for field, value in zip(others, rest, strict=False))
-    return " AND ".join(clauses)
+    clauses.extend(eq(field, int(value)) for field, value in zip(others, rest, strict=False))
+    return and_(*clauses)
 
 
 def table_dataset(handle: DatasetHandle, table: str) -> lance.LanceDataset:
@@ -87,17 +91,22 @@ def table_dataset(handle: DatasetHandle, table: str) -> lance.LanceDataset:
     if handle.storage_options is None and not (handle.path / f"{table}.lance").is_dir():
         raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}")
     try:
-        return lance.dataset(uri, storage_options=handle.storage_options)
+        ds = lance.dataset(uri, storage_options=handle.storage_options)
     except (ValueError, OSError) as e:
         msg = str(e).lower()
         if "not found" in msg or "does not exist" in msg:
             raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}") from e
         raise
+    # Fold observed drift back into the cached descriptor (a write bumped the
+    # version, or the table was created after the dataset was first opened) —
+    # otherwise the registry's TableInfo stays frozen at first get() forever.
+    handle.sync_table_info(table, int(ds.version))
+    return ds
 
 
 def rowid_for_doc(ds: lance.LanceDataset, doc_key: str, doc_id: str) -> int | None:
     """Resolve a validated doc key to a single stable ``_rowid`` (None if absent)."""
-    t = ds.to_table(columns=[doc_key], filter=f"{doc_key} = '{doc_id}'", with_row_id=True)
+    t = ds.to_table(columns=[doc_key], filter=eq(doc_key, doc_id), with_row_id=True)
     if t.num_rows == 0:
         return None
     return int(t.column("_rowid")[0].as_py())
@@ -175,7 +184,7 @@ def _cell_value(
     column is undeclared or the cell is absent/null."""
     if column is None:
         return default
-    t = ds.to_table(columns=[column], filter=f"{doc_key} = '{doc_id}'", limit=1)
+    t = ds.to_table(columns=[column], filter=eq(doc_key, doc_id), limit=1)
     if t.num_rows > 0 and t.column(column)[0].is_valid:
         return t.column(column)[0].as_py()
     return default

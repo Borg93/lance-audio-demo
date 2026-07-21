@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from backend.core.exceptions import ConflictError
 from backend.lancekit.lineage_emit import emit_save
+from backend.lancekit.predicate import isin
 from backend.media_api.annotations.schema import ANNOTATIONS_TABLE, SaveResult
 from backend.media_api.media import table_dataset
 
@@ -36,8 +37,7 @@ def check_base_version(ds: lance.LanceDataset, base_version: int | None) -> None
 
 def delete_by_ids(writer: TableWriter, ids: Sequence[str]) -> None:
     """Delete rows by id through the writer seam — quoted, injection-guarded."""
-    quoted = ", ".join(_sql_quote(i) for i in ids)
-    writer.delete(f"id IN ({quoted})")
+    writer.delete(isin("id", ids))
 
 
 def finalize_commit(
@@ -63,8 +63,3 @@ def finalize_commit(
     )
     return SaveResult(saved=touched, version=int(fresh.version))
 
-
-def _sql_quote(value: str) -> str:
-    """SQL single-quoted string literal (doubling quotes) — the injection guard for
-    the delete predicate's id list."""
-    return "'" + value.replace("'", "''") + "'"

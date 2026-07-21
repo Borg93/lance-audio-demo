@@ -22,8 +22,6 @@ from backend.lancekit.introspect import ColumnInfo, TableInfo
 from backend.search_api.filters import (
     build_where_clause,
     extract_filters,
-    sql_literal,
-    sql_quote,
     topic_layer_columns,
 )
 from backend.search_api.spec import SearchMode, SearchSpec, available_modes
@@ -173,34 +171,6 @@ class TestAvailableModes:
         modes = available_modes(with_caption)
         assert SearchMode.SCENE in modes
         assert SearchMode.SCENE_FTS in modes
-
-
-# ── SQL escaping + literals ───────────────────────────────────────────────────
-
-
-class TestSqlQuote:
-    def test_doubles_single_quotes(self) -> None:
-        assert sql_quote("O'Brien") == "O''Brien"
-
-    def test_doubles_every_quote(self) -> None:
-        assert sql_quote("a'b'c") == "a''b''c"
-
-    def test_plain_value_unchanged(self) -> None:
-        assert sql_quote("Stockholm") == "Stockholm"
-
-
-class TestSqlLiteral:
-    def test_string_is_quoted_and_escaped(self) -> None:
-        assert sql_literal("O'Brien") == "'O''Brien'"
-
-    def test_int_is_bare(self) -> None:
-        assert sql_literal(7) == "7"
-
-    def test_float_is_bare(self) -> None:
-        assert sql_literal(1.5) == "1.5"
-
-    def test_bool_is_sql_keyword_not_int(self) -> None:
-        assert sql_literal(True) == "TRUE"
 
 
 # ── Topic layer discovery ─────────────────────────────────────────────────────
