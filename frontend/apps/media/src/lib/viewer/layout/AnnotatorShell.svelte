@@ -45,6 +45,8 @@
     '5': 'point',
     '6': 'line',
     '7': 'lasso',
+    '8': 'pencil',
+    '9': 'magnetic',
     b: 'brush',
   };
   function onKeydown(e: KeyboardEvent): void {
@@ -67,7 +69,20 @@
     }
     const tool = TOOL_KEYS[k];
     if (tool) {
-      if (controller.canDraw || tool === 'select' || tool === 'pan') controller.setTool(tool);
+      const cvTool = tool === 'magnetic';
+      if ((controller.canDraw || tool === 'select' || tool === 'pan') && (!cvTool || controller.cvCapable)) {
+        controller.setTool(tool);
+      }
+      return;
+    }
+    // While a DRAWING tool is active, Enter/Escape/Backspace belong to the tool
+    // (polygon/brush commit · cancel-in-progress · vertex undo) — not to the review
+    // hotkeys, which would otherwise swallow them (accept-and-advance / delete row).
+    const drawingActive =
+      controller.canDraw && controller.activeTool !== 'select' && controller.activeTool !== 'pan';
+    if (drawingActive && (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Backspace')) {
+      e.preventDefault();
+      controller.forwardToolKey(e.key);
       return;
     }
     if (k === 'a' || e.key === 'Enter') {

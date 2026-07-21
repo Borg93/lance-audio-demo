@@ -166,6 +166,25 @@ dependency group (`pyproject.toml [dependency-groups]`), so
 `--with pytest --with httpx` form shown above. `httpx` is needed by anything that
 constructs the app via `fastapi.testclient.TestClient` (the backend tests).
 
+### Frontend annotator E2E (real browser, WebGPU)
+
+`frontend/apps/media/e2e/annotator.e2e.mjs` drives the REAL app in a headless
+Chromium **with WebGPU/Vulkan live** (not jsdom, not a smoke): every drawing tool
+(rect/point/line/polygon/pencil/brush + the OpenCV scissors/magnetic + lasso-select),
+AI-assist Detect (GroundingDINO) + SAM Segment, and draw → save → persist-across-reload.
+Failures mean a user-visible feature broke — this is the suite that caught the orphaned
+CV tools and the swallowed Enter-commit.
+
+```bash
+# Preconditions: backend :8000 + `bun run dev --port 5175` (apps/media) running.
+cd frontend/apps/media && bun run test:e2e
+# Chromium: auto-resolved from ~/.cache/ms-playwright (full build, NOT headless-shell —
+# that lacks WebGPU); override with E2E_CHROME=/path/to/chrome.
+```
+
+Re-seeds the demo annotations (`make seed-annotations`) before + after, so runs are
+deterministic and leave the demo clean.
+
 ### Full-pipeline e2e smoke (distinct from the pytest smoke)
 
 `scripts/e2e_smoke.py` is a *separate* smoke from the pytest-level

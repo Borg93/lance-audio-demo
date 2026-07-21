@@ -84,6 +84,10 @@ export class PolygonTool implements Tool {
     if (key === "Escape") {
       this.cancel();
     }
+    if (key === "Enter" && this.points.length >= MIN_VERTICES * 2) {
+      // Commit without the double-click / snap-to-close gesture (parity with Brush).
+      this.commitPolygon();
+    }
     if (key === "Backspace" && this.points.length >= 4) {
       // Remove last vertex
       this.points.pop();

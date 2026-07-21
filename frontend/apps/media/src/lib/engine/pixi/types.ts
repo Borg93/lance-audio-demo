@@ -24,7 +24,6 @@ export type Tool =
   | "pan"
   | "rect"
   | "polygon"
-  | "scissors"
   | "magnetic"
   | "lasso"
   | "pencil"

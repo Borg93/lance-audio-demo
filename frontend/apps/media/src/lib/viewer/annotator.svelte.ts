@@ -129,6 +129,12 @@ export class AnnotatorController {
   // segmenter as its region prompt instead of being inserted as a manual shape — the
   // ra-atr SAM click-to-segment loop. Null = normal drawing.
   assistProducer = $state<string | null>(null);
+  // True when the OpenCV magnetic tool can run — a still image is loaded
+  // (video frames don't qualify). Gates their toolbar buttons.
+  cvCapable = $state(false);
+  // Which CV tools have finished their lazy init (wasm + edge/corner maps) — the
+  // toolbar shows loading state until then; the E2E suite waits on it.
+  readonly cvReady = new SvelteSet<string>();
   count = $state(0);
   saving = $state(false);
   saveError = $state<string | null>(null);
@@ -307,6 +313,9 @@ export class AnnotatorController {
     im.setEditMode(this.mode === "edit");
     im.setTool(this.activeTool);
     im.setBrushOptions(this.brushOptions);
+    this.cvCapable = im.cvCapable; // still image loaded ⇒ the magnetic CV tool is available
+    this.cvReady.clear();
+    im.onCvToolReady = (tool) => this.cvReady.add(tool);
     im.onSelect = (index) => {
       this.selectedIndex = index;
       this._mirrorSelection(im.getSelectedSet());
@@ -461,6 +470,12 @@ export class AnnotatorController {
   /** Move the playhead (video scrub/play) so newly-drawn shapes pin to this moment. */
   setTimeCursor(seconds: number): void {
     this.timeCursor = seconds;
+  }
+
+  /** Forward a key to the engine's active tool — polygon/brush Enter-commit,
+   *  Escape-cancel, Backspace vertex-undo (the shell routes these while drawing). */
+  forwardToolKey(key: string): void {
+    this.ctx?.plugins.interaction.handleKeyDown(key);
   }
 
   /** Arm/disarm an interactive segmenter (SAM): while armed, the next drawn box/point

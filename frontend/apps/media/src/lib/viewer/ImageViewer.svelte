@@ -9,6 +9,9 @@
 
   async function onready(ctx: PixiContext): Promise<void> {
     if (unit.imageUrl) await ctx.plugins.image.load(unit.imageUrl);
+    // Hand the loaded still to the interaction layer so the OpenCV tools
+    // (magnetic corner-snap) can lazily build its corner maps when activated.
+    ctx.plugins.interaction.setImageSource(ctx.plugins.image.imageElement);
     const res = await fetch(unit.annotationsUrl);
     if (!res.ok) throw new Error(`annotations HTTP ${res.status}`);
     const version = Number(res.headers.get('X-Annotations-Version') ?? '0');

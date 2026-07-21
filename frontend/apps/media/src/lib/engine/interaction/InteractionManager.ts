@@ -6,7 +6,6 @@ import { PolygonEditor } from "../editors/PolygonEditor.js";
 import { MagneticTool } from "../tools/MagneticTool.js";
 import { PolygonTool } from "../tools/PolygonTool.js";
 import { RectTool } from "../tools/RectTool.js";
-import { ScissorsTool } from "../tools/ScissorsTool.js";
 import { LassoTool } from "../tools/LassoTool.js";
 import { PencilTool } from "../tools/PencilTool.js";
 import { PointTool } from "../tools/PointTool.js";
@@ -53,6 +52,14 @@ export class InteractionManager {
   onSelect?: (index: number | null) => void;
   onChange?: (index: number, updates: GeometryUpdate) => void;
   onDirtyChange?: (hasDirtyEdits: boolean) => void;
+  /** Fires when an OpenCV tool's lazy init (wasm + corner maps) completes. */
+  onCvToolReady?: (tool: "magnetic") => void;
+
+  // The still image the OpenCV magnetic tool reads pixels from. Set by the viewer
+  // after the backdrop loads; null for video frames (CV tools stay unavailable).
+  private imageSource: HTMLImageElement | null = null;
+  // Tools whose (expensive, 8MB-wasm) initWithImage has been fired — one init per image.
+  private readonly cvInitialized = new Set<string>();
 
   constructor(app: Application, arrowPlugin: ArrowDataPlugin) {
     this.app = app;
@@ -68,10 +75,10 @@ export class InteractionManager {
     polygonTool.onCommit = (shape) => this.onCommit?.(shape);
     this.tools.set("polygon", polygonTool);
 
-    const scissorsTool = new ScissorsTool(ctx);
-    scissorsTool.onCommit = (shape) => this.onCommit?.(shape);
-    this.tools.set("scissors", scissorsTool);
-
+    // NOTE: an IntelligentScissors (edge-trace) tool was removed 2026-07-21 — the
+    // opencv-js segmentation_IntelligentScissorsMB binding pathfinds degenerately
+    // (1-point contours for every parameterization, verified in-browser on 5.0.0;
+    // 4.12 fails to even initialize). Re-add if a build with a working binding lands.
     const magneticTool = new MagneticTool(ctx);
     magneticTool.onCommit = (shape) => this.onCommit?.(shape);
     this.tools.set("magnetic", magneticTool);
@@ -134,10 +141,38 @@ export class InteractionManager {
     };
   }
 
+  /** Provide the still image the OpenCV tools read (call after the backdrop loads).
+   *  CV inits are lazy — nothing loads until a CV tool is first activated. */
+  setImageSource(image: HTMLImageElement | null): void {
+    this.imageSource = image;
+    this.cvInitialized.clear(); // a new image needs fresh cost maps / keypoints
+  }
+
+  /** True when the OpenCV tools can work here (a still image is loaded). */
+  get cvCapable(): boolean {
+    return this.imageSource !== null;
+  }
+
   setTool(tool: ToolType): void {
     this.activeTool?.cancel();
     this._toolName = tool;
     this.activeTool = tool === "select" || tool === "pan" ? null : (this.tools.get(tool) ?? null);
+
+    // Lazy-init the OpenCV magnetic tool on FIRST activation (the 8MB wasm is only
+    // paid when used). The tool no-ops snapping until ready, so firing async is safe.
+    if (tool === "magnetic" && this.imageSource) {
+      if (!this.cvInitialized.has(tool)) {
+        this.cvInitialized.add(tool);
+        const t = this.tools.get(tool) as MagneticTool;
+        void t
+          .initWithImage(this.imageSource)
+          .then(() => this.onCvToolReady?.(tool))
+          .catch((e: unknown) => {
+            this.cvInitialized.delete(tool); // allow a retry on the next activation
+            console.error(`${tool} tool init failed:`, e);
+          });
+      }
+    }
 
     // Set cursor for the active tool
     if (tool === "pan") {

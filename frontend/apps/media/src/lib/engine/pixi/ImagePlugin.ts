@@ -15,6 +15,9 @@ export class ImagePlugin {
   panY = 0;
   imageWidth = 0;
   imageHeight = 0;
+  /** The loaded still image (null for video-frame backdrops) — the pixel source the
+   *  OpenCV magnetic tool reads for corner detection. */
+  private _imageElement: HTMLImageElement | null = null;
   /** The zoom level at which the image fits the viewport (baseline = 100%) */
   private fitScale = 1;
   /** Reused across adjustments so we don't leak a filter per call */
@@ -51,10 +54,16 @@ export class ImagePlugin {
     this.sprite = new Sprite(texture);
     this.imageWidth = img.naturalWidth;
     this.imageHeight = img.naturalHeight;
+    this._imageElement = img;
 
     // Add as bottom layer on stage
     this.app.stage.addChildAt(this.sprite, 0);
     this.fitToViewport();
+  }
+
+  /** The loaded still image, or null when the backdrop is a video frame. */
+  get imageElement(): HTMLImageElement | null {
+    return this._imageElement;
   }
 
   /**
@@ -88,6 +97,7 @@ export class ImagePlugin {
       this.sprite = new Sprite(texture);
       this.imageWidth = img.naturalWidth;
       this.imageHeight = img.naturalHeight;
+      this._imageElement = img;
 
       this.app.stage.addChildAt(this.sprite, 0);
       this.fitToViewport();
@@ -118,6 +128,7 @@ export class ImagePlugin {
     this.sprite = new Sprite(Texture.from(bitmap));
     this.imageWidth = video.videoWidth;
     this.imageHeight = video.videoHeight;
+    this._imageElement = null; // a video frame — the CV tools' still-image source doesn't apply
     this.app.stage.addChildAt(this.sprite, 0);
     if (first) this.fitToViewport();
     else this.applyTransform(); // stable view while scrubbing

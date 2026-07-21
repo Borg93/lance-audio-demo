@@ -13,6 +13,8 @@
     Lasso,
     Eye,
     Pencil,
+    PenLine,
+    Magnet,
     Trash2,
     Spline,
     Eraser,
@@ -31,7 +33,15 @@
   let { controller, spatial = true }: { controller: AnnotatorController; spatial?: boolean } =
     $props();
 
-  type ToolDef = { tool: Tool; icon: typeof MousePointer2; label: string; key: string; drawing: boolean };
+  type ToolDef = {
+    tool: Tool;
+    icon: typeof MousePointer2;
+    label: string;
+    key: string;
+    drawing: boolean;
+    /** Needs the OpenCV still-image pipeline (unavailable over video frames). */
+    cv?: boolean;
+  };
   const TOOLS: ToolDef[] = [
     { tool: 'select', icon: MousePointer2, label: 'Select', key: '1', drawing: false },
     { tool: 'pan', icon: Hand, label: 'Pan', key: '2', drawing: false },
@@ -39,11 +49,17 @@
     { tool: 'polygon', icon: Pentagon, label: 'Polygon', key: '4', drawing: true },
     { tool: 'point', icon: Crosshair, label: 'Point', key: '5', drawing: true },
     { tool: 'line', icon: Minus, label: 'Line', key: '6', drawing: true },
-    { tool: 'lasso', icon: Lasso, label: 'Lasso', key: '7', drawing: true },
+    { tool: 'lasso', icon: Lasso, label: 'Lasso (select)', key: '7', drawing: true },
     { tool: 'brush', icon: Paintbrush, label: 'Brush', key: 'B', drawing: true },
+    { tool: 'pencil', icon: PenLine, label: 'Pencil (freehand)', key: '8', drawing: true },
+    { tool: 'magnetic', icon: Magnet, label: 'Magnetic (corner-snap)', key: '9', drawing: true, cv: true },
   ];
 
-  const visible = $derived(spatial ? TOOLS.filter((t) => !t.drawing || controller.canDraw) : []);
+  const visible = $derived(
+    spatial
+      ? TOOLS.filter((t) => (!t.drawing || controller.canDraw) && (!t.cv || controller.cvCapable))
+      : [],
+  );
 </script>
 
 <div
@@ -66,14 +82,16 @@
 
     {#each visible as t (t.tool)}
       {@const Icon = t.icon}
+      {@const cvLoading = t.cv === true && controller.activeTool === t.tool && !controller.cvReady.has(t.tool)}
       <Button
         variant={controller.activeTool === t.tool ? 'default' : 'ghost'}
         size="icon-sm"
-        title={`${t.label} (${t.key})`}
+        title={`${t.label} (${t.key})${cvLoading ? ' — loading OpenCV…' : ''}`}
         aria-pressed={controller.activeTool === t.tool}
+        data-cvready={t.cv ? controller.cvReady.has(t.tool) : undefined}
         onclick={() => controller.setTool(t.tool)}
       >
-        <Icon class="size-4" />
+        <Icon class={cn('size-4', cvLoading && 'animate-pulse')} />
       </Button>
     {/each}
 

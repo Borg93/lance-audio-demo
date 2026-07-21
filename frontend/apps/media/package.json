@@ -10,7 +10,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:ts": "tsgo --noEmit -p tsconfig.tsgo.json",
     "test": "vitest run",
-    "test:e2e": "bun e2e/annotate.mjs ${E2E_BASE:-http://127.0.0.1:5173} ${E2E_CHROME:-/tmp/chrome-extract/opt/google/chrome/chrome}",
+    "test:e2e": "node e2e/annotator.e2e.mjs",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt src",
