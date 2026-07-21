@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import lance
 import pyarrow as pa
@@ -271,7 +271,7 @@ def ensure_vector_index(
     *,
     num_partitions: int,
     num_sub_vectors: int,
-    metric: str = "cosine",
+    metric: Literal["l2", "cosine", "dot"] = "cosine",
 ) -> bool:
     """Build an IVF_PQ index on ``column`` once it is fully populated.
 
@@ -302,13 +302,16 @@ def ensure_vector_index(
         f"building IVF_PQ {metric} index on {column} "
         f"(num_partitions={num_partitions}, num_sub_vectors={num_sub_vectors})"
     )
+    from lancedb.index import IvfPq
+
     table.create_index(
-        metric=metric,
-        vector_column_name=column,
-        index_type="IVF_PQ",
-        num_partitions=num_partitions,
-        num_sub_vectors=num_sub_vectors,
+        column,
         replace=True,
+        config=IvfPq(
+            distance_type=metric,
+            num_partitions=num_partitions,
+            num_sub_vectors=num_sub_vectors,
+        ),
     )
     return True
 
@@ -319,24 +322,24 @@ def ensure_fts_index(
     *,
     language: str = "Swedish",
 ) -> bool:
-    """Build a Tantivy FTS (BM25) index on a string ``column`` once it's populated.
+    """Build a native FTS (BM25) index on a string ``column`` once it's populated.
 
     Mirrors the transcript FTS index (``ingest.reindex_fts``): ``with_position``
     for phrase queries, the Swedish stemmer so caption queries match inflections.
     Skips (returns ``False``) while any row is still ``NULL`` — the index would be
     incomplete. Used for ``chunk_frames.caption`` so ``mode=scene`` can keyword-search.
     """
+    from lancedb.index import FTS
+
     nulls = table.count_rows(filter=f"{column} IS NULL")
     if nulls > 0:
         logger.warning("skipping FTS index on %s: %s row(s) still NULL", column, nulls)
         return False
     logger.info("building FTS index on %s (language=%s)", column, language)
-    table.create_fts_index(
+    table.create_index(
         column,
         replace=True,
-        with_position=True,
-        remove_stop_words=False,
-        language=language,
+        config=FTS(with_position=True, remove_stop_words=False, language=language),
     )
     return True
 

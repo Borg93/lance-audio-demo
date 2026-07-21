@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pyarrow>=21.0.0",
-    "lancedb>=0.30.0",
+    "lancedb>=0.34.0",
     "pydantic>=2.10",
     "pylance>=4.0.0",
     "typer>=0.12.0",

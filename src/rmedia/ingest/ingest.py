@@ -32,6 +32,7 @@ import lance
 import lancedb
 import pyarrow as pa
 from lance import blob_array
+from lancedb.index import FTS
 
 from rmedia.core.dataset import append_rows, create_dataset
 
@@ -433,12 +434,10 @@ def ingest_many(
     logger.info(
         f"building FTS index on 'text' (language={fts_language}) over {table.count_rows()} row(s)…"
     )
-    table.create_fts_index(
+    table.create_index(
         "text",
         replace=True,
-        with_position=True,
-        remove_stop_words=False,
-        language=fts_language,
+        config=FTS(with_position=True, remove_stop_words=False, language=fts_language),
     )
     # Scalar BTREE indexes for the per-row lookups / join keys: doc_id +
     # audio_path. Do NOT add `extraid` (or any other column hit by a
@@ -513,12 +512,14 @@ def reindex_fts(
     """
     db = lancedb.connect(str(db_path))
     table = db.open_table(table_name)
-    table.create_fts_index(
+    table.create_index(
         "text",
         replace=True,
-        with_position=with_position,
-        remove_stop_words=remove_stop_words,
-        ascii_folding=ascii_folding,
-        language=language,
+        config=FTS(
+            with_position=with_position,
+            remove_stop_words=remove_stop_words,
+            ascii_folding=ascii_folding,
+            language=language,
+        ),
     )
     return table

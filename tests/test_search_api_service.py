@@ -98,10 +98,14 @@ def _vec_column(vecs: list[np.ndarray]) -> pa.Array:
 
 
 def _fts_index(tbl, column: str) -> None:
-    # Same kwargs the pipeline's ensure_fts_index uses (with_position enables
+    # Same config the pipeline's ensure_fts_index uses (with_position enables
     # phrase queries; stop words kept so common-word queries stay testable).
-    tbl.create_fts_index(
-        column, replace=True, with_position=True, remove_stop_words=False, language="English"
+    from lancedb.index import FTS
+
+    tbl.create_index(
+        column,
+        replace=True,
+        config=FTS(with_position=True, remove_stop_words=False, language="English"),
     )
 
 
