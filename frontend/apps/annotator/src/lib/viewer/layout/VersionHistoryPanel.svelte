@@ -4,7 +4,7 @@
   // past version against the current rows. Opt-in (an extra fetch), lazy-loaded. All
   // fetch/diff logic is in @lance/labeling/history (framework-agnostic); this is the view.
   import { ChevronDown, ChevronRight, History } from 'lucide-svelte';
-  import { cn } from '$lib/utils';
+  import { cn } from '@lance/ui/utils';
   import {
     diffSignatures,
     fetchVersions,

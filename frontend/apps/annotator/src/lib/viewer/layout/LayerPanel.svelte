@@ -2,7 +2,7 @@
   // Layers section (lives inside the sidebar). Group-by column + per-group
   // visibility + color, bound to the facade's LayerStore. (Ported from ra-anno.)
   import { Eye, EyeOff, ChevronDown, ChevronRight, Layers } from 'lucide-svelte';
-  import { cn } from '$lib/utils';
+  import { cn } from '@lance/ui/utils';
   import type { AnnotatorController } from '../annotator.svelte';
 
   let { controller }: { controller: AnnotatorController } = $props();

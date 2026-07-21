@@ -16,7 +16,7 @@
   import { getTopics, type TopicNode } from '@lance/api';
   import TopicTreemap from '$lib/components/topic-treemap.svelte';
   import TopicResultsPanel from '$lib/components/topic-results-panel.svelte';
-  import ResizableSplit from '$lib/components/resizable-split.svelte';
+  import ResizableSplit from '@lance/ui/resizable-split.svelte';
 
   type Phase = 'loading' | 'ready' | 'unavailable' | 'error';
 

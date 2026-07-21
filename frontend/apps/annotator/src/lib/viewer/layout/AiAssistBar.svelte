@@ -6,7 +6,7 @@
   import { onDestroy } from 'svelte';
   import { MousePointerClick, Sparkles } from 'lucide-svelte';
   import { Button, Input } from '@lance/ui';
-  import { cn } from '$lib/utils';
+  import { cn } from '@lance/ui/utils';
   import type { AnnotatorController } from '../annotator.svelte';
 
   let { controller }: { controller: AnnotatorController } = $props();

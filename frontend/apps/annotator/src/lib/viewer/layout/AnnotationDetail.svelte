@@ -3,7 +3,7 @@
   // (canvas + overlay updated together). (Ported from ra-anno AnnotationSidebar detail.)
   import { Check, X, RotateCcw, ChevronUp, ChevronDown } from 'lucide-svelte';
   import { Button, Input } from '@lance/ui';
-  import { cn } from '$lib/utils';
+  import { cn } from '@lance/ui/utils';
   import { statusBadge } from './statusStyle';
   import type { AnnotatorController } from '../annotator.svelte';
 

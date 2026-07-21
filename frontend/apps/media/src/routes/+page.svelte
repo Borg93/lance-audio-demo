@@ -30,7 +30,7 @@
   import { loadCols, persistCols, loadTablePrefs, persistTablePrefs } from '$lib/table-columns';
   import DocTile from '$lib/components/doc-tile.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
-  import ResizableSplit from '$lib/components/resizable-split.svelte';
+  import ResizableSplit from '@lance/ui/resizable-split.svelte';
   import AtlasMap from '$lib/atlas/AtlasMap.svelte';
   import { crossFilter } from '$lib/atlas/cross-filter.svelte';
   import { getAtlasChunks } from '@lance/api';

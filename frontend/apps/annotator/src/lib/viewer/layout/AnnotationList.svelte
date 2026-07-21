@@ -3,7 +3,7 @@
   // uncertainty first (the active-learning order), then click to select on canvas.
   import { Search } from 'lucide-svelte';
   import { Input } from '@lance/ui';
-  import { cn } from '$lib/utils';
+  import { cn } from '@lance/ui/utils';
   import { statusDot } from './statusStyle';
   import type { AnnotatorController } from '../annotator.svelte';
 

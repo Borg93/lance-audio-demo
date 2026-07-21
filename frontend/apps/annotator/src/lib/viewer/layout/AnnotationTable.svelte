@@ -3,7 +3,7 @@
   // spreadsheet (ported from the pre-monorepo AnnotationTable, commit 6afcbc7, which
   // the apps/media move dropped). Reads the controller's rows (no own fetch); click a
   // row to select it on the canvas; click a header to sort.
-  import { cn } from '$lib/utils';
+  import { cn } from '@lance/ui/utils';
   import { ChevronUp, ChevronDown } from 'lucide-svelte';
   import { statusDot } from './statusStyle';
   import type { AnnotatorController, AnnoRow } from '../annotator.svelte';

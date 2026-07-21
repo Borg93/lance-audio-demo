@@ -4,7 +4,7 @@
   // focused sub-components per our no-god-files rule.)
   import { ChevronLeft, List, Table } from 'lucide-svelte';
   import { Button } from '@lance/ui';
-  import { cn } from '$lib/utils';
+  import { cn } from '@lance/ui/utils';
   import { statusDot } from './statusStyle';
   import AnnotationDetail from './AnnotationDetail.svelte';
   import AnnotationList from './AnnotationList.svelte';

@@ -12,7 +12,7 @@
    * stable _rowid), single playback from GET /api/atlas/chunk (all in <AtlasMap>).
    */
   import AtlasMap from './AtlasMap.svelte';
-  import ResizableSplit from '$lib/components/resizable-split.svelte';
+  import ResizableSplit from '@lance/ui/resizable-split.svelte';
   import PlayerPane from '$lib/components/player-pane.svelte';
   import HitTable, { TABLE_COLUMNS } from '$lib/components/hit-table.svelte';
   import { activeView, type Hit } from '@lance/api';
