@@ -6,8 +6,6 @@ the Lance annotations table as an Arrow IPC stream — the same wire format the 
 annotations yet is not an error).
 """
 
-from __future__ import annotations
-
 from typing import Annotated
 
 import pyarrow as pa

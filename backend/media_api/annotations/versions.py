@@ -5,8 +5,6 @@ timestamp, what = lineage; this module serves the WHEN (per-unit history + histo
 snapshots) that powers the annotator's compare-versions panel.
 """
 
-from __future__ import annotations
-
 from typing import Annotated
 
 import lance
@@ -53,15 +51,15 @@ def annotation_versions(
         return []
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
     out: list[AnnotationVersion] = []
-    for v in list(reversed(ds.versions()))[:limit]:  # most recent first, capped
+    for v in list(reversed(ds.versions()))[:limit]:
         vnum = int(v["version"])
         count = ds.checkout_version(vnum).to_table(filter=where, columns=["id"]).num_rows
         ts = v.get("timestamp")
-        out.append(AnnotationVersion(version=vnum, timestamp=iso(ts), count=count))
+        out.append(AnnotationVersion(version=vnum, timestamp=iso_timestamp(ts), count=count))
     return out
 
 
-def iso(ts: object) -> str:
+def iso_timestamp(ts: object) -> str:
     """A Lance version timestamp → ISO string (datetime or already-string)."""
     isofmt = getattr(ts, "isoformat", None)
     return isofmt() if callable(isofmt) else str(ts or "")
@@ -70,8 +68,14 @@ def iso(ts: object) -> str:
 def checkout(ds: lance.LanceDataset, version: int) -> lance.LanceDataset:
     """Time-travel to a version, translating Lance's raw not-found (an out-of-range or
     reclaimed version) into a clean NotFoundError — mirroring ``table_dataset`` so a bad
-    ``?version`` is a 404, not an opaque 500."""
+    ``?version`` is a 404, not an opaque 500. Only the NOT-FOUND family maps to 404;
+    operational failures (permissions, connectivity — this table can live on S3)
+    propagate honestly instead of masquerading as a missing version."""
     try:
         return ds.checkout_version(version)
-    except (ValueError, OSError) as e:
+    except (ValueError, FileNotFoundError) as e:
         raise NotFoundError(f"annotations version {version} not found") from e
+    except OSError as e:
+        if "not found" in str(e).lower():
+            raise NotFoundError(f"annotations version {version} not found") from e
+        raise

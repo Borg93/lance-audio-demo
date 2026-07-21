@@ -1,8 +1,9 @@
-"""Annotation Arrow-IPC serving — the annotator's read wire.
+"""The annotations package's contracts, read wire AND write plane.
 
-The endpoint itself is proven end-to-end (live curl → 200 Arrow stream; playwright
-renders the rows on the PixiJS canvas); these pin the serialization contract the
-frontend `tableFromIPC` depends on.
+Read side: the Arrow-IPC serialization the frontend ``tableFromIPC`` depends on
+(the routes themselves are proven E2E). Write side: save deltas + merge_insert
+atomicity, tag rows/idempotency/arity, author stamping, version history +
+checkout, schema single-source, and the OpenLineage save event.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import pytest
 from backend.lancekit.descriptor import Declared
 from backend.media_api.annotations.save import build_delta, new_rows
 from backend.media_api.annotations.schema import EMPTY_SCHEMA, NewAnnotation, TagWrite
-from backend.media_api.annotations.tags import tag_id, tag_rows
+from backend.media_api.annotations.tags import check_keys_arity, tag_id, tag_rows
 from backend.media_api.annotations.wire import ipc_stream
 
 _MEDIA_DECLARED = Declared.model_validate(
@@ -226,8 +227,8 @@ def test_tag_rows_stamp_identity_shape_and_author() -> None:
     tbl = tag_rows(
         [TagWrite(doc_id="d1", keys=[0, 19], labels=["speech", "music"])],
         _MEDIA_DECLARED,
-        "gabriel",
-        _full_schema(),
+        author="gabriel",
+        schema=_full_schema(),
     )
     rows = tbl.to_pylist()
     assert len(rows) == 2  # one row per label
@@ -243,17 +244,30 @@ def test_tag_rows_stamp_identity_shape_and_author() -> None:
 
 def test_tag_rows_dedupes_duplicate_labels() -> None:
     # A batch may repeat a chunk+label; Lance merge_insert would insert both identical-id
-    # rows, so tag_rows must dedup (else idempotency breaks — review-workflow finding).
+    # rows, so tag_rows must dedup (else idempotency breaks).
     tbl = tag_rows(
         [
             TagWrite(doc_id="d1", keys=[0, 19], labels=["cat", "cat"]),
             TagWrite(doc_id="d1", keys=[0, 19], labels=["cat"]),
         ],
         _MEDIA_DECLARED,
-        "gabriel",
-        _full_schema(),
+        author="gabriel",
+        schema=_full_schema(),
     )
     assert tbl.num_rows == 1  # one row for the single distinct (chunk, label)
+
+
+def test_check_keys_arity_rejects_mismatched_client_keys() -> None:
+    # keys pair POSITIONALLY with the descriptor's non-doc identity fields; a short
+    # list would stamp NULL identity columns (rows no chunk filter ever matches) and
+    # a long one silently drops keys — both must 400 at the boundary, before any write.
+    from backend.core.exceptions import ValidationError
+
+    ok = [TagWrite(doc_id="d1", keys=[0, 19], labels=["x"])]
+    check_keys_arity(_MEDIA_DECLARED, ok)  # correct arity passes
+    for bad_keys in ([], [0], [0, 19, 7]):
+        with pytest.raises(ValidationError, match="arity"):
+            check_keys_arity(_MEDIA_DECLARED, [TagWrite(doc_id="d1", keys=bad_keys, labels=["x"])])
 
 
 def _insert_only(ds: lance.LanceDataset, delta: pa.Table) -> None:
@@ -280,8 +294,8 @@ def test_tag_merge_insert_is_multi_unit_one_version_and_shape_safe(tmp_path: Pat
             TagWrite(doc_id="d1", keys=[0, 20], labels=["music"]),
         ],
         _MEDIA_DECLARED,
-        "gabriel",
-        schema,
+        author="gabriel",
+        schema=schema,
     )
     _insert_only(ds, delta)
     after = lance.dataset(uri)
@@ -299,7 +313,7 @@ def test_tag_merge_insert_is_multi_unit_one_version_and_shape_safe(tmp_path: Pat
 
 def test_tag_resave_preserves_human_review(tmp_path: Path) -> None:
     # A reviewer edits a tag row (rejects it); a later re-save of the SAME tag must NOT
-    # reset it to the workflow default (the insert-only semantic — review-workflow finding).
+    # reset it to the workflow default (the insert-only semantic).
     schema = _full_schema()
     ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}
     uri = str(tmp_path / "annotations.lance")
@@ -315,7 +329,7 @@ def test_tag_resave_preserves_human_review(tmp_path: Path) -> None:
     ds = lance.dataset(uri)
 
     # re-save the workflow tag (label="speech", status="accepted") via insert-only
-    delta = tag_rows([TagWrite(doc_id="d1", keys=[0, 19], labels=["speech"])], _MEDIA_DECLARED, "x", schema)
+    delta = tag_rows([TagWrite(doc_id="d1", keys=[0, 19], labels=["speech"])], _MEDIA_DECLARED, author="x", schema=schema)
     _insert_only(ds, delta)
 
     row = {r["id"]: r for r in lance.dataset(uri).to_table().to_pylist()}[tid]
@@ -323,14 +337,14 @@ def test_tag_resave_preserves_human_review(tmp_path: Path) -> None:
     assert row["label"] == "speech-edited"  # human rename preserved
 
 
-def test_iso_formats_version_timestamps() -> None:
+def test_iso_timestamp_formats_version_timestamps() -> None:
     from datetime import datetime
 
-    from backend.media_api.annotations.versions import iso
+    from backend.media_api.annotations.versions import iso_timestamp
 
-    assert iso(datetime(2026, 7, 20, 12, 0, 0)) == "2026-07-20T12:00:00"  # datetime → ISO
-    assert iso("already-a-string") == "already-a-string"
-    assert iso(None) == ""
+    assert iso_timestamp(datetime(2026, 7, 20, 12, 0, 0)) == "2026-07-20T12:00:00"  # datetime → ISO
+    assert iso_timestamp("already-a-string") == "already-a-string"
+    assert iso_timestamp(None) == ""
 
 
 def test_version_history_counts_this_units_rows_per_version(tmp_path: Path) -> None:

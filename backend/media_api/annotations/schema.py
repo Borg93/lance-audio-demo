@@ -166,7 +166,12 @@ EMPTY_SCHEMA = pa.schema(
 def identity_values(declared: Declared, doc_id: str, rest: Sequence[int]) -> dict[str, object]:
     """The chunk identity columns as a dict — the same (doc key, *other key fields)
     mapping ``chunk_key_filter`` builds as a predicate, stamped onto new rows so a
-    drawn shape carries its unit's identity. Arity-generic off the descriptor."""
+    drawn shape carries its unit's identity. Arity-generic off the descriptor.
+
+    Deliberately TOLERANT of fewer ``rest`` values than key fields (the route paths
+    pass a fixed tuple against possibly-narrower descriptors). Callers feeding
+    CLIENT-supplied keys must validate arity first (``tags.check_keys_arity``) —
+    a short list here would stamp NULL identity columns."""
     identity = declared.identity
     values: dict[str, object] = {identity.doc_key: doc_id}
     others = [f for f in identity.key_fields if f != identity.doc_key]

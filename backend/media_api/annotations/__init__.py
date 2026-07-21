@@ -1,8 +1,7 @@
 """Annotation read/write — the annotator's data plane (RA_ANNO_MERGE.md §5d).
 
-Split by responsibility (was one 528-line ``annotate.py``), mirroring the
-``backend.search_api`` feature-package template so the merge lift stays a
-re-host, not a restructure:
+Split by responsibility, mirroring the ``backend.search_api`` feature-package
+template so the merge lift stays a re-host, not a restructure:
 
 - :mod:`.schema`   — the CONTRACT: request/response models, ``EMPTY_SCHEMA``, identity.
 - :mod:`.wire`     — Arrow-IPC serving (GET one unit's rows, time-travel ``?version``).

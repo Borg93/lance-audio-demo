@@ -6,16 +6,16 @@ so it does NOT funnel through the jobs seam; the annotations table stays mode-bl
 (a tag is ``source='human'`` / ``status='accepted'``).
 """
 
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
 from urllib.parse import quote
 
 import pyarrow as pa
 from fastapi import APIRouter
 
+from backend.core.exceptions import ValidationError
 from backend.deps import AuthorDep, StateDep
+from backend.lancekit.descriptor import Declared
 from backend.lancekit.writer import open_writer
 from backend.media_api.annotations.commit import check_base_version, delete_by_ids, finalize_commit
 from backend.media_api.annotations.schema import (
@@ -23,16 +23,11 @@ from backend.media_api.annotations.schema import (
     NewAnnotation,
     SaveResult,
     TagBatch,
+    TagWrite,
     identity_values,
 )
 from backend.media_api.media import DatasetParam, table_dataset, validate_doc_key
 from backend.state import dataset_handle
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from backend.lancekit.descriptor import Declared
-    from backend.media_api.annotations.schema import TagWrite
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +43,24 @@ def tag_id(doc_id: str, keys: Sequence[int], label: str) -> str:
     return "tag:" + ":".join(parts)
 
 
+def check_keys_arity(declared: Declared, writes: Sequence[TagWrite]) -> None:
+    """Fail fast on a keys/identity arity mismatch (400), BEFORE any write.
+
+    ``identity_values`` tolerates short tuples for the route paths (a fixed route
+    tuple against a narrower descriptor — the safe direction), so client-supplied
+    ``TagWrite.keys`` must be validated here: a short list would otherwise commit
+    rows with NULL identity columns that no chunk filter ever matches (silent,
+    unreachable corruption), and extra keys would be silently dropped."""
+    expected = len(declared.identity.key_fields) - 1  # non-doc identity fields
+    for w in writes:
+        if len(w.keys) != expected:
+            raise ValidationError(
+                f"tag keys arity {len(w.keys)} != descriptor identity arity {expected}"
+            )
+
+
 def tag_rows(
-    adds: Sequence[TagWrite], declared: Declared, author: str, schema: pa.Schema
+    adds: Sequence[TagWrite], declared: Declared, *, author: str, schema: pa.Schema
 ) -> pa.Table:
     """Full annotation rows for chunk tags: per-row identity stamped, ``shape_type='tag'``,
     label carried, server author; every OTHER field comes from ``NewAnnotation``'s
@@ -71,22 +82,23 @@ def tag_rows(
 
 
 @router.post("/annotations/tags")
-def add_tags(
+def apply_tags(
     state: StateDep,
     author: AuthorDep,
     body: TagBatch,
     dataset: DatasetParam = None,
 ) -> SaveResult:
-    """Write a TagBatch: adds insert-if-absent (never clobbering a reviewer's edits to
-    an existing tag row), removes delete by the deterministic id. Idempotent re-Save."""
+    """Apply a TagBatch: adds insert-if-absent (never clobbering a reviewer's edits to
+    an existing tag row), removes DELETE by the deterministic id. Idempotent re-Save."""
     handle = dataset_handle(state, dataset)
     declared = handle.descriptor.declared
+    check_keys_arity(declared, [*body.adds, *body.removes])
     ds = table_dataset(handle, ANNOTATIONS_TABLE)  # raises NotFoundError if unseeded
     # Optimistic concurrency degrades to table-GLOBAL for a cross-unit batch; optional +
     # last-write-wins per deterministic id is the pragmatic contract.
     check_base_version(ds, body.base_version)
 
-    delta = tag_rows(body.adds, declared, author, ds.schema)
+    delta = tag_rows(body.adds, declared, author=author, schema=ds.schema)
     writer = open_writer(
         dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
     )

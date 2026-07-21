@@ -11,21 +11,16 @@ the round-trip is wired + testable in-repo (drop-in for a real server, exactly l
 catalog transport). Shapes are in IMAGE coordinates — the annotator's own space.
 """
 
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
 
+import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from backend.core.exceptions import ServiceUnavailableError
 from backend.deps import StateDep
 from backend.media_api.media import DatasetParam, validate_doc_key
-from backend.state import dataset_handle
-
-if TYPE_CHECKING:
-    from backend.state import AppState
+from backend.state import AppState, dataset_handle
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +37,16 @@ class Region(BaseModel):
 
 
 class AssistRequest(BaseModel):
+    """What to run: the producer + its prompt (free text and/or a drawn region)."""
+
     producer: str = "grounding-dino"
     prompt: str | None = None
     region: Region | None = None
 
 
 class AssistShape(BaseModel):
+    """One predicted shape in image coordinates (box or polygon) with confidence."""
+
     shape_type: str = "rectangle"
     x: float
     y: float
@@ -82,7 +81,10 @@ def assist(
     shapes = (
         _remote(state, url, (doc_id, speech_id, chunk_id), body) if url else _mock(body)
     )
-    logger.info("assist %s '%s' → %d shape(s)", body.producer, body.prompt or "", len(shapes))
+    # Prompt CONTENT is user free-text — never logged (PII/leak surface); length only.
+    logger.info(
+        "assist %s (prompt %d chars) → %d shape(s)", body.producer, len(body.prompt or ""), len(shapes)
+    )
     return AssistResult(shapes=shapes, source=source)
 
 
@@ -139,7 +141,9 @@ def _remote(
 ) -> list[AssistShape]:
     """Proxy to the model endpoint — a Ray Serve deployment (GroundingDINO/SAM) per the
     merge runtime stack. WIRED, not exercised in-repo: posts the chunk-frame image URL +
-    prompt + region and expects ``{shapes: [...]}``."""
+    prompt + region and expects ``{shapes: [...]}``. A failing or misbehaving model
+    server (HTTP error, bad JSON, invalid shape) raises
+    :class:`ServiceUnavailableError` — a stable 503, never a raw 500."""
     doc_id, speech_id, chunk_id = key
     http = state.http
     if http is None:
@@ -149,6 +153,9 @@ def _remote(
         "prompt": body.prompt,
         "region": body.region.model_dump() if body.region else None,
     }
-    resp = http.post(url, json=payload, timeout=30.0)
-    resp.raise_for_status()
-    return [AssistShape.model_validate(s) for s in resp.json().get("shapes", [])]
+    try:
+        resp = http.post(url, json=payload, timeout=30.0)
+        resp.raise_for_status()
+        return [AssistShape.model_validate(s) for s in resp.json().get("shapes", [])]
+    except (httpx.HTTPError, ValueError) as e:
+        raise ServiceUnavailableError("assist model server error") from e

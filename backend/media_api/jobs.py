@@ -12,20 +12,17 @@ else a deterministic in-repo MOCK so the submit/poll round-trip is wired + testa
 runs in-repo — the mock only proves submission + status polling.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
+import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from backend.core.exceptions import ServiceUnavailableError
 from backend.deps import StateDep
-
-if TYPE_CHECKING:
-    from backend.state import AppState
+from backend.state import AppState
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +38,8 @@ class JobScope(BaseModel):
 
 
 class JobRequest(BaseModel):
+    """A batch-deriver submission: which producer/op to run over which selection."""
+
     producer: str  # grounding-dino | insid3 | vlm-judge | embed-propagate | …
     op: Literal["predict", "propagate", "judge"]
     scope: JobScope
@@ -54,17 +53,19 @@ class JobRequest(BaseModel):
 
 
 class JobResult(BaseModel):
+    """Submit/poll response — the runner's view of one job."""
+
     job_id: str
-    status: str  # queued | running | succeeded | failed
-    backend: str  # "mock" | "remote"
+    status: Literal["queued", "running", "succeeded", "failed"]
+    backend: Literal["mock", "remote"]
 
 
-def _scope_size(scope: JobScope) -> int:
+def scope_size(scope: JobScope) -> int:
     """Item count for a chunk selection; -1 for scope/corpus (server-side count)."""
     return len(scope.keys) if scope.level == "chunks" else -1
 
 
-def _job_id(body: JobRequest) -> str:
+def job_id_for(body: JobRequest) -> str:
     """Deterministic id from the request — a re-submit of the same op+scope+exemplars is
     idempotent (no wall-clock / randomness, so runs are reproducible). The scope's actual
     CONTENT is part of the identity (sorted keys / the WHERE predicate — a same-size but
@@ -79,7 +80,7 @@ def _job_id(body: JobRequest) -> str:
 @router.post("/apply")
 def apply(state: StateDep, body: JobRequest) -> JobResult:
     """Submit a batch labeling deriver over a read-plane selection."""
-    n = _scope_size(body.scope)
+    n = scope_size(body.scope)
     logger.info(
         "job apply %s:%s over %s (%s items, %d exemplars)",
         body.producer, body.op, body.scope.level, n, len(body.exemplars),
@@ -87,7 +88,7 @@ def apply(state: StateDep, body: JobRequest) -> JobResult:
     url = state.settings.jobs_url
     if url:
         return _remote(state, url, body)
-    return JobResult(job_id=_job_id(body), status="queued", backend="mock")
+    return JobResult(job_id=job_id_for(body), status="queued", backend="mock")
 
 
 @router.get("/{job_id}")
@@ -101,21 +102,30 @@ def status(state: StateDep, job_id: str) -> JobResult:
 
 
 def _remote(state: AppState, url: str, body: JobRequest) -> JobResult:
-    """Proxy the submit to the lance-ns RayJob endpoint (WIRED, not exercised in-repo)."""
+    """Proxy the submit to the lance-ns RayJob endpoint (WIRED, not exercised in-repo).
+
+    A failing or misbehaving runner (HTTP error, bad JSON, missing/unknown fields)
+    raises :class:`ServiceUnavailableError` — a stable 503, never a raw 500."""
     http = state.http
     if http is None:
         raise ServiceUnavailableError("jobs: HTTP client unavailable")
-    resp = http.post(url, json=body.model_dump(), timeout=30.0)
-    resp.raise_for_status()
-    data = resp.json()
-    return JobResult(job_id=str(data["job_id"]), status=data.get("status", "queued"), backend="remote")
+    try:
+        resp = http.post(url, json=body.model_dump(), timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
+        return JobResult(job_id=str(data["job_id"]), status=data.get("status", "queued"), backend="remote")
+    except (httpx.HTTPError, KeyError, ValueError) as e:
+        raise ServiceUnavailableError("jobs runner error") from e
 
 
 def _remote_status(state: AppState, url: str, job_id: str) -> JobResult:
+    """Poll the runner; same failure contract as :func:`_remote` (503, never raw 500)."""
     http = state.http
     if http is None:
         raise ServiceUnavailableError("jobs: HTTP client unavailable")
-    resp = http.get(f"{url.rstrip('/')}/{job_id}", timeout=15.0)
-    resp.raise_for_status()
-    data = resp.json()
-    return JobResult(job_id=job_id, status=data.get("status", "queued"), backend="remote")
+    try:
+        resp = http.get(f"{url.rstrip('/')}/{job_id}", timeout=15.0)
+        resp.raise_for_status()
+        return JobResult(job_id=job_id, status=resp.json().get("status", "queued"), backend="remote")
+    except (httpx.HTTPError, ValueError) as e:
+        raise ServiceUnavailableError("jobs runner error") from e

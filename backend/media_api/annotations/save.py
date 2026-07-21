@@ -7,10 +7,8 @@ the editable fields onto the current rows (geometry/provenance carried forward) 
 is the direct-write prototype, mirroring the direct read.)
 """
 
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
 
 import pyarrow as pa
 from fastapi import APIRouter
@@ -21,17 +19,13 @@ from backend.media_api.annotations.commit import check_base_version, delete_by_i
 from backend.media_api.annotations.schema import (
     ANNOTATIONS_TABLE,
     EDITABLE_FIELDS,
+    NewAnnotation,
     SaveAnnotations,
     SaveResult,
     identity_values,
 )
 from backend.media_api.media import DatasetParam, chunk_key_filter, table_dataset, validate_doc_key
 from backend.state import dataset_handle
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
-    from backend.media_api.annotations.schema import NewAnnotation
 
 logger = logging.getLogger(__name__)
 
