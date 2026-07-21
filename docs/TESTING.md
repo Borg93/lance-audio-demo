@@ -199,8 +199,11 @@ cd frontend/apps/media && bun run test:e2e
 
 Each suite re-seeds the demo annotations (`make seed-annotations`) before + after, so
 runs are deterministic and leave the demo clean. NOT covered here: annotations over the
-S3 backend (`MEDIA_S3_*` — the read paths were live-verified separately; the annotation
-write path over S3 is an open combo), and CI wiring (merge-side).
+S3 backend (`MEDIA_S3_*` — read paths live-verified separately; the annotation WRITE
+plane over S3 was live-verified 2026-07-21 against MinIO: `materialize-blobs` → managed
+media_blob streams over S3, then wire GET + save-insert commit + stale-base-version 409 +
+`?version` time-travel + tag batch, all against an S3-backed backend — the browser suite
+itself still runs against the local dataset), and CI wiring (merge-side).
 
 ### Full-pipeline e2e smoke (distinct from the pytest smoke)
 

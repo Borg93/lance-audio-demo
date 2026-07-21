@@ -125,9 +125,11 @@ real blob item is **data-side and already built**: run `rmedia materialize-blobs
    always survive via `error_if_tagged_old_versions=False`) + **version tags — DONE**
    (`rmedia tag NAME [--version N] [--delete|--list]` — review milestones exempt from
    pruning; a pruned version is a clean 404 through `/versions` checkout).
-4. **[P2] `rmedia materialize-blobs`** run for the S3 dataset (data-side; path exists).
-5. **[P3] `describe_indices()` migration** — pylance 7.0 deprecates `list_indices()`
-   (used in `lancekit/introspect.py`). NOT drop-in: the new `IndexDescription` renames
-   `type`→`type_url` (a proto URL, needs parsing) and `fields` becomes numeric ids
-   (`field_names` carries the names) — migrate deliberately with IndexInfo consumers.
+4. **[P2] `rmedia materialize-blobs` — DONE 2026-07-21** (parity_new: media_blob 376 MB +
+   thumbnails now managed; re-synced to MinIO; 65 MB blob streamed over S3 + full
+   annotations write plane verified against the S3-backed backend).
+5. **[P3] `describe_indices()` migration — DONE 2026-07-21** (`introspect.py`: type from
+   the type_url tail — BTree/Bitmap/Inverted unchanged, vector indexes now the generic
+   `Vector` instead of `IVF_PQ`; columns from `field_names`; display-only downstream,
+   frontend validates an opaque string).
 6. **[watch] `Session` shared cache** — only if per-request open cost profiles hot.

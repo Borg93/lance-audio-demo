@@ -60,27 +60,22 @@ def _column_info(field: pa.Field) -> ColumnInfo:
     )
 
 
-def _index_field(index: object, key: str, default: object = None) -> object:
-    # pylance has returned both dicts and Index objects across versions.
-    if isinstance(index, dict):
-        return index.get(key, default)
-    return getattr(index, key, default)
+def _index_type(type_url: str) -> str:
+    """Index kind from the proto type_url tail (`/lance.table.BTreeIndexDetails` → `BTree`).
+
+    Vector indexes collapse to the generic `Vector` (the new API no longer names the
+    algorithm, e.g. IVF_PQ) — display-only downstream, validated as an opaque string.
+    """
+    return type_url.rsplit(".", 1)[-1].removesuffix("IndexDetails") or "?"
 
 
 def table_info(uri: str | Path, storage_options: dict[str, str] | None = None) -> TableInfo:
     """Introspect one Lance table (schema, vector dims, blob columns, indexes)."""
     ds = lance.dataset(str(uri), storage_options=storage_options)
-    indexes = []
-    for ix in ds.list_indices():
-        raw_fields = _index_field(ix, "fields", [])
-        fields = [str(c) for c in raw_fields] if isinstance(raw_fields, list | tuple) else []
-        indexes.append(
-            IndexInfo(
-                name=str(_index_field(ix, "name", "?")),
-                index_type=str(_index_field(ix, "type", "?")),
-                columns=fields,
-            )
-        )
+    indexes = [
+        IndexInfo(name=ix.name, index_type=_index_type(ix.type_url), columns=list(ix.field_names))
+        for ix in ds.describe_indices()
+    ]
     return TableInfo(
         name=Path(uri).stem,
         row_count=ds.count_rows(),
