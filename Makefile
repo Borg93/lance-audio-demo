@@ -30,7 +30,7 @@ GPU             ?= 2
 	embed-speaker-turns build-speakers cluster-speakers \
 	caption-chunk-frames embed-captions captions topics \
 	atlas atlas-visual atlas-caption atlas-all features-all stack-up stack-down \
-	compact e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
+	compact maintain e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
 	seed-annotations annotate \
 	hf-upload-db hf-upload-videos hf-upload-all hf-download-db hf-download-all \
 	reingest search query demo shell clean clean-db clean-run reset download
@@ -464,6 +464,9 @@ features-all-ray:     ## features-all via the Ray Data pipeline (rmedia pipeline
 compact:               ## Compact $(TABLE)'s fragments + rebuild its indexes (run after bulk writes; TABLE=chunk_frames for frames).
 	uv run rmedia --db $(DB) --table $(TABLE) compact
 	@echo "── multimodal indexing complete ────────────────────────────────"
+
+maintain:              ## Prune old annotations-table versions (tagged milestones + latest survive; RETENTION_DAYS=14).
+	uv run rmedia --db $(DB) --table annotations maintain --older-than-days $(or $(RETENTION_DAYS),14)
 
 E2E_DOCS        ?= 2
 E2E_FRAME_LIMIT ?= 24

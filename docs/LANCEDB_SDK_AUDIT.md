@@ -120,8 +120,11 @@ real blob item is **data-side and already built**: run `rmedia materialize-blobs
    dead `refresh_descriptor`): per-table re-introspection on observed version drift at
    both open seams (`table_dataset`, `resolve_target`); copy-on-write, best-effort,
    stampede-guarded.
-3. **[P2] Annotations version GC** (`cleanup_old_versions` with retention ≥ audit
-   horizon) + version tags for review milestones — as a scheduled maintain step.
+3. **[P2] Annotations version GC — DONE** (`rmedia maintain` / `make maintain`:
+   `cleanup_old_versions` with `--older-than-days` retention, tagged versions + latest
+   always survive via `error_if_tagged_old_versions=False`) + **version tags — DONE**
+   (`rmedia tag NAME [--version N] [--delete|--list]` — review milestones exempt from
+   pruning; a pruned version is a clean 404 through `/versions` checkout).
 4. **[P2] `rmedia materialize-blobs`** run for the S3 dataset (data-side; path exists).
 5. **[P3] `describe_indices()` migration** — pylance 7.0 deprecates `list_indices()`
    (used in `lancekit/introspect.py`). NOT drop-in: the new `IndexDescription` renames

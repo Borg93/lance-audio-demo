@@ -1,5 +1,5 @@
 """Media + maintenance commands: ``thumbnail``, ``download``,
-``extract-chunk-frames``, and ``compact``.
+``extract-chunk-frames``, ``compact``, ``maintain``, and ``tag``.
 
 The speaker-diarization pipeline commands (``extract-speaker-turns`` →
 ``embed-speaker-turns`` → ``build-speakers`` → ``cluster-speakers`` plus their
@@ -184,3 +184,94 @@ def cmd_compact(
                 table.create_scalar_index(col, index_type="BTREE", replace=True)
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"scalar index ({col}) skipped: {e}")
+
+
+@app.command("maintain")
+def cmd_maintain(
+    ctx: typer.Context,
+    older_than_days: Annotated[
+        float,
+        typer.Option(
+            "--older-than-days",
+            help="Retention window: versions older than this are pruned. Must cover the "
+            "compare-versions audit horizon — the History/compare UI reads FROM retained "
+            "old versions.",
+        ),
+    ] = 14.0,
+    delete_unverified: Annotated[
+        bool,
+        typer.Option(
+            "--delete-unverified",
+            help="Also delete files newer than Lance's 7-day in-progress-transaction guard. "
+            "ONLY safe when no other process is writing this table.",
+        ),
+    ] = False,
+) -> None:
+    """Prune old versions of ``--table`` (docs/LANCEDB_SDK_AUDIT.md probe 4).
+
+    The annotations table commits 1-2 versions per Save and nothing else ever
+    prunes, so ``/versions`` slows linearly with save count. Tagged versions
+    (``rmedia tag``) and the latest version always survive. Kept a thin scheduled
+    call, not app machinery — at merge, table maintenance belongs to lance-ns.
+    """
+    from datetime import timedelta
+
+    import lance
+    import lancedb
+
+    cfg: CliContext = ctx.obj
+    db = lancedb.connect(str(cfg.db))
+    _require_table(db, cfg.table, cfg.db)
+    ds = lance.dataset(str(cfg.db / f"{cfg.table}.lance"))
+    before = len(ds.versions())
+    # error_if_tagged_old_versions=False = SKIP tagged versions (keep them) instead
+    # of refusing the whole cleanup when a milestone falls inside the window.
+    stats = ds.cleanup_old_versions(
+        older_than=timedelta(days=older_than_days),
+        delete_unverified=delete_unverified,
+        error_if_tagged_old_versions=False,
+    )
+    after = len(lance.dataset(str(cfg.db / f"{cfg.table}.lance")).versions())
+    typer.echo(
+        f"{cfg.table}: versions {before} -> {after} "
+        f"(freed {stats.bytes_removed:,} bytes, {stats.old_versions} old version(s))"
+    )
+
+
+@app.command("tag")
+def cmd_tag(
+    ctx: typer.Context,
+    name: Annotated[
+        str | None,
+        typer.Argument(help="Tag name (a review milestone, e.g. 'batch-1-reviewed')."),
+    ] = None,
+    version: Annotated[
+        int | None,
+        typer.Option("--version", help="Table version to tag (default: latest)."),
+    ] = None,
+    delete: Annotated[bool, typer.Option("--delete", help="Delete the tag instead.")] = False,
+    list_tags: Annotated[bool, typer.Option("--list", help="List tags and exit.")] = False,
+) -> None:
+    """Tag a version of ``--table`` as a durable review milestone.
+
+    Tagged versions are exempt from ``maintain``'s pruning — the audit spine that
+    survives once intermediate saves are cleaned up. Distinct from the annotations
+    ROW tags (labels on chunks): this names a whole table version.
+    """
+    import lance
+
+    cfg: CliContext = ctx.obj
+    ds = lance.dataset(str(cfg.db / f"{cfg.table}.lance"))
+    if list_tags:
+        for tag, meta in sorted(ds.tags.list().items()):
+            typer.echo(f"{tag}\tv{meta['version']}")
+        return
+    if name is None:
+        raise typer.BadParameter("a tag name is required unless --list is given")
+    if delete:
+        ds.tags.delete(name)
+        typer.echo(f"deleted tag {name!r}")
+        return
+    target = version if version is not None else ds.version
+    ds.tags.create(name, target)
+    typer.echo(f"{cfg.table}: tagged v{target} as {name!r}")
