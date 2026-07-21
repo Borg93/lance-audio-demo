@@ -326,13 +326,24 @@ by layer (reference model: **Firn/firnflow** — LanceDB + object storage + a ti
 | Reader metadata cache (page/index/dictionary LRU) | **Lance, already** | Keeps a live reader fast; not results, not persistent | free |
 
 Key points for the merge:
-- **No `foyer` for us** — it's Rust; our backend is Python. foyer is the right pick only
-  if/when the search path moves into a Rust serving layer (the catalog). The Python
-  analogue for an object cache, if ever wanted here, is `fsspec` filecache.
-- **Not distributed** — the result cache is per-process on `AppState`. The version-key
-  makes it *coherent by construction* (a write bumps the Lance version → stale entry is
-  unreachable, never wrong), so multiple replicas need no coordination; Redis only earns
-  its keep for shared warmth across many replicas, which a viewer/Studio app doesn't need.
+- **`foyer` is the engine's, not ours — 4 reasons (strongest first):** (1) it caches the
+  **object-byte tier** (S3 fragment/index bytes on NVMe), owned by whoever does the S3 reads
+  at scale = the query engine (we read *through* the catalog at merge). (2) It's an embedded
+  **Rust** crate; our backend is Python → FFI/sidecar only, and "a Rust process caching bytes
+  near storage" *is* the engine's serving layer. (3) **Wrong shape** — our cache holds small
+  hot query *results*; foyer is for large cold *byte blobs*. (4) Lance already has object-store
+  + reader caching (+ the OS page cache), and the result cache short-circuits repeats → no cold
+  gap for foyer here. It's the right tool for the engine's byte tier, wrong house for a viewer.
+- **Store is deployment-dependent — NOT "redis unnecessary".** The result cache is per-process
+  on `AppState` today, and the version-key makes it *coherent by construction* (a write bumps
+  the Lance version → stale entry unreachable). That's correct for a **single process** (a Tauri/
+  desktop Studio instance or one dev backend), where an in-process dict beats redis (zero hop).
+  But the **multi-replica web deploy** (this K8s/Dapr merge) wants a **shared store** — N pods
+  otherwise each run a cold cache (cross-pod misses recompute the vLLM+rerank+Lance path, N×
+  memory, cold-start per pod). **Redis (or the engine's shared cache) is the right store there**,
+  and the cluster already runs redis for Dapr state. The version-keyed KEY DESIGN is
+  store-agnostic and `run_cached(cache, …)` takes the store as a param → **dict↔redis is a small
+  localized swap**, same coherence guarantee. It was never "cache vs none"; it's which store.
 - **Portable seam** — `run_search` stayed pure; the cache is a router wrapper
   (`_cached_search`) that's opt-in. When a real query engine takes over search, flip the
   size to 0 and delete one module — the durable artifact is the *key design*, which the
