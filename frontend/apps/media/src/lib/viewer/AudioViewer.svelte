@@ -9,7 +9,7 @@
   import { loadAnnotations } from '@lance/labeling/annotations-client';
   import { Pause, Play } from 'lucide-svelte';
   import { WaveSurface, type TemporalSegment } from '@lance/engine';
-  import { Button } from '$lib/components/ui';
+  import { Button } from '@lance/ui';
   import type { ViewerProps } from './types';
 
   let { unit, onload, controller }: ViewerProps = $props();

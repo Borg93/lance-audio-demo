@@ -4,7 +4,7 @@
 
 <script lang="ts">
   import { Select } from 'bits-ui';
-  import { cn } from '$lib/utils';
+  import { cn } from './utils';
   import { Check, ChevronDown } from 'lucide-svelte';
 
   let {

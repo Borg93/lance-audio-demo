@@ -6,7 +6,7 @@
    *  filter / upstream results) and "image" (Image node only), so the wires
    *  show what feeds what. */
   import { Handle, Position, type NodeProps } from '@xyflow/svelte';
-  import type { SearchMode } from '$lib/api';
+  import type { SearchMode } from '@lance/api';
   import {
     graph,
     SEARCH_MODES,

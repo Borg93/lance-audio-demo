@@ -1,18 +1,16 @@
-import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
-import { activeView, type Row } from "$lib/descriptor";
+import { activeView, type Row } from "@lance/api/descriptor";
 
 /** shadcn-svelte's standard `cn` helper: clsx for conditionals, twMerge for conflicts. */
-export function cn(...inputs: ClassValue[]): string {
-  return twMerge(clsx(inputs));
-}
+export { cn } from "@lance/ui/utils";
+export type {
+  WithElementRef,
+  WithoutChild,
+  WithoutChildren,
+  WithoutChildrenOrChild,
+} from "@lance/ui/utils";
 
 // Type helpers expected by shadcn-svelte v1.2+ generated components (shared
 // with the sibling apps so UI primitives stay copy-paste compatible).
-export type WithoutChild<T> = T extends { child?: unknown } ? Omit<T, "child"> : T;
-export type WithoutChildren<T> = T extends { children?: unknown } ? Omit<T, "children"> : T;
-export type WithoutChildrenOrChild<T> = WithoutChildren<WithoutChild<T>>;
-export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & { ref?: U | null };
 
 /** Format seconds as `H:MM:SS` (or `M:SS` under an hour). */
 export function fmtTime(s: number): string {

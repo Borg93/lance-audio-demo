@@ -21,7 +21,7 @@
     type Simulation,
     type SimulationNodeDatum,
   } from 'd3-force';
-  import { Button, Select, type SelectOption } from '$lib/components/ui';
+  import { Button, Select, type SelectOption } from '@lance/ui';
   import GpuGraph from '$lib/graph/gpu-graph.svelte';
   import GraphBreadcrumb from '$lib/graph/graph-breadcrumb.svelte';
   import {
@@ -35,7 +35,7 @@
     type GraphEntityResponse,
     type GraphMatch,
     type GraphCypherResponse,
-  } from '$lib/api';
+  } from '@lance/api';
 
   type View = 'graph' | 'table' | 'json';
   type SimNode = SimulationNodeDatum & { id: string; idx: number };

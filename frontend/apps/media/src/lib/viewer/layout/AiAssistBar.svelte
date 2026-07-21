@@ -5,7 +5,7 @@
   // accepts/rejects like any prediction. (ra-atr AI-labeling parity.)
   import { onDestroy } from 'svelte';
   import { MousePointerClick, Sparkles } from 'lucide-svelte';
-  import { Button, Input } from '$lib/components/ui';
+  import { Button, Input } from '@lance/ui';
   import { cn } from '$lib/utils';
   import type { AnnotatorController } from '../annotator.svelte';
 

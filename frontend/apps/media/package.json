@@ -39,7 +39,9 @@
     "valibot": "^1.4.2",
     "wavesurfer.js": "^7.12.11",
     "@lance/engine": "workspace:*",
-    "@lance/labeling": "workspace:*"
+    "@lance/labeling": "workspace:*",
+    "@lance/ui": "workspace:*",
+    "@lance/api": "workspace:*"
   },
   "devDependencies": {
     "@lance-media/config": "workspace:*",

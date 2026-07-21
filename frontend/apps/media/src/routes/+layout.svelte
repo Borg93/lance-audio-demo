@@ -15,7 +15,7 @@
     SquarePen,
     type Icon as LucideIcon,
   } from 'lucide-svelte';
-  import * as Sidebar from '$lib/components/ui/sidebar';
+  import * as Sidebar from '@lance/ui/sidebar';
   import ThemeToggle from '$lib/components/theme-toggle.svelte';
   import StatusBadge from '$lib/components/status-badge.svelte';
 

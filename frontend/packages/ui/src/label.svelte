@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Label } from 'bits-ui';
-  import { cn } from '$lib/utils';
+  import { cn } from './utils';
   import type { Snippet } from 'svelte';
 
   let {

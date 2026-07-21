@@ -3,7 +3,7 @@
   // the AnnotatorController facade, never the engine directly. (Ported from
   // ra-anno Toolbar.svelte, trimmed to functional controls for our engine.)
   import { Eye, Pencil, Trash2, Spline, Eraser, Undo2, Redo2, Save } from 'lucide-svelte';
-  import { Button } from '$lib/components/ui';
+  import { Button } from '@lance/ui';
   import { cn } from '$lib/utils';
   import { TOOL_DEFS } from '../tool-defs';
   import type { AnnotatorController } from '../annotator.svelte';

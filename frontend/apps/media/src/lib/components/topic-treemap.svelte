@@ -24,7 +24,7 @@
   import { scaleOrdinal } from 'd3-scale';
   import { schemeTableau10 } from 'd3-scale-chromatic';
   import { ChevronRight, ArrowRight, Eye, EyeOff } from 'lucide-svelte';
-  import type { TopicNode } from '$lib/api';
+  import type { TopicNode } from '@lance/api';
   import TopicSankey from './topic-sankey.svelte';
 
   // `noiseLabel` is the unclustered-bucket name, sourced from /api/topics

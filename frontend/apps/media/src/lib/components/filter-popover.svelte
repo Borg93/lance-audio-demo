@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Input, Button, type SelectOption } from '$lib/components/ui';
+  import { Input, Button, type SelectOption } from '@lance/ui';
   import { Popover } from 'bits-ui';
-  import { activeView, listColumns, type SearchSpec, type ColumnInfo } from '$lib/api';
+  import { activeView, listColumns, type SearchSpec, type ColumnInfo } from '@lance/api';
   import { Filter, X, Eye, EyeOff, Plus } from 'lucide-svelte';
   import { cn } from '$lib/utils';
 

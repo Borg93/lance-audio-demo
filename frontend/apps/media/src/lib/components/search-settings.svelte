@@ -10,7 +10,7 @@
     RadioGroup,
     type SelectOption,
     type RadioOption,
-  } from '$lib/components/ui';
+  } from '@lance/ui';
 
   /**
    * The single "config" surface for a search. All values are bindable and owned

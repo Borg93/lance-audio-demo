@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Button, Input, Select, type SelectOption } from '$lib/components/ui';
+  import { Button, Input, Select, type SelectOption } from '@lance/ui';
   import FilterPopover from './filter-popover.svelte';
   import HelpPopover from './help-popover.svelte';
   import SearchSettings from './search-settings.svelte';
-  import { activeView, type SearchSpec, type SearchMode } from '$lib/api';
+  import { activeView, type SearchSpec, type SearchMode } from '@lance/api';
   import { untrack } from 'svelte';
   import { voiceSearch } from '$lib/voice-search.svelte';
   import { AudioLines, Loader2, Paperclip, Search, X, ImagePlus } from 'lucide-svelte';

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { activeView, type SearchSpec } from '$lib/api';
+  import { activeView, type SearchSpec } from '@lance/api';
   import { X } from 'lucide-svelte';
 
   type Props = {

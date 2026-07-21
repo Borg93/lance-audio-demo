@@ -13,7 +13,7 @@
    */
   import { browser } from '$app/environment';
   import type { Component } from 'svelte';
-  import { activeView, getAtlasStatus } from '$lib/api';
+  import { activeView, getAtlasStatus } from '@lance/api';
 
   type Phase = 'loading' | 'ready' | 'unavailable' | 'error';
 

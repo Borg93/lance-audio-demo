@@ -20,10 +20,10 @@ import {
   type Row,
   RowSchema,
   type SearchMode,
-} from "$lib/descriptor";
+} from "./descriptor";
 
-export type { Alignment, Row, SearchMode } from "$lib/descriptor";
-export { activeView } from "$lib/descriptor";
+export type { Alignment, Row, SearchMode } from "./descriptor";
+export { activeView } from "./descriptor";
 
 /** Legacy alias — a search/browse result row. Field access goes through the
  *  active {@link DatasetView}; this stays for import compatibility. */
@@ -315,7 +315,7 @@ import {
   DatasetDescriptorSchema,
   DatasetsResponseSchema,
   DatasetView as DatasetViewClass,
-} from "$lib/descriptor";
+} from "./descriptor";
 
 /** List the datasets the backend serves (id + table stats + capabilities). */
 export async function listDatasets(fetcher: typeof fetch = fetch) {

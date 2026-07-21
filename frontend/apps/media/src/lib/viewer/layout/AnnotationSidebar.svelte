@@ -3,7 +3,7 @@
   // + the layer panel. Controlled by the facade. (Ported from ra-anno, split into
   // focused sub-components per our no-god-files rule.)
   import { ChevronLeft, List, Table } from 'lucide-svelte';
-  import { Button } from '$lib/components/ui';
+  import { Button } from '@lance/ui';
   import { cn } from '$lib/utils';
   import { statusDot } from './statusStyle';
   import AnnotationDetail from './AnnotationDetail.svelte';

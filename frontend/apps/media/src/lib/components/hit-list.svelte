@@ -1,6 +1,6 @@
 <script lang="ts">
   import HitCard from './hit-card.svelte';
-  import type { Hit } from '$lib/api';
+  import type { Hit } from '@lance/api';
   import { hitKey, queryTerms, makeHighlighter } from '$lib/utils';
 
   type Props = {

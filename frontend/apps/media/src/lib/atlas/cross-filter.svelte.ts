@@ -20,8 +20,8 @@
  * feeds `setFilteredFromHits` and reads `selectedIds`.
  */
 
-import type { Hit, AtlasPoints, AtlasSpace } from "$lib/api";
-import { activeView } from "$lib/descriptor";
+import type { Hit, AtlasPoints, AtlasSpace } from "@lance/api";
+import { activeView } from "@lance/api/descriptor";
 import { hitKey } from "$lib/utils";
 
 /** Colour channel for the scatter (legend + per-point recolour). `cluster` and

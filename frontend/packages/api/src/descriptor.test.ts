@@ -1,6 +1,6 @@
 import * as v from "valibot";
 import { describe, expect, it } from "vitest";
-import { DatasetDescriptorSchema, DatasetView, type Row } from "$lib/descriptor";
+import { DatasetDescriptorSchema, DatasetView, type Row } from "./descriptor";
 
 // A transcripts-shaped descriptor (3-part identity, time axis, media, all modes).
 const TRANSCRIPTS = {

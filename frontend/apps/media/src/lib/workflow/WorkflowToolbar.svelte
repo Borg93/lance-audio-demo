@@ -2,7 +2,7 @@
   /** Canvas run controls (Run / Clear / Reset / Delete / Undo / Redo / Tidy).
    *  Adding nodes lives in the drag-to-add palette, not here. */
   import { Play, RotateCcw, LoaderCircle, Trash2, Undo2, Redo2, Wand2, Command } from 'lucide-svelte';
-  import { Button } from '$lib/components/ui';
+  import { Button } from '@lance/ui';
   import { graph } from '$lib/workflow/graph.svelte';
   import { commandMenu } from '$lib/workflow/command-menu.svelte';
 </script>

@@ -4,7 +4,7 @@
 
 <script lang="ts">
   import { RadioGroup } from 'bits-ui';
-  import { cn } from '$lib/utils';
+  import { cn } from './utils';
 
   let {
     value = $bindable(''),

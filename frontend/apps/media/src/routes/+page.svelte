@@ -17,7 +17,7 @@
     type VoiceHit,
     type VoiceQueryInfo,
     type VoiceSimilarResponse,
-  } from '$lib/api';
+  } from '@lance/api';
   import { voiceSearch } from '$lib/voice-search.svelte';
   import { submitBatchJob } from '@lance/labeling/jobs';
   import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
@@ -33,8 +33,8 @@
   import ResizableSplit from '$lib/components/resizable-split.svelte';
   import AtlasMap from '$lib/atlas/AtlasMap.svelte';
   import { crossFilter } from '$lib/atlas/cross-filter.svelte';
-  import { getAtlasChunks } from '$lib/api';
-  import { Button, Switch } from '$lib/components/ui';
+  import { getAtlasChunks } from '@lance/api';
+  import { Button, Switch } from '@lance/ui';
   import {
     LayoutGrid,
     List as ListIcon,

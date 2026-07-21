@@ -1,6 +1,6 @@
 <script lang="ts">
   import { browser } from '$app/environment';
-  import { Button } from '$lib/components/ui';
+  import { Button } from '@lance/ui';
   import { Sun, Moon } from 'lucide-svelte';
 
   // Self-contained: read the actual <html> class as truth, no external store.

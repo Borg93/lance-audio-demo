@@ -1,8 +1,8 @@
 <script lang="ts">
   import { PanelLeft } from 'lucide-svelte';
   import type { ComponentProps } from 'svelte';
-  import { Button } from '$lib/components/ui';
-  import { cn } from '$lib/utils';
+  import Button from '../button.svelte';
+  import { cn } from '../utils';
   import { useSidebar } from './context.svelte.js';
 
   // Button's `onclick` is a button|anchor union; narrowing it to a plain

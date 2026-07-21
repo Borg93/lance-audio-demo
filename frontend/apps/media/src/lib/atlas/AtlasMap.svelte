@@ -26,9 +26,9 @@
     type AtlasPoints,
     type AtlasSpace,
     type Hit,
-  } from '$lib/api';
+  } from '@lance/api';
   import { crossFilter, buildKeyIndex, hitKey, type ColorBy } from './cross-filter.svelte';
-  import { activeView } from '$lib/descriptor';
+  import { activeView } from '@lance/api/descriptor';
   import { buildGrid, nearestIndex, type SpatialGrid } from './atlas-grid';
   import { hexToRgb, hueRgb, buildHuePalette, type Rgb } from './atlas-colors';
   import { indicesInPolygon, type Pt } from './atlas-geometry';
@@ -44,7 +44,7 @@
     type CategoryChannel,
     type ClusterRanking,
   } from './atlas-legend';
-  import { Button, Select, type SelectOption } from '$lib/components/ui';
+  import { Button, Select, type SelectOption } from '@lance/ui';
   import { Loader2, Lasso, X, Hand, Settings2 } from 'lucide-svelte';
   import { useColorMode } from '$lib/theme.svelte';
 

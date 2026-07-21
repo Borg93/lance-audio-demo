@@ -21,6 +21,7 @@
 /* Tailwind 4 + Vite auto-discovery isn't reliable for .svelte under Bun;
  * point it at the source roots explicitly (paths relative to this file). */
 @source "./lib";
+@source "../../../packages/ui/src";
 @source "./routes";
 @source "./app.html";
 

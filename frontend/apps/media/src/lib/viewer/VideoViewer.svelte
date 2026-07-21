@@ -10,7 +10,7 @@
   import { loadAnnotations } from '@lance/labeling/annotations-client';
   import { Pause, Play } from 'lucide-svelte';
   import type { PixiContext } from '@lance/engine';
-  import { Button, Slider } from '$lib/components/ui';
+  import { Button, Slider } from '@lance/ui';
   import PixiCanvas from './PixiCanvas.svelte';
   import type { ViewerProps } from './types';
 

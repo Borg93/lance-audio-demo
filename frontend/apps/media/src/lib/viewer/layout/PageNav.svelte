@@ -3,7 +3,7 @@
   // and emits navigate. Document-plane today (pages); for audio/video this becomes
   // a segment/scene strip — same controlled contract. (Ported from ra-anno PageNavBar.)
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { Button } from '$lib/components/ui';
+  import { Button } from '@lance/ui';
 
   export interface PageRef {
     key: string;

@@ -9,8 +9,8 @@
    * memoised in a tiny LRU keyed by point index. Absolutely positioned
    * (bg-card/85 backdrop-blur) to match the toolbar/legend overlays.
    */
-  import { getAtlasChunk, type AtlasPoints } from '$lib/api';
-  import { activeView } from '$lib/descriptor';
+  import { getAtlasChunk, type AtlasPoints } from '@lance/api';
+  import { activeView } from '@lance/api/descriptor';
 
   let {
     pts,

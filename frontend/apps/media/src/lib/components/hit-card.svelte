@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { type Hit, thumbnailUrl, chunkFrameUrl, isVoiceHit, voiceBandOf } from '$lib/api';
-  import { activeView } from '$lib/descriptor';
+  import { type Hit, thumbnailUrl, chunkFrameUrl, isVoiceHit, voiceBandOf } from '@lance/api';
+  import { activeView } from '@lance/api/descriptor';
   import { features } from '$lib/feature-flags.svelte';
   import { voiceSearch } from '$lib/voice-search.svelte';
   import { audioPreview } from '$lib/audio-preview.svelte';

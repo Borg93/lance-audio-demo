@@ -2,7 +2,7 @@
   // Single-annotation inspector/editor. Controlled: edits route through the facade
   // (canvas + overlay updated together). (Ported from ra-anno AnnotationSidebar detail.)
   import { Check, X, RotateCcw, ChevronUp, ChevronDown } from 'lucide-svelte';
-  import { Button, Input } from '$lib/components/ui';
+  import { Button, Input } from '@lance/ui';
   import { cn } from '$lib/utils';
   import { statusBadge } from './statusStyle';
   import type { AnnotatorController } from '../annotator.svelte';

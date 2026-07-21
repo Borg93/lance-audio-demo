@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getHealth, type Health } from '$lib/api';
+  import { getHealth, type Health } from '@lance/api';
   import { Popover } from 'bits-ui';
   import { Activity } from 'lucide-svelte';
 
