@@ -7,7 +7,7 @@
   // frame, and each new shape is pinned to that moment (controller.timeCursor →
   // t_start/t_end). One annotations table + Save path with images + audio segments.
   import { onDestroy } from 'svelte';
-  import { tableFromIPC } from 'apache-arrow';
+  import { loadAnnotations } from '$lib/labeling/annotations-client';
   import { Pause, Play } from 'lucide-svelte';
   import type { PixiContext } from '$lib/engine';
   import { Button, Slider } from '$lib/components/ui';
@@ -37,10 +37,7 @@
 
   async function onready(c: PixiContext): Promise<void> {
     ctx = c;
-    const res = await fetch(unit.annotationsUrl);
-    if (!res.ok) throw new Error(`annotations HTTP ${res.status}`);
-    const version = Number(res.headers.get('X-Annotations-Version') ?? '0');
-    const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
+    const { table, version } = await loadAnnotations(unit.annotationsUrl);
     c.plugins.arrow.load(table);
     c.plugins.arrow.sync();
     // Spatial attach (this viewer HAS a canvas) — draw tools, zoom, layers all bind.

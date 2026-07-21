@@ -17,7 +17,7 @@
  * controller later. The layout binds to the controller, never to the engine.
  */
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
-import { type Table, tableFromIPC } from "apache-arrow";
+import type { Table } from "apache-arrow";
 import type { CommitShape, GeometryUpdate, PixiContext, Tool } from "$lib/engine";
 import { LayerStore, buildBatchTable } from "$lib/engine";
 import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "$lib/labeling/types";
@@ -25,6 +25,22 @@ import { isChunkSelection } from "$lib/labeling/types";
 import { PRODUCERS } from "$lib/labeling/producers";
 import { submitBatchJob } from "$lib/labeling/jobs";
 import { rowSignature } from "$lib/labeling/history";
+import {
+  AnnotationsHttpError,
+  type InsertRow,
+  assistUrlFor,
+  buildSavePayload,
+  loadAnnotations,
+  makeInsertRow,
+  payloadIsEmpty,
+  postSave,
+  requestAssist,
+} from "$lib/labeling/annotations-client";
+import { type AnnoRow, effectiveField, projectRows, rawField } from "./annotation-rows";
+
+// Re-exported so the layout components keep their existing import site.
+export type { AnnoRow } from "./annotation-rows";
+export type { InsertRow } from "$lib/labeling/annotations-client";
 
 export type Mode = "view" | "edit";
 
@@ -33,24 +49,6 @@ export interface BrushOptions {
   erasing: boolean;
   maskMode: "instance" | "semantic";
   output: "mask" | "polygon";
-}
-
-/** One annotation row projected into the flat shape the sidebar/list render.
- *  Identity is the engine's ROW INDEX (the engine is index-based); `id` is just
- *  a display field. Overlay edits win over the server table. */
-export interface AnnoRow {
-  index: number;
-  id: string;
-  label: string;
-  status: string;
-  shape: string;
-  group: string;
-  text: string;
-  source: string;
-  confidence: number | null;
-  uncertainty: number | null;
-  tStart: number | null;
-  tEnd: number | null;
 }
 
 /** Fields the sidebar can edit inline. */
@@ -63,39 +61,6 @@ interface FieldEdit {
   field: EditableField;
   before: string;
   after: string;
-}
-
-/** A newly drawn shape queued for the next Save (backend `NewAnnotation`). The chunk
- *  identity is stamped server-side, so we send only geometry + attributes. */
-interface InsertRow {
-  id: string;
-  shape_type: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  rotation: number;
-  polygon: number[];
-  t_start: number;
-  t_end: number;
-  mask: string;
-  label: string;
-  text: string;
-  group: string;
-  status: string;
-  source: string;
-}
-
-/** A predicted shape from the AI-assist endpoint (backend AssistShape). */
-interface AssistShape {
-  shape_type?: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  polygon?: number[];
-  label?: string;
-  confidence?: number;
 }
 
 const STRING_FIELD_CANDIDATES = ["label", "status", "source", "group", "reviewer"];
@@ -199,29 +164,10 @@ export class AnnotatorController {
     return STRING_FIELD_CANDIDATES.filter((c) => names.has(c));
   });
 
-  /** Flat rows for the sidebar list, overlay-aware. */
+  /** Flat rows for the sidebar list, overlay-aware (pure projection in annotation-rows). */
   readonly rows = $derived.by<AnnoRow[]>(() => {
     const t = this.table;
-    if (!t) return [];
-    const out: AnnoRow[] = [];
-    for (let i = 0; i < t.numRows; i++) {
-      out.push({
-        index: i,
-        id: this._raw(t, "id", i) ?? String(i),
-        label: this._field(t, "label", i) ?? "",
-        status: this._field(t, "status", i) ?? "",
-        shape: this._field(t, "shape_type", i) ?? "",
-        group: this._field(t, "group", i) ?? "",
-        text: this._field(t, "text", i) ?? "",
-        source: this._field(t, "source", i) ?? "",
-        confidence: this._num(t, "confidence", i),
-        uncertainty: this._num(t, "uncertainty", i),
-        tStart: this._num(t, "t_start", i),
-        tEnd: this._num(t, "t_end", i),
-      });
-    }
-    // deletes reflect immediately in the sidebar (the canvas reconciles on save+reload)
-    return this._deletes.length ? out.filter((r) => !this._deletes.includes(r.id)) : out;
+    return t ? projectRows(t, this._overrides, this._deletes) : [];
   });
 
   /** Distinct groups for the current group-by column, with counts. */
@@ -334,10 +280,11 @@ export class AnnotatorController {
       this._geoDirty = true;
     };
     im.onCommit = (shape) => {
-      // In SAM mode the drawn box/point is a region prompt (→ a mask prediction),
-      // not a manual annotation.
+      // In SAM mode the drawn box/point is a region prompt (→ a mask prediction), not a
+      // manual annotation — its bbox travels as the region (a point = a zero box = click).
       if (this.assistProducer) {
-        void this.assist("", this._regionOf(shape), this.assistProducer);
+        const region = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
+        void this.assist("", region, this.assistProducer);
       } else {
         this._appendInsert(this._buildInsert(shape));
       }
@@ -429,7 +376,7 @@ export class AnnotatorController {
     const i = this.selectedIndex;
     if (i == null) return;
     const t = this.table;
-    const id = t ? this._raw(t, "id", i) : null;
+    const id = t ? rawField(t, "id", i) : null;
     if (id) this._deletes = [...this._deletes, id]; // flushed on Save; sidebar drops it now
     this.ctx?.plugins.interaction.handleKeyDown("Delete");
     this._geoDirty = true;
@@ -443,26 +390,14 @@ export class AnnotatorController {
    *  as a drawn box (spatial fields zeroed); returns the new row id so the caller can
    *  key its region to it. */
   addTemporalSegment(seg: { t_start: number; t_end: number; label?: string }): string {
-    const id = crypto.randomUUID();
-    this._appendInsert({
-      id,
+    const row = makeInsertRow({
       shape_type: "segment",
-      x: 0,
-      y: 0,
-      width: 0,
-      height: 0,
-      rotation: 0,
-      polygon: [],
       t_start: seg.t_start,
       t_end: seg.t_end,
-      mask: "",
       label: seg.label ?? "",
-      text: "",
-      group: "",
-      status: "accepted",
-      source: "human",
     });
-    return id;
+    this._appendInsert(row);
+    return row.id;
   }
 
   /** Queue a segment-time resize of an EXISTING row (a region drag-end), keyed by row
@@ -494,7 +429,7 @@ export class AnnotatorController {
   private _exemplarIds(indices: number[] | undefined): string[] {
     const t = this.table;
     if (!t || !indices?.length) return [];
-    return indices.map((i) => this._raw(t, "id", i)).filter((id): id is string => !!id);
+    return indices.map((i) => rawField(t, "id", i)).filter((id): id is string => !!id);
   }
 
   /** INSID3 few-shot propagate: take the picked annotations as EXEMPLARS and propagate
@@ -519,23 +454,21 @@ export class AnnotatorController {
   private _appendInsert(row: InsertRow): void {
     this._inserts = [...this._inserts, row];
     const t = this.table;
-    const arrow = this.ctx?.plugins.arrow;
-    if (t && arrow) {
+    if (t) {
+      // Grow the row table so the review sidebar (and temporal lane) see the new row at
+      // once; when a Pixi canvas is attached, feed it the grown table too (re-render +
+      // re-apply pending field patches — sync re-materializes caches).
       const next = t.concat(buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]));
-      arrow.load(next);
-      arrow.sync();
-      this.table = next;
-      this.count = next.numRows;
-      this._reapplyOverrides();
-    } else if (t) {
-      // Data-only viewer (audio/video): no Pixi canvas to draw onto — grow the row
-      // table itself so the review sidebar + temporal lane see the segment at once.
-      const next = t.concat(buildBatchTable(t.schema, [row as unknown as Record<string, unknown>]));
+      const arrow = this.ctx?.plugins.arrow;
+      if (arrow) {
+        arrow.load(next);
+        arrow.sync();
+      }
       this.table = next;
       this.count = next.numRows;
       this._reapplyOverrides();
     } else {
-      this.count = (this.table?.numRows ?? 0) + this._inserts.length;
+      this.count = this._inserts.length;
     }
     this._geoDirty = true;
   }
@@ -552,37 +485,31 @@ export class AnnotatorController {
     // GroundingDINO detects from a TEXT prompt; SAM segments from the REGION alone.
     const needsPrompt = producer === "grounding-dino";
     if (!url || this.saving || (needsPrompt && !prompt.trim())) return;
-    const assistUrl = url.replace("/api/annotations/", "/api/assist/");
     this.saving = true;
     this.saveError = null;
     try {
-      const res = await fetch(assistUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ producer, prompt, region: region ?? null }),
+      const result = await requestAssist(assistUrlFor(url), {
+        producer,
+        prompt,
+        region: region ?? null,
       });
-      if (!res.ok) throw new Error(`assist failed (HTTP ${res.status})`);
-      const result = (await res.json()) as { shapes: AssistShape[]; source: string };
       for (const s of result.shapes) {
-        this._appendInsert({
-          id: crypto.randomUUID(),
-          shape_type: s.shape_type ?? "rectangle",
-          x: s.x,
-          y: s.y,
-          width: s.width,
-          height: s.height,
-          rotation: 0,
-          polygon: s.polygon ?? [],
-          // Pin the prediction to the current video moment (0 for images).
-          t_start: this.timeCursor,
-          t_end: this.timeCursor,
-          mask: "",
-          label: s.label || prompt,
-          text: "",
-          group: "",
-          status: "prediction",
-          source: result.source ?? `model:${producer}`,
-        });
+        this._appendInsert(
+          makeInsertRow({
+            shape_type: s.shape_type ?? "rectangle",
+            x: s.x,
+            y: s.y,
+            width: s.width,
+            height: s.height,
+            polygon: s.polygon ?? [],
+            // Pin the prediction to the current video moment (0 for images).
+            t_start: this.timeCursor,
+            t_end: this.timeCursor,
+            label: s.label || prompt,
+            status: "prediction",
+            source: result.source ?? `model:${producer}`,
+          }),
+        );
       }
     } catch (e) {
       this.saveError = e instanceof Error ? e.message : String(e);
@@ -591,16 +518,9 @@ export class AnnotatorController {
     }
   }
 
-  /** The bounding box of a committed shape → the SAM region prompt (a point commits as
-   *  a zero-size box; the server treats that as a click). */
-  private _regionOf(shape: CommitShape): { x: number; y: number; width: number; height: number } {
-    return { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
-  }
-
   /** Map a committed engine shape → the queued insert row (backend NewAnnotation). */
   private _buildInsert(shape: CommitShape): InsertRow {
-    return {
-      id: crypto.randomUUID(),
+    return makeInsertRow({
       shape_type: shape.type === "rect" ? "rectangle" : shape.type,
       x: shape.x,
       y: shape.y,
@@ -612,12 +532,7 @@ export class AnnotatorController {
       t_start: this.timeCursor,
       t_end: this.timeCursor,
       mask: shape.mask ?? "",
-      label: "",
-      text: "",
-      group: "",
-      status: "accepted",
-      source: "human",
-    };
+    });
   }
   convertToPolygon(): void {
     if (this.ctx?.plugins.interaction.convertToPolygon()) this._geoDirty = true;
@@ -627,7 +542,7 @@ export class AnnotatorController {
   updateField(index: number, field: EditableField, value: string): void {
     const t = this.table;
     if (!t) return;
-    const before = this._field(t, field, index) ?? "";
+    const before = effectiveField(t, this._overrides, field, index) ?? "";
     if (before === value) return;
     this._undo = [...this._undo, { index, field, before, after: value }];
     this._redo = [];
@@ -666,15 +581,11 @@ export class AnnotatorController {
   }
 
   // ── review-queue navigation (accept-and-advance — the throughput loop) ──
-  private _queuePos(): number {
-    const i = this.selectedIndex;
-    return i == null ? -1 : this.reviewQueue.findIndex((r) => r.index === i);
-  }
   /** Move the selection by ±1 within the review queue (clamped). */
   selectQueueRelative(delta: number): void {
     const q = this.reviewQueue;
     if (!q.length) return;
-    const pos = this._queuePos();
+    const pos = this.queuePos.at - 1; // queuePos is 1-based; -1 ⇒ nothing selected
     const target = pos < 0 ? 0 : Math.min(Math.max(pos + delta, 0), q.length - 1);
     const row = q[target];
     if (row) this.select(row.index);
@@ -804,78 +715,28 @@ export class AnnotatorController {
     const url = this._saveUrl;
     if (!t || !url || this.saving) return;
 
-    const byIndex = new Map<number, Record<string, string>>();
-    for (const [key, value] of this._overrides) {
-      const sep = key.indexOf(":");
-      const index = Number(key.slice(0, sep));
-      const row = byIndex.get(index) ?? {};
-      row[key.slice(sep + 1)] = value;
-      byIndex.set(index, row);
-    }
-    const edits = [...byIndex].map(([index, fields]) => ({
-      id: this._raw(t, "id", index) ?? String(index),
-      ...fields,
-    }));
-    const geometry = [...this._geoEdits].map(([index, g]) => ({
-      id: this._raw(t, "id", index) ?? String(index),
-      x: g.x,
-      y: g.y,
-      width: g.w,
-      height: g.h,
-      polygon: g.polygon ?? [],
-    }));
-    const temporal = [...this._temporalEdits].map(([index, s]) => ({
-      id: this._raw(t, "id", index) ?? String(index),
-      t_start: s.t_start,
-      t_end: s.t_end,
-    }));
-    if (
-      edits.length === 0 &&
-      this._inserts.length === 0 &&
-      this._deletes.length === 0 &&
-      geometry.length === 0 &&
-      temporal.length === 0
-    )
-      return;
+    const payload = buildSavePayload({
+      overrides: this._overrides,
+      geoEdits: this._geoEdits,
+      temporalEdits: this._temporalEdits,
+      inserts: this._inserts,
+      deletes: this._deletes,
+      version: this._version,
+      resolveId: (index) => rawField(t, "id", index),
+    });
+    if (payloadIsEmpty(payload)) return;
 
     this.saving = true;
     this.saveError = null;
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          edits,
-          inserts: this._inserts,
-          deletes: this._deletes,
-          geometry,
-          temporal,
-          base_version: this._version,
-        }),
-      });
-      if (res.status === 409) {
+      const { status } = await postSave(url, payload);
+      if (status === "conflict") {
         // The table advanced under us (another reviewer / a deriver). Reload to the
         // server state; the user's pending edits are dropped — they re-apply on fresh data.
         this.saveError = "Annotations changed on the server — reloaded. Re-apply your edits.";
-        await this._reload();
-        this._undo = [];
-        this._redo = [];
-        this._inserts = [];
-        this._deletes = [];
-        this._geoEdits.clear();
-        this._temporalEdits.clear();
-        this._geoDirty = false;
-        return;
       }
-      if (!res.ok) throw new Error(`save failed (HTTP ${res.status})`);
       await this._reload();
-      this._undo = [];
-      this._redo = [];
-      this._inserts = [];
-      this._deletes = [];
-      this._geoEdits.clear();
-      this._temporalEdits.clear();
-      this._geoDirty = false;
+      this._resetOverlays();
     } catch (e) {
       this.saveError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -883,15 +744,35 @@ export class AnnotatorController {
     }
   }
 
+  /** Drop every pending local edit (after a flush or a conflict reload). */
+  private _resetOverlays(): void {
+    this._undo = [];
+    this._redo = [];
+    this._inserts = [];
+    this._deletes = [];
+    this._geoEdits.clear();
+    this._temporalEdits.clear();
+    this._geoDirty = false;
+  }
+
   /** Re-fetch the persisted annotations into the canvas + controller, clearing the
    *  now-flushed overlay. merge_insert reorders rows, so selection is dropped. */
   private async _reload(): Promise<void> {
     const url = this._saveUrl;
     if (!url) return;
-    const res = await fetch(url);
-    if (!res.ok) return;
-    this._version = Number(res.headers.get("X-Annotations-Version") ?? this._version ?? 0);
-    const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
+    // Pre-split fetch semantics, exactly: a non-2xx reload returns SILENTLY (save()
+    // then clears the flushed overlays — the write already committed); a THROWN
+    // network/parse error propagates to save()'s catch, which surfaces saveError and
+    // skips _resetOverlays(), keeping the pending edits + version for retry.
+    let loaded: { table: Table; version: number };
+    try {
+      loaded = await loadAnnotations(url);
+    } catch (e) {
+      if (e instanceof AnnotationsHttpError) return;
+      throw e;
+    }
+    const { table, version } = loaded;
+    this._version = version;
     this._overrides.clear();
     const ctx = this.ctx;
     if (ctx) {
@@ -959,17 +840,4 @@ export class AnnotatorController {
     arrow.sync();
   }
 
-  private _raw(t: Table, field: string, i: number): string | null {
-    const v = t.getChild(field)?.get(i);
-    return v == null ? null : String(v);
-  }
-  private _field(t: Table, field: string, i: number): string | null {
-    const o = this._overrides.get(`${i}:${field}`);
-    if (o != null) return o;
-    return this._raw(t, field, i);
-  }
-  private _num(t: Table, field: string, i: number): number | null {
-    const v = t.getChild(field)?.get(i);
-    return typeof v === "number" ? v : null;
-  }
 }

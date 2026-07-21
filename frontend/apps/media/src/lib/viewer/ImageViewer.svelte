@@ -1,6 +1,6 @@
 <script lang="ts">
   // Image/document viewer — the ra-anno PixiJS engine over a page image. WORKING.
-  import { tableFromIPC } from 'apache-arrow';
+  import { loadAnnotations } from '$lib/labeling/annotations-client';
   import type { PixiContext } from '$lib/engine';
   import PixiCanvas from './PixiCanvas.svelte';
   import type { ViewerProps } from './types';
@@ -12,10 +12,7 @@
     // Hand the loaded still to the interaction layer so the OpenCV tools
     // (magnetic corner-snap) can lazily build its corner maps when activated.
     ctx.plugins.interaction.setImageSource(ctx.plugins.image.imageElement);
-    const res = await fetch(unit.annotationsUrl);
-    if (!res.ok) throw new Error(`annotations HTTP ${res.status}`);
-    const version = Number(res.headers.get('X-Annotations-Version') ?? '0');
-    const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
+    const { table, version } = await loadAnnotations(unit.annotationsUrl);
     ctx.plugins.arrow.load(table);
     ctx.plugins.arrow.sync();
     // Lift the engine + data to the route-level facade so the annotator layout

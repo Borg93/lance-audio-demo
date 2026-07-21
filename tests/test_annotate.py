@@ -13,16 +13,10 @@ import lance
 import pyarrow as pa
 import pytest
 from backend.lancekit.descriptor import Declared
-from backend.media_api.annotate import (
-    _EMPTY_SCHEMA,
-    NewAnnotation,
-    TagWrite,
-    _build_delta,
-    _ipc_stream,
-    _new_rows,
-    _tag_rows,
-    tag_id,
-)
+from backend.media_api.annotations.save import build_delta, new_rows
+from backend.media_api.annotations.schema import EMPTY_SCHEMA, NewAnnotation, TagWrite
+from backend.media_api.annotations.tags import tag_id, tag_rows
+from backend.media_api.annotations.wire import ipc_stream
 
 _MEDIA_DECLARED = Declared.model_validate(
     {"identity": {"key_fields": ["doc_id", "speech_id", "chunk_id"]}}
@@ -45,7 +39,7 @@ def test_ipc_stream_roundtrips() -> None:
             "shape_type": ["rectangle"],
         }
     )
-    back = _read_ipc(_ipc_stream(tbl))
+    back = _read_ipc(ipc_stream(tbl))
     assert back.num_rows == 1
     assert back.column("id")[0].as_py() == "x"
 
@@ -53,7 +47,7 @@ def test_ipc_stream_roundtrips() -> None:
 def test_empty_schema_is_a_parseable_empty_stream() -> None:
     # A dataset with no annotations table degrades to this — the client must still
     # parse it and render 0, so it carries the columns ArrowDataPlugin reads.
-    back = _read_ipc(_ipc_stream(_EMPTY_SCHEMA.empty_table()))
+    back = _read_ipc(ipc_stream(EMPTY_SCHEMA.empty_table()))
     assert back.num_rows == 0
     names = set(back.schema.names)
     # geometry the PixiJS ArrowDataPlugin reads
@@ -78,7 +72,7 @@ def _ann_table() -> pa.Table:
 
 def test_build_delta_patches_only_editable_fields_and_carries_geometry() -> None:
     current = _ann_table()
-    delta = _build_delta(current, {"a": {"status": "accepted"}, "c": {"label": "heading"}})
+    delta = build_delta(current, {"a": {"status": "accepted"}, "c": {"label": "heading"}})
     # only the two edited rows are in the delta, matched by id
     assert delta.num_rows == 2
     by_id = {r["id"]: r for r in delta.to_pylist()}
@@ -94,7 +88,7 @@ def test_geometry_edit_patches_shape_carries_fields() -> None:
     current = _ann_table()
     edits_by_id: dict[str, dict[str, object]] = {}
     edits_by_id.setdefault("a", {}).update({"x": 9.0, "polygon": [1.0, 1.0, 2.0, 2.0]})
-    delta = _build_delta(current, edits_by_id)
+    delta = build_delta(current, edits_by_id)
     r = {x["id"]: x for x in delta.to_pylist()}["a"]
     assert r["x"] == 9.0 and r["polygon"] == [1.0, 1.0, 2.0, 2.0]  # geometry patched
     assert r["status"] == "prediction" and r["label"] == "text-line"  # fields carried forward
@@ -106,7 +100,7 @@ def test_merge_insert_save_is_one_atomic_version(tmp_path: Path) -> None:
     ds = lance.dataset(uri)
     v0 = ds.version
 
-    delta = _build_delta(ds.to_table(), {"a": {"status": "accepted"}, "b": {"status": "rejected"}})
+    delta = build_delta(ds.to_table(), {"a": {"status": "accepted"}, "b": {"status": "rejected"}})
     ds.merge_insert("id").when_matched_update_all().execute(delta)
 
     after = lance.dataset(uri)
@@ -121,13 +115,13 @@ def test_merge_insert_save_is_one_atomic_version(tmp_path: Path) -> None:
 def _full_schema() -> pa.Schema:
     """The annotations contract + the chunk identity columns a real table carries."""
     return pa.schema(
-        [("doc_id", pa.string()), ("speech_id", pa.int64()), ("chunk_id", pa.int64()), *_EMPTY_SCHEMA]
+        [("doc_id", pa.string()), ("speech_id", pa.int64()), ("chunk_id", pa.int64()), *EMPTY_SCHEMA]
     )
 
 
 def test_new_rows_stamps_identity_and_carries_geometry() -> None:
     ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19}
-    tbl = _new_rows(
+    tbl = new_rows(
         [NewAnnotation(id="n1", shape_type="polygon", polygon=[1.0, 2.0, 3.0, 4.0], label="line")],
         ident,
         _full_schema(),
@@ -137,6 +131,36 @@ def test_new_rows_stamps_identity_and_carries_geometry() -> None:
     assert r["id"] == "n1" and r["shape_type"] == "polygon" and r["polygon"] == [1.0, 2.0, 3.0, 4.0]
     assert r["status"] == "accepted" and r["source"] == "human"  # human-drawn defaults
     assert r["confidence"] is None  # unspecified column → null via schema
+
+
+def test_schema_single_source_of_truth(tmp_path: Path) -> None:
+    """The seeded dataset's schema must be EXACTLY identity + the backend EMPTY_SCHEMA.
+
+    seed_annotations.py IMPORTS EMPTY_SCHEMA (no parallel literal), and the engine's
+    parallel column list was deleted outright (the frontend is schema-driven off the
+    wire) — so the backend contract is the ONE source; this pins the composition."""
+    import importlib.util
+    from pathlib import Path as P
+
+    spec = importlib.util.spec_from_file_location(
+        "seed_annotations", P(__file__).resolve().parents[1] / "scripts" / "seed_annotations.py"
+    )
+    assert spec is not None and spec.loader is not None
+    seed_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(seed_mod)
+
+    uri = seed_mod.seed(str(tmp_path), "a" * 16)
+    seeded = lance.dataset(uri).schema
+    expected = pa.schema(
+        [
+            ("doc_id", pa.string()),
+            ("speech_id", pa.int64()),
+            ("chunk_id", pa.int64()),
+            ("frame_idx", pa.int64()),
+            *EMPTY_SCHEMA,
+        ]
+    )
+    assert seeded.equals(expected), f"schema drift:\nseeded={seeded}\nexpected={expected}"
 
 
 def test_get_author_seam_defaults_to_anon_and_trims() -> None:
@@ -150,7 +174,7 @@ def test_get_author_seam_defaults_to_anon_and_trims() -> None:
 def test_new_rows_stamps_the_author_as_reviewer() -> None:
     # save_annotations merges the author into the identity stamp; a new row carries it.
     ident = {"doc_id": "d1", "speech_id": 0, "chunk_id": 19, "reviewer": "gabriel"}
-    tbl = _new_rows([NewAnnotation(id="n1", shape_type="rectangle")], ident, _full_schema())
+    tbl = new_rows([NewAnnotation(id="n1", shape_type="rectangle")], ident, _full_schema())
     assert tbl.to_pylist()[0]["reviewer"] == "gabriel"  # server-stamped, not client-claimed
 
 
@@ -171,8 +195,8 @@ def test_save_edit_insert_delete_round_trip(tmp_path: Path) -> None:
     # edit `a` + insert new shape `c` — ONE merge_insert (update + insert)
     delta = pa.concat_tables(
         [
-            _build_delta(ds.to_table(), {"a": {"status": "accepted"}}),
-            _new_rows([NewAnnotation(id="c", shape_type="rectangle", x=9.0)], ident, schema),
+            build_delta(ds.to_table(), {"a": {"status": "accepted"}}),
+            new_rows([NewAnnotation(id="c", shape_type="rectangle", x=9.0)], ident, schema),
         ]
     )
     ds.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(delta)
@@ -199,7 +223,7 @@ def test_tag_id_is_deterministic_namespaced_and_collision_safe() -> None:
 
 
 def test_tag_rows_stamp_identity_shape_and_author() -> None:
-    tbl = _tag_rows(
+    tbl = tag_rows(
         [TagWrite(doc_id="d1", keys=[0, 19], labels=["speech", "music"])],
         _MEDIA_DECLARED,
         "gabriel",
@@ -219,8 +243,8 @@ def test_tag_rows_stamp_identity_shape_and_author() -> None:
 
 def test_tag_rows_dedupes_duplicate_labels() -> None:
     # A batch may repeat a chunk+label; Lance merge_insert would insert both identical-id
-    # rows, so _tag_rows must dedup (else idempotency breaks — review-workflow finding).
-    tbl = _tag_rows(
+    # rows, so tag_rows must dedup (else idempotency breaks — review-workflow finding).
+    tbl = tag_rows(
         [
             TagWrite(doc_id="d1", keys=[0, 19], labels=["cat", "cat"]),
             TagWrite(doc_id="d1", keys=[0, 19], labels=["cat"]),
@@ -250,7 +274,7 @@ def test_tag_merge_insert_is_multi_unit_one_version_and_shape_safe(tmp_path: Pat
     v0 = ds.version
 
     # tag TWO different chunks in ONE insert-only merge
-    delta = _tag_rows(
+    delta = tag_rows(
         [
             TagWrite(doc_id="d1", keys=[0, 19], labels=["speech"]),
             TagWrite(doc_id="d1", keys=[0, 20], labels=["music"]),
@@ -291,7 +315,7 @@ def test_tag_resave_preserves_human_review(tmp_path: Path) -> None:
     ds = lance.dataset(uri)
 
     # re-save the workflow tag (label="speech", status="accepted") via insert-only
-    delta = _tag_rows([TagWrite(doc_id="d1", keys=[0, 19], labels=["speech"])], _MEDIA_DECLARED, "x", schema)
+    delta = tag_rows([TagWrite(doc_id="d1", keys=[0, 19], labels=["speech"])], _MEDIA_DECLARED, "x", schema)
     _insert_only(ds, delta)
 
     row = {r["id"]: r for r in lance.dataset(uri).to_table().to_pylist()}[tid]
@@ -302,11 +326,11 @@ def test_tag_resave_preserves_human_review(tmp_path: Path) -> None:
 def test_iso_formats_version_timestamps() -> None:
     from datetime import datetime
 
-    from backend.media_api.annotate import _iso
+    from backend.media_api.annotations.versions import iso
 
-    assert _iso(datetime(2026, 7, 20, 12, 0, 0)) == "2026-07-20T12:00:00"  # datetime → ISO
-    assert _iso("already-a-string") == "already-a-string"
-    assert _iso(None) == ""
+    assert iso(datetime(2026, 7, 20, 12, 0, 0)) == "2026-07-20T12:00:00"  # datetime → ISO
+    assert iso("already-a-string") == "already-a-string"
+    assert iso(None) == ""
 
 
 def test_version_history_counts_this_units_rows_per_version(tmp_path: Path) -> None:
@@ -335,14 +359,14 @@ def test_version_history_counts_this_units_rows_per_version(tmp_path: Path) -> N
 
 def test_checkout_translates_bad_version_to_notfound(tmp_path: Path) -> None:
     from backend.core.exceptions import NotFoundError
-    from backend.media_api.annotate import _checkout
+    from backend.media_api.annotations.versions import checkout
 
     uri = str(tmp_path / "annotations.lance")
     lance.write_dataset(pa.Table.from_pylist([{"id": "a1"}], schema=_full_schema()), uri)
     ds = lance.dataset(uri)
-    assert _checkout(ds, 1).version == 1  # a valid version time-travels
+    assert checkout(ds, 1).version == 1  # a valid version time-travels
     with pytest.raises(NotFoundError, match="version 999 not found"):
-        _checkout(ds, 999)  # out-of-range → clean 404, not a raw 500
+        checkout(ds, 999)  # out-of-range → clean 404, not a raw 500
 
 
 def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:

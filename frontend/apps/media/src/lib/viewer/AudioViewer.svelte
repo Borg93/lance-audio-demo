@@ -6,7 +6,7 @@
   // is the one Canvas2D lane we allow; segments (t_start/t_end) share the SAME
   // annotations table + Save path as spatial shapes.
   import { untrack } from 'svelte';
-  import { tableFromIPC } from 'apache-arrow';
+  import { loadAnnotations } from '$lib/labeling/annotations-client';
   import { Pause, Play } from 'lucide-svelte';
   import { WaveSurface, type TemporalSegment } from '$lib/engine';
   import { Button } from '$lib/components/ui';
@@ -38,13 +38,9 @@
   $effect(() => {
     if (!controller) return;
     const url = unit.annotationsUrl;
-    void (async () => {
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const version = Number(res.headers.get('X-Annotations-Version') ?? '0');
-      const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
-      controller.attachData(table, url, version);
-    })();
+    void loadAnnotations(url)
+      .then(({ table, version }) => controller.attachData(table, url, version))
+      .catch(() => {}); // unreachable annotations → the viewer stays read-only
   });
 
   // Surface lifecycle — synchronous so the cleanup captures the instance. Depends only

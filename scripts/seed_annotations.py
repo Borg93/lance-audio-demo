@@ -1,14 +1,10 @@
-"""Seed a Lance ``annotations`` table (aligned to the engine schema + active-learning
-columns) for the annotator wire.
+"""Seed a Lance ``annotations`` table for the annotator wire.
 
 Writes ``<db>/annotations.lance`` with a few sample shapes on a real frame. The
-column set matches the vendored engine (frontend/src/lib/engine/schema.ts) PLUS the
-active-learning columns the labeling study called for — ``confidence`` / ``uncertainty``
-/ ``source`` / ``model_version`` — so predictions round-trip and the review queue can
-rank ``WHERE status='prediction' ORDER BY uncertainty DESC`` with zero search edits.
-
-Identity is OUR descriptor's (doc_id/speech_id/chunk_id/frame_idx); ra-anno's
-page_id/dataset_id are not our canonical key (annotator wiring will reconcile).
+contract columns come STRAIGHT from the backend's ``EMPTY_SCHEMA`` (the single source
+of truth — ``backend/media_api/annotations/schema.py``); this script only prepends the
+demo descriptor's identity columns. A test asserts the seeded dataset matches the
+composition, so drift fails loudly.
 
     uv run python scripts/seed_annotations.py [db_path] [doc_id]
 """
@@ -16,48 +12,24 @@ page_id/dataset_id are not our canonical key (annotator wiring will reconcile).
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import lance
 import pyarrow as pa
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root → `backend` importable
+
+from backend.media_api.annotations.schema import EMPTY_SCHEMA
+
 SCHEMA = pa.schema(
     [
-        # identity (our descriptor's key fields)
+        # identity (the demo descriptor's key fields) — the ONLY columns this script
+        # defines; everything else is the backend contract, imported verbatim.
         ("doc_id", pa.string()),
         ("speech_id", pa.int64()),
         ("chunk_id", pa.int64()),
         ("frame_idx", pa.int64()),
-        # annotation id + geometry (engine ArrowDataPlugin reads x/y/w/h/polygon/shape_type/mask)
-        ("id", pa.string()),
-        ("shape_type", pa.string()),
-        ("x", pa.float32()),
-        ("y", pa.float32()),
-        ("width", pa.float32()),
-        ("height", pa.float32()),
-        ("rotation", pa.float32()),
-        ("polygon", pa.list_(pa.float32())),
-        # temporal facet — audio segments + a shape pinned to a video moment (seconds)
-        ("t_start", pa.float32()),
-        ("t_end", pa.float32()),
-        # content + class
-        ("text", pa.string()),
-        ("label", pa.string()),
-        # review lifecycle + provenance
-        ("status", pa.string()),  # prediction | draft | reviewed | accepted | rejected
-        ("source", pa.string()),  # manual | model:<name>@<version>
-        ("reviewer", pa.string()),
-        # active-learning ranking (the load-bearing columns)
-        ("confidence", pa.float32()),  # model score 0..1
-        ("uncertainty", pa.float32()),  # normalized entropy/margin — review-queue sort key
-        ("model_version", pa.string()),  # e.g. htr-trocr@v1
-        # grouping / ordering / flags
-        ("group", pa.string()),
-        ("group_id", pa.string()),
-        ("reading_order", pa.int32()),
-        ("difficult", pa.bool_()),
-        ("links", pa.string()),  # JSON AnnotationRelation[]
-        ("mask", pa.string()),
-        ("metadata", pa.string()),
+        *EMPTY_SCHEMA,
     ]
 )
 

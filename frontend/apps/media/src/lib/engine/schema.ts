@@ -1,30 +1,10 @@
-// Arrow schema definitions — shared between server and client
-
-export const ANNOTATION_COLUMNS = [
-  "id",
-  "page_id",
-  "dataset_id",
-  "shape_type", // Utf8 — geometry kind, see ShapeType
-  "x",
-  "y",
-  "width",
-  "height",
-  "rotation", // Float32 — oriented-box angle in radians (0 = axis-aligned)
-  "polygon", // List<Float32> — flat [x0,y0,x1,y1,...]; OPEN ring when shape_type is 'baseline'/'line'
-  "text", // transcription / content
-  "label", // class / region type (free-text, or from REGION_TYPES)
-  "confidence", // model score 0..1
-  "source",
-  "status",
-  "reviewer",
-  "group", // layer/category grouping (free-text)
-  "group_id", // Utf8 — instance/linking key (groups split blocks, lines→region)
-  "reading_order", // Int32 — reading sequence within page (-1 = unset)
-  "difficult", // Bool — ambiguous/ignore (exclude from training)
-  "links", // Utf8 JSON — AnnotationRelation[] to other annotations (kie_linking)
-  "mask", // Utf8 — base64 PNG (data URL) for raster brush masks; "" when not a mask
-  "metadata", // Utf8 JSON — arbitrary typed attributes
-] as const;
+// Annotation TYPE vocabulary (statuses, shapes, relations, region classes).
+//
+// NOTE: the parallel ANNOTATION_COLUMNS / PAGE_COLUMNS lists were removed 2026-07-21 —
+// they were dead (no consumer) and already drifted (missing t_start/t_end, ra-anno's
+// page_id identity). The SINGLE schema source of truth is the backend's EMPTY_SCHEMA
+// (backend/media_api/annotations/schema.py); the engine is schema-driven at runtime —
+// ArrowDataPlugin reads columns by name from whatever table the wire delivers.
 
 export type AnnotationStatus = "prediction" | "draft" | "reviewed" | "accepted" | "rejected";
 
@@ -91,19 +71,3 @@ export const REGION_TYPES = [
 ] as const;
 
 export type RegionType = (typeof REGION_TYPES)[number];
-
-/** Page-level table — one row per page, Binary columns for images */
-export const PAGE_COLUMNS = [
-  "page_id",
-  "document_id",
-  "dataset_id",
-  "page_number",
-  "image", // Binary — full resolution page image (JPEG/PNG/SVG)
-  "thumbnail", // Binary — small preview (WebP/JPEG)
-  "image_mime", // Utf8 — MIME type for the image
-  "image_width",
-  "image_height",
-  "embedding", // FixedSizeList<Float32> — high-dimensional embedding vector
-  "umap_x", // Float32 — 2D UMAP projection X
-  "umap_y", // Float32 — 2D UMAP projection Y
-] as const;
