@@ -14,7 +14,9 @@ export type CV = typeof import("@techstark/opencv-js");
 let loaded: Promise<CV> | null = null;
 
 export function loadOpenCV(): Promise<CV> {
-  // One in-flight/shared load — the 8MB wasm is paid once, both tools reuse it.
+  // One in-flight/shared load — the 8MB wasm is paid once and reused. A FAILED load
+  // (transient network on the big chunk, dev-server restart) must NOT stay cached, or
+  // the caller's retry-on-next-activation path could never succeed — reset on rejection.
   loaded ??= (async () => {
     const mod: Record<string, unknown> = await import("@techstark/opencv-js");
     let cv = (mod.default ?? mod) as Record<string, unknown>;
@@ -39,5 +41,8 @@ export function loadOpenCV(): Promise<CV> {
     }
     return cv as unknown as CV;
   })();
+  loaded.catch(() => {
+    loaded = null; // allow the next activation to retry a failed load
+  });
   return loaded;
 }

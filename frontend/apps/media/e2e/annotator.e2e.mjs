@@ -4,9 +4,12 @@
  * draw → save → persist. Failures here mean a user-visible feature broke.
  *
  * Preconditions (asserted at start):
- *   - backend at :8000  (`uv run --no-sync rmedia --db transcripts_v2.lance serve`)
+ *   - backend at :8000  (`uv run --no-sync rmedia --db transcripts_v2.lance serve`) with
+ *     MEDIA_ASSIST_URL UNSET — the AI-assist checks rely on the deterministic in-repo
+ *     mock (backend/media_api/assist.py); a live model endpoint would be nondeterministic.
  *   - dev server at :5175 (`bun run dev --port 5175` in apps/media)
  *   - a chromium with WebGPU: default = the ms-playwright cache; override with E2E_CHROME.
+ *   - the demo unit (E2E_KEY, default fe00cd746463ad2c/0/19) present in the dataset.
  *
  * Run: `bun run test:e2e` (from apps/media). Re-seeds the demo annotations before + after,
  * so the suite is deterministic and leaves the demo clean.
@@ -19,18 +22,23 @@ import { chromium } from "playwright-core";
 
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:5175";
 const API = process.env.E2E_API ?? "http://127.0.0.1:8000";
-const KEY = "fe00cd746463ad2c/0/19";
+const KEY = process.env.E2E_KEY ?? "fe00cd746463ad2c/0/19";
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 function chromePath() {
   if (process.env.E2E_CHROME) return process.env.E2E_CHROME;
   const cache = path.join(process.env.HOME ?? "", ".cache/ms-playwright");
   const builds = existsSync(cache)
-    ? readdirSync(cache).filter((d) => /^chromium-\d+$/.test(d)).sort()
+    ? readdirSync(cache)
+        .filter((d) => /^chromium-\d+$/.test(d))
+        .sort((a, b) => Number(a.split("-")[1]) - Number(b.split("-")[1])) // numeric, not lexical
     : [];
   for (const b of builds.reverse()) {
-    const p = path.join(cache, b, "chrome-linux/chrome");
-    if (existsSync(p)) return p;
+    // The binary layout changed across Playwright versions: chrome-linux64/ (new) vs chrome-linux/ (old).
+    for (const layout of ["chrome-linux64/chrome", "chrome-linux/chrome"]) {
+      const p = path.join(cache, b, layout);
+      if (existsSync(p)) return p;
+    }
   }
   throw new Error("no chromium found — set E2E_CHROME or `npx playwright-core install chromium`");
 }
@@ -45,7 +53,11 @@ const ok = (name, pass, detail = "") => {
 };
 
 // ── preconditions ──
-for (const [name, url] of [["backend", `${API}/api/datasets`], ["dev server", `${BASE}/`]]) {
+for (const [name, url] of [
+  ["backend", `${API}/api/datasets`],
+  ["dev server", `${BASE}/`],
+  ["demo unit (E2E_KEY)", `${API}/api/annotations/${KEY}`],
+]) {
   const res = await fetch(url).catch(() => null);
   if (!res?.ok) {
     console.error(`PRECONDITION FAILED: ${name} not reachable at ${url}`);
@@ -74,16 +86,24 @@ const count = async () => {
   const t = await page.locator('[title="Annotation count"]').first().textContent().catch(() => null);
   return t ? parseInt(t.trim(), 10) : NaN;
 };
+/** Poll until the annotation count exceeds `before` (or time out) — replaces fixed
+ *  settle sleeps so slow commits don't flake and fast ones don't waste time. */
+async function countAbove(before, timeoutMs = 5000) {
+  const t0 = Date.now();
+  for (;;) {
+    const c = await count();
+    if (Number.isFinite(c) && c > before) return c;
+    if (Date.now() - t0 > timeoutMs) return c;
+    await page.waitForTimeout(150);
+  }
+}
 
-await page.goto(`${BASE}/annotate?keys=${KEY}`, { waitUntil: "networkidle", timeout: 60000 });
-await page.waitForTimeout(2500);
-const status = await page.locator('[data-testid="annotate-status"]').textContent().catch(() => "");
-ok("annotator loads", /annotations from Lance/.test(status ?? ""), status ?? "");
-const box = await page.locator("canvas").first().boundingBox();
-ok("canvas mounted", !!box && box.width > 100);
-
-const cx = box.x + box.width / 2;
-const cy = box.y + box.height / 2;
+// The suite body runs inside try/finally so ANY throw (a null canvas box, a locator
+// timeout, a seed failure mid-run) still closes the browser, re-seeds the demo, and
+// prints the summary with a non-zero exit — instead of crashing half-cleaned.
+let box;
+let cx;
+let cy;
 const pt = (fx, fy) => [box.x + box.width * fx, box.y + box.height * fy];
 async function drag(ax, ay, bx, by, steps = 8) {
   await page.mouse.move(ax, ay);
@@ -102,10 +122,20 @@ async function draws(name, key, gesture) {
   await tool(key);
   const before = await count();
   await gesture();
-  await page.waitForTimeout(500);
-  const after = await count();
+  const after = await countAbove(before);
   ok(`tool '${name}' commits a shape`, Number.isFinite(after) && after > before, `${before} → ${after}`);
 }
+
+async function suite() {
+  await page.goto(`${BASE}/annotate?keys=${KEY}`, { waitUntil: "networkidle", timeout: 60000 });
+  await page.waitForTimeout(2500);
+  const status = await page.locator('[data-testid="annotate-status"]').textContent().catch(() => "");
+  ok("annotator loads", /annotations from Lance/.test(status ?? ""), status ?? "");
+  box = await page.locator("canvas").first().boundingBox().catch(() => null);
+  ok("canvas mounted", !!box && box.width > 100);
+  if (!box) throw new Error("canvas never mounted — aborting the gesture checks");
+  cx = box.x + box.width / 2;
+  cy = box.y + box.height / 2;
 
 // ── simple drawing tools ──
 await draws("rect", "3", () => drag(...pt(0.30, 0.30), ...pt(0.42, 0.42)));
@@ -169,8 +199,7 @@ if (magReady) {
   await page.mouse.click(mx + 50, my);
   await page.mouse.click(mx + 50, my + 40);
   await page.mouse.dblclick(mx + 50, my + 40);
-  await page.waitForTimeout(600);
-  const after = await count();
+  const after = await countAbove(before);
   ok("tool 'magnetic' commits a corner-snapped polygon", Number.isFinite(after) && after > before, `${before} → ${after}`);
 }
 
@@ -183,8 +212,8 @@ const assistBar = page.locator('[data-testid="ai-assist"]');
   const called = page.waitForResponse((r) => r.url().includes("/api/assist/"), { timeout: 10000 }).then(() => true).catch(() => false);
   await assistBar.getByText("Run").click();
   ok("AI-assist Detect calls /api/assist", await called);
-  await page.waitForTimeout(600);
-  ok("AI-assist Detect adds predictions", (await count()) > before, `${before} → ${await count()}`);
+  const after = await countAbove(before);
+  ok("AI-assist Detect adds predictions", after > before, `${before} → ${after}`);
 }
 {
   await assistBar.getByText("Segment").click();
@@ -193,8 +222,8 @@ const assistBar = page.locator('[data-testid="ai-assist"]');
   const called = page.waitForResponse((r) => r.url().includes("/api/assist/"), { timeout: 10000 }).then(() => true).catch(() => false);
   await drag(...pt(0.15, 0.75), ...pt(0.28, 0.88), 6);
   ok("SAM Segment calls /api/assist", await called);
-  await page.waitForTimeout(600);
-  ok("SAM Segment adds a mask shape", (await count()) > before, `${before} → ${await count()}`);
+  const after = await countAbove(before);
+  ok("SAM Segment adds a mask shape", after > before, `${before} → ${after}`);
   await assistBar.getByText("Detect").click(); // disarm SAM
 }
 
@@ -213,9 +242,23 @@ const persisted = await count();
 ok("all shapes persist across reload", Number.isFinite(persisted) && persisted === beforeSave, `${persisted} (expected ${beforeSave})`);
 
 ok("no page-level JS errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
+}
 
-await browser.close();
-seed(); // leave the demo clean
-const passed = results.filter((r) => r.pass).length;
-console.log(`\n=== E2E: ${passed}/${results.length} passed ===`);
-process.exit(passed === results.length ? 0 : 1);
+// ── run + ALWAYS clean up (browser, demo re-seed, summary + exit code) ──
+let crashed = null;
+try {
+  await suite();
+} catch (e) {
+  crashed = e;
+  console.error("SUITE CRASH:", e?.message ?? e);
+} finally {
+  await browser.close().catch(() => {});
+  try {
+    seed(); // leave the demo clean
+  } catch {
+    console.error("WARNING: post-run re-seed failed — run `make seed-annotations` manually");
+  }
+  const passed = results.filter((r) => r.pass).length;
+  console.log(`\n=== E2E: ${passed}/${results.length} passed${crashed ? " (CRASHED before completing)" : ""} ===`);
+  process.exit(!crashed && passed === results.length ? 0 : 1);
+}

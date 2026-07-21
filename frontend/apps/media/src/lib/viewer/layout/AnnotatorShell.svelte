@@ -69,18 +69,35 @@
     }
     const tool = TOOL_KEYS[k];
     if (tool) {
+      // Drawing hotkeys need a live spatial engine (controller.ctx) — on a temporal
+      // (audio) unit they'd arm a phantom tool with no canvas behind it, and the
+      // forwarding below would then swallow the review hotkeys into a no-op.
       const cvTool = tool === 'magnetic';
-      if ((controller.canDraw || tool === 'select' || tool === 'pan') && (!cvTool || controller.cvCapable)) {
+      const spatialTool = tool !== 'select' && tool !== 'pan';
+      if (
+        (controller.canDraw || !spatialTool) &&
+        (!spatialTool || controller.ctx !== null) &&
+        (!cvTool || controller.cvCapable)
+      ) {
         controller.setTool(tool);
       }
       return;
     }
-    // While a DRAWING tool is active, Enter/Escape/Backspace belong to the tool
-    // (polygon/brush commit · cancel-in-progress · vertex undo) — not to the review
-    // hotkeys, which would otherwise swallow them (accept-and-advance / delete row).
+    // While a DRAWING tool is active on a spatial canvas, Enter/Escape/Backspace belong
+    // to the tool (polygon/brush/magnetic commit · cancel-in-progress · vertex undo) —
+    // not to the review hotkeys, which would otherwise swallow them. Skip when a button/
+    // select has focus (Enter must still activate it) — the top guard already skips inputs.
     const drawingActive =
-      controller.canDraw && controller.activeTool !== 'select' && controller.activeTool !== 'pan';
-    if (drawingActive && (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Backspace')) {
+      controller.ctx !== null &&
+      controller.canDraw &&
+      controller.activeTool !== 'select' &&
+      controller.activeTool !== 'pan';
+    const focusable = el && (el.tagName === 'BUTTON' || el.tagName === 'SELECT');
+    if (
+      drawingActive &&
+      !focusable &&
+      (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Backspace')
+    ) {
       e.preventDefault();
       controller.forwardToolKey(e.key);
       return;

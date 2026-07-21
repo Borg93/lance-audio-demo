@@ -15,7 +15,9 @@ import {
  * Shi–Tomasi corner picking over a min-eigenvalue response map: keep local maxima
  * above `quality × max(response)`, suppressing neighbors within `minDist` via a
  * coarse occupancy grid. Replaces `goodFeaturesToTrack` (absent from the opencv-js
- * build) with the same underlying selection rule.
+ * build) with the same underlying selection rule. Border rows/cols are excluded from
+ * candidacy (the 3×3 max test needs a full neighborhood) — same practical effect as
+ * goodFeaturesToTrack's aperture border; snapping falls to the nearest interior corner.
  */
 export function pickCorners(
   response: Float32Array,
@@ -243,6 +245,10 @@ export class MagneticTool implements Tool {
 
   onKeyDown(key: string): void {
     if (key === "Escape") this.cancel();
+    if (key === "Enter" && this.points.length >= 6) {
+      // Commit without the double-click / snap-to-close gesture (parity with Polygon/Brush).
+      this.commitPolygon();
+    }
     if (key === "Backspace" && this.points.length >= 4) {
       this.points.pop();
       this.points.pop();
