@@ -91,13 +91,29 @@ def cmd_serve(
         env["MEDIA_HOST"] = host
     if port:
         env["VIEWER_PORT"] = str(port)
-    procs = [
-        subprocess.Popen([sys.executable, "-c", f"from {svc}.main import run; run()"], env=env)
+    import time
+
+    procs = {
+        svc: subprocess.Popen([sys.executable, "-c", f"from {svc}.main import run; run()"], env=env)
         for svc in ("viewer", "search", "annotator")
-    ]
+    }
+
+    def _terminate_all() -> None:
+        for pr in procs.values():
+            if pr.poll() is None:
+                pr.terminate()
+
     try:
-        for p in procs:
-            p.wait()
+        # Poll: the fan-out is only useful if all three stay up — if ANY child
+        # exits (crash or clean), tear the others down and surface a nonzero code
+        # so `make services-up` / CI sees the failure instead of a half stack.
+        while True:
+            for svc, pr in procs.items():
+                code = pr.poll()
+                if code is not None:
+                    typer.echo(f"service '{svc}' exited ({code}) — stopping the others", err=True)
+                    _terminate_all()
+                    raise typer.Exit(code or 1)
+            time.sleep(0.5)
     except KeyboardInterrupt:
-        for p in procs:
-            p.terminate()
+        _terminate_all()

@@ -52,8 +52,8 @@ input/sv/*.mp4                 ← source videos
                                    ↳ powers mode=scene (caption-vector) + mode=scene_fts (caption BM25)
                                    ↳ NOT built on the live DB yet → scene/scene_fts return EMPTY
         │
-   make backend                → FastAPI on :8000 (/api/*)
-   make frontend               → SvelteKit + Bun proxy on :3000
+   make services-up            → viewer:8101 search:8102 annotator:8103 (/api/*)
+   make frontend               → viewer zone + per-domain proxy on :5274
 ```
 
 **Why a separate `chunk_frames` table?** Lance 4.0's `merge_insert` crashes its
@@ -108,15 +108,15 @@ On image-only `visual` search there is no query text, so rerank is a no-op.
 
 ```
 lance-audio-demo/
-├── backend/                   FastAPI package: app.py (create_app), state.py, deps.py,
-│   ├── search/                spec.py (SearchSpec), service.py (run_search), router.py
-│   ├── media/                 blobs.py + router.py (thumbnail, chunk-frame, Range-streamed media)
-│   ├── atlas/                 router.py (read-only /api/atlas/* feeding the scatter-plot map)
-│   └── system/                router.py (health, columns, documents)
-├── frontend/                  SvelteKit + Svelte 5 + Tailwind v4 viewer (main UI)
-│   ├── src/                   routes + components + bits-ui (shadcn-style) ui/ kit
-│   └── server.ts              Bun static-file server + /api/* proxy
-├── src/raudio/                Python ingestion + search core
+├── services/                  Per-domain FastAPI microservices (lance-ns services/ shape)
+│   ├── common/                shared kernel: lancekit, core (RFC 9457 handlers), schemas, state, deps
+│   ├── viewer/                read plane :8101 — media/blobs, transcripts, atlas, graph, topics, voice
+│   ├── search/                retrieval :8102 — FTS/vector/hybrid, encoders, rerank
+│   └── annotator/             write plane :8103 — annotations (merge_insert+409), assist, jobs
+├── frontend/                  turborepo: apps/{media,annotator} + packages/@lance/{engine,labeling,ui,api}
+│   ├── apps/media/            viewer zone (SvelteKit) + server.ts (per-domain /api + /annotate proxy)
+│   └── apps/annotator/        annotator zone (kit.paths.base=/annotate)
+├── src/rmedia/                Python ingestion + search core (Ray/vLLM pipeline)
 │   ├── cli/                   typer CLI: ingest, feature, extract-chunk-frames, compact, serve, …
 │   ├── model/                 PyArrow schemas (schema.py) + Pydantic DTOs (datamodel.py)
 │   ├── asr/                   in-process Whisper/wav2vec2 (transcribe.py, detect_language.py)
@@ -168,7 +168,7 @@ with two tables: `documents` (one row per video, with thumbnail + media URI) and
 > **Heads-up on this machine:** the live, served dataset is
 > `transcripts_v2.lance` (chunks 145,175 rows; documents 1,154; chunk_frames
 > 145,175). The Makefile default `./transcripts.lance` is an **empty manifest
-> with no tables** — point `DB=transcripts_v2.lance` (or `make backend
+> with no tables** — point `DB=transcripts_v2.lance` (or `make services-up
 > DB=transcripts_v2.lance`) at the populated one.
 
 ### 2. Run the viewer
@@ -176,8 +176,8 @@ with two tables: `documents` (one row per video, with thumbnail + media URI) and
 Two terminals:
 
 ```bash
-# T1: FastAPI backend
-make backend                       # → http://127.0.0.1:8000
+# T1: the three services
+make services-up                   # → viewer:8101 search:8102 annotator:8103
 
 # T2: SvelteKit frontend (production build + Bun proxy)
 make frontend                      # → http://localhost:3000
@@ -284,10 +284,10 @@ cross-encoder over the top `rerank_n` results. ~200–500 ms latency cost.
 
 ```
 browser  →  GET /api/search?q=alkohol&mode=fts
-frontend (Bun :3000)  →  proxy  →  FastAPI :8000
-backend  →  chunks.search(MatchQuery("alkohol", "text")).select(...).limit(n)
+frontend (Bun :5274)  →  proxy  →  search :8102  (/api/search → search service)
+search   →  chunks.search(MatchQuery("alkohol", "text")).select(...).limit(n)
                 ↳ Tantivy BM25 index (Swedish stemmer); PhraseQuery when phrase=true
-backend  →  json hits  →  frontend renders list
+search   →  json hits  →  frontend renders list
 ```
 
 ### Semantic / hybrid query

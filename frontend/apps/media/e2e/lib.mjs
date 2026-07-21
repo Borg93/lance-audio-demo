@@ -9,6 +9,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
+// The viewer-zone origin (dev proxy). It path-routes /api/* to the three
+// services AND /annotate to the annotator zone (:5176), so the suites drive the
+// full split composition through one origin — the real prod topology.
 export const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:5175";
 // API goes through the dev proxy (same origin the app uses) — under the split
 // deployment the proxy path-routes to viewer/search/annotator, so the suites

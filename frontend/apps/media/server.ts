@@ -1,15 +1,16 @@
 /**
  * Local production serve for the Bun-server build (svelte-adapter-bun): run the
- * generated app request-handler AND reverse-proxy /api/* → the FastAPI backend,
- * in ONE process. This mirrors the rask topology (the MFE's Bun server serves
- * the app; a gateway routes /api elsewhere) — collapsed here into one thin
- * server for local reproduction.
+ * generated viewer-app request-handler AND reverse-proxy by domain to the three
+ * lance-media services + the annotator zone, in ONE process. This mirrors the
+ * rask topology (the MFE's Bun server serves the app; a gateway routes /api and
+ * the sibling zones) — collapsed here into one thin server for local repro.
  *
  *   make frontend-build     # produces ./build (adapter-bun output)
- *   bun run server.ts --api http://127.0.0.1:8000 --port 5274
+ *   bun run server.ts --port 5274   # defaults: viewer :8101 search :8102 annotator :8103 zone :5176
+ *   # override any upstream: --viewer … --search … --annotator … --annotate-zone …
  *
- * The Python backend owns Lance; this process only serves the app + forwards
- * /api/* (including HTTP Range for video streaming), preserving headers.
+ * The Python services own Lance; this process serves the viewer app + forwards
+ * /api/* per domain (HTTP Range preserved) and /annotate → the annotator zone.
  */
 
 import { resolve, dirname } from 'node:path';
@@ -24,7 +25,26 @@ const args = Object.fromEntries(
     .map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1]] : null))
     .filter((x): x is [string, string] => x !== null),
 );
-const API_BASE = (args.api ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
+// Per-domain upstreams — the zone map, identical to the dev vite proxy. A real
+// prod gateway would own this routing; the thin server keeps dev/prod parity so
+// `bun run server.ts` serves the split stack end to end. Overridable via flags.
+const VIEWER = (args.viewer ?? args.api ?? 'http://127.0.0.1:8101').replace(/\/$/, '');
+const SEARCH = (args.search ?? 'http://127.0.0.1:8102').replace(/\/$/, '');
+const ANNOTATOR = (args.annotator ?? 'http://127.0.0.1:8103').replace(/\/$/, '');
+// The annotator ZONE app (owns /annotate, kit.paths.base) — its own bun server.
+const ANNOTATE_ZONE = (args['annotate-zone'] ?? 'http://127.0.0.1:5176').replace(/\/$/, '');
+
+/** Route an /api/* path to the service that owns that domain. */
+function apiUpstream(pathname: string): string {
+  if (
+    pathname.startsWith('/api/annotations') ||
+    pathname.startsWith('/api/assist') ||
+    pathname.startsWith('/api/jobs')
+  )
+    return ANNOTATOR;
+  if (pathname.startsWith('/api/search')) return SEARCH;
+  return VIEWER;
+}
 const PORT = Number(args.port ?? 3000);
 
 // ─── The adapter-bun build's request handler ───────────────────────────────
@@ -38,12 +58,12 @@ const { getHandler } = (await import(resolve(here, 'build/handler.js'))) as {
 };
 const app = getHandler();
 
-// ─── /api/* proxy (streams requests + responses; Range headers flow through) ──
-async function proxy(req: Request): Promise<Response> {
+// ─── streaming proxy to an explicit base (Range headers flow through) ─────────
+async function proxy(req: Request, base: string): Promise<Response> {
   const url = new URL(req.url);
   const headers = new Headers(req.headers);
   headers.delete('host');
-  const upstream = await fetch(`${API_BASE}${url.pathname}${url.search}`, {
+  const upstream = await fetch(`${base}${url.pathname}${url.search}`, {
     method: req.method,
     headers,
     body: req.method === 'GET' || req.method === 'HEAD' ? undefined : req.body,
@@ -51,15 +71,21 @@ async function proxy(req: Request): Promise<Response> {
   return new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
 }
 
-// ─── Router: /api → backend, everything else → the adapter-bun app ──────────
+// ─── Router: /api → per-domain service, /annotate → annotator zone, else app ──
 Bun.serve({
   port: PORT,
   websocket: app.websocket as never,
   async fetch(req, server) {
-    if (new URL(req.url).pathname.startsWith('/api/')) return proxy(req);
+    const { pathname } = new URL(req.url);
+    if (pathname.startsWith('/api/')) return proxy(req, apiUpstream(pathname));
+    if (pathname === '/annotate' || pathname.startsWith('/annotate/'))
+      return proxy(req, ANNOTATE_ZONE);
     return app.fetch(req, server);
   },
 });
 
 console.log(`→ frontend:  http://localhost:${PORT}  (svelte-adapter-bun)`);
-console.log(`  proxying /api/*  →  ${API_BASE}`);
+console.log(`  /api/annotations|assist|jobs → ${ANNOTATOR}`);
+console.log(`  /api/search                  → ${SEARCH}`);
+console.log(`  /api/*                       → ${VIEWER}`);
+console.log(`  /annotate                    → ${ANNOTATE_ZONE}`);

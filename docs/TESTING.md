@@ -189,7 +189,8 @@ preconditions, PASS/FAIL collector) lives in `e2e/lib.mjs`:
   compare-versions History panel (`/versions` fetch + version rows).
 
 ```bash
-# Preconditions: backend :8000 (MEDIA_ASSIST_URL unset → deterministic assist mocks)
+# Preconditions: services up (make services-up → viewer:8101 search:8102 annotator:8103;
+#   MEDIA_ASSIST_URL unset → deterministic assist mocks), frontend dev proxy on :5175
 # + `bun run dev --port 5175` (apps/media) running.
 cd frontend/apps/media && bun run test:e2e
 # Chromium: auto-resolved from ~/.cache/ms-playwright (full build, NOT headless-shell —

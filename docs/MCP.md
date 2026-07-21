@@ -1,5 +1,11 @@
 # MCP — the archive as a tool surface for LLM agents
 
+> **REMOVED (services split, 2026-07-21):** the in-process MCP mount lived on
+> the monolith (`backend/mcp`, `:8000/mcp/`) and was dropped when the backend
+> split into per-domain services. Re-home it behind a service (or a standalone
+> MCP gateway over the three `/api` domains) if the tool surface returns. The
+> rest of this doc describes the removed design for reference.
+
 The backend mounts a [Model Context Protocol](https://modelcontextprotocol.io)
 server at **`http://<host>:8000/mcp/`** (streamable HTTP), built with
 [FastMCP 3](https://gofastmcp.com). Any MCP host — VS Code Copilot, Claude

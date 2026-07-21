@@ -137,7 +137,9 @@ async def voice_similar_upload(
     whole. The encoder getter is passed as a thunk so the model only loads if
     the snippet survives the size/decode/duration guards.
     """
-    handle = dataset_handle(state, dataset)
+    # dataset_handle opens Lance on a cold miss — offload it so the async upload
+    # handler never blocks the event loop (fastapi skill: no blocking I/O in async def).
+    handle = await run_in_threadpool(dataset_handle, state, dataset)
     file_bytes = await file.read(voice_service._MAX_UPLOAD_BYTES + 1)
     return await run_in_threadpool(
         voice_service.similar_voices_for_upload,

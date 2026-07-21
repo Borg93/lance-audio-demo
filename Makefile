@@ -213,7 +213,6 @@ frontend-dev:         ## Run the dev server with HMR via turbo (vite).
 frontend: frontend-build  ## Build then serve the app via the Bun proxy (server.ts).
 	cd $(FRONTEND_APP) && bun run server.ts \
 		--root ./build \
-		--api http://$(BACKEND_HOST):$(BACKEND_PORT) \
 		--port $(FRONTEND_PORT)
 
 LABELER_PORT    ?= 3999
@@ -483,7 +482,7 @@ e2e-smoke:            ## Full-pipeline e2e on a tiny real sample → throwaway D
 
 dev:                  ## Run backend + frontend together (tmux or two terminals).
 	@echo "Run these in two terminals:"
-	@echo "  1) make backend"
+	@echo "  1) make services-up"
 	@echo "  2) make frontend"
 	@echo "Then open http://localhost:$(FRONTEND_PORT)"
 
@@ -493,7 +492,7 @@ seed-annotations:     ## Seed a demo annotations.lance (engine schema + active-l
 annotate: seed-annotations  ## Seed + print how to run the annotator (viewer + review-queue table).
 	@echo ""
 	@echo "Annotator is at /annotate. Start these in two terminals:"
-	@echo "  1) make backend                        # FastAPI on :$(BACKEND_PORT)"
+	@echo "  1) make services-up                     # viewer:8101 search:8102 annotator:8103"
 	@echo "  2) make frontend-dev                   # vite (auto-picks a free port if 5173 is taken — it PRINTS the port)"
 	@echo "Then open   http://127.0.0.1:<printed-port>/annotate"
 	@echo ""

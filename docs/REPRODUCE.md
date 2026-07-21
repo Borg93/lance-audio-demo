@@ -323,7 +323,7 @@ print('turns:', ds.count_rows(), '| videos:', len(set(ds.to_table(columns=['doc_
 > per-video lookup at full-corpus scale.
 >
 > **No restart needed.** `/api/diarization/{doc_id}` opens `speaker_turns.lance`
-> **on demand per request** (`backend/diarization/router.py`), so a freshly-built
+> **on demand per request** (`services/viewer/api/v1/endpoints/diarization.py`), so a freshly-built
 > or rebuilt table is served immediately — the player's **Speakers** tab picks it
 > up without bouncing the backend.
 
@@ -357,7 +357,7 @@ uv run --with networkx python scripts/kg/adapter.py --work kg_work/rag --db $DB
 Gate (tables built + counts):
 
 ```bash
-curl -sS http://localhost:8000/api/graph/status   # {"built":true,"entities":…,"relations":…,"mentions":…,"videos":…}
+curl -sS http://localhost:8101/api/graph/status   # {"built":true,"entities":…,"relations":…,"mentions":…,"videos":…}
 ```
 
 > **Corpus-scale speed.** A full run shards across GPUs: launch N copies of step 2
@@ -379,7 +379,7 @@ at once trips vLLM's memory-profiling race). One script does it all, health-gate
 and detached:
 
 ```bash
-make stack-up DB=transcripts_v2.lance     # embed:8001 → rerank:8002 → backend:8000 → frontend:5274
+make stack-up DB=transcripts_v2.lance     # embed:8001 → rerank:8002 → viewer:8101/search:8102/annotator:8103 → frontend:5274
 # … or the underlying script directly, with knobs:
 DB=transcripts_v2.lance VLLM_GPU=0 bash scripts/serve-all.sh up
 make stack-down                            # stop them all
@@ -421,7 +421,7 @@ uv run --with numpy python scripts/move_to_s3.py transcripts_v2.lance \
 MEDIA_S3_ENDPOINT=http://127.0.0.1:9000 \
 MEDIA_S3_ACCESS_KEY_ID=<key> MEDIA_S3_SECRET_ACCESS_KEY=<secret> \
 MEDIA_S3_DB_ROOT=s3://lance-media MEDIA_DB=transcripts_v2.lance \
-    uv run uvicorn backend.app:app --host 127.0.0.1 --port 8000
+    MEDIA_DB=transcripts_v2.lance make services-up   # viewer:8101 search:8102 annotator:8103
 ```
 
 Every read path serves from S3: `GET /api/datasets`, `/datasets/{id}/descriptor`,
@@ -446,12 +446,12 @@ done
 # every search mode returns hits on the live data
 for m in fts semantic visual scene scene_fts hybrid all; do
   printf "%-10s " $m
-  curl -s "http://127.0.0.1:8000/api/search?q=regeringen&mode=$m&n=3" \
+  curl -s "http://127.0.0.1:8102/api/search?q=regeringen&mode=$m&n=3" \
     | python3 -c "import sys,json;print('hits:', len(json.load(sys.stdin)))"
 done
 
 # diarization built? (pick any doc_id from a search hit above)
-curl -s "http://127.0.0.1:8000/api/diarization/<doc_id>" \
+curl -s "http://127.0.0.1:8101/api/diarization/<doc_id>" \
   | python3 -c "import sys,json;d=json.load(sys.stdin);print('built:', d['built'], '| turns:', len(d['turns']), '| speakers:', len(d['speakers']))"
 # built:false simply means speaker_turns isn't built for that video (or at all).
 ```

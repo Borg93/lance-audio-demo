@@ -5,7 +5,7 @@
 > between the schema and the Lance file format**. Read it when you touch
 > [`src/rmedia/model/schema.py`](../src/rmedia/model/schema.py),
 > [`src/rmedia/ingest/ingest.py`](../src/rmedia/ingest/ingest.py), or the blob/range code in
-> [`backend/media/blobs.py`](../backend/media/blobs.py). For the indexation gotchas that bit us
+> [`services/viewer/api/v1/endpoints/media.py`](../services/viewer/api/v1/endpoints/media.py). For the indexation gotchas that bit us
 > (the `merge_insert` crash, `nprobes` recall) see [INVESTIGATION.md](INVESTIGATION.md).
 
 Everything raudio stores — transcript text, metadata, word alignments, three
@@ -88,10 +88,10 @@ and `topics.lance` (the topic tree, see [`topics`](#topics--the-topic-tree)).
 They are joined **only by key columns**, never by a stored
 foreign-key relation — the backend resolves keys to stable row ids with SQL
 filters (`_rowid_for_filter`, `rowid_for_doc_id` in
-[`backend/media/blobs.py`](../backend/media/blobs.py)). (A knowledge-graph layer
+[`services/viewer/api/v1/endpoints/media.py`](../services/viewer/api/v1/endpoints/media.py)). (A knowledge-graph layer
 also writes sibling `kg_chunks`/`kg_entities`/`kg_mentions`/`kg_relationships`
 tables into the same directory from `scripts/kg/adapter.py`, read by
-[`backend/graph/router.py`](../backend/graph/router.py); those are out of scope
+[`services/viewer/api/v1/endpoints/graph.py`](../services/viewer/api/v1/endpoints/graph.py); those are out of scope
 for this doc.)
 
 > **Which DB is live** — the served dataset is **`transcripts_v2.lance/`** (chunks
@@ -158,7 +158,7 @@ media the DB holds. Notable columns:
 
 Riksarkivet archival metadata (`referenskod`, `namn`, `bildid`, `extraid`) is
 **denormalised** onto every chunk row so retrieval needs no join — the search
-projection `_HIT_COLUMNS` (in `backend/search/constants.py`) reads them straight
+projection `_HIT_COLUMNS` (in `services/search/services/constants.py`) reads them straight
 off the hit.
 
 ### `documents` — the portable media catalog
@@ -211,7 +211,7 @@ columns `doc_id`, `turn_id`, `speaker_label`, `start`, `end`). Written by
 per-video `enumerate` index over that video's turns. It is **append-only** on the
 same `"2.2"` storage version (`SPEAKER_TURNS_STORAGE_VERSION`) and is read on
 demand by the backend diarization router (`GET /api/diarization/{doc_id}` in
-[`backend/diarization/router.py`](../backend/diarization/router.py)) — no backend
+[`services/viewer/api/v1/endpoints/diarization.py`](../services/viewer/api/v1/endpoints/diarization.py)) — no backend
 restart needed.
 
 ### `topics` — the topic tree
@@ -313,7 +313,7 @@ flowchart TD
     J --> K["206 Partial Content<br/>Content-Range, Accept-Ranges: bytes"]
 ```
 
-Key facts grounded in `backend/media/blobs.py` and `backend/media/router.py`:
+Key facts grounded in `services/viewer/api/v1/endpoints/media.py` and `services/viewer/api/v1/endpoints/media.py`:
 
 - Blobs are read by **`ds.take_blobs(column, ids=[rowid])`**. `ids` are *stable
   logical row ids* that survive deletes and compaction; positional `indices` are
@@ -366,7 +366,7 @@ On read, `parse_alignments_json` (in
 [`src/rmedia/retrieval/search.py`](../src/rmedia/retrieval/search.py))
 defensively handles both shapes: if Lance already decoded it (not a `str`) it
 passes through; otherwise `json.loads`. The backend calls this in
-`_postprocess_hits` (`backend/search/postprocess.py`) so every search hit ships an
+`_postprocess_hits` (`services/search/services/postprocess.py`) so every search hit ships an
 `alignments` list.
 
 ---
@@ -394,7 +394,7 @@ flowchart LR
     ANN --> Q3
 ```
 
-`SearchMode` (`backend/search/spec.py`) has **seven** modes:
+`SearchMode` (`services/search/services/spec.py`) has **seven** modes:
 `fts`, `semantic`, `visual`, `scene`, `scene_fts`, `hybrid`, and `all`. The
 `frame_embedding` IVF_PQ index on `chunk_frames` backs `mode=visual` and the
 frame leg of `mode=all`. The caption-backed modes — `scene` (cosine over
@@ -492,13 +492,13 @@ A third operational fact:
 
 Lance's IVF_PQ default probes too few partitions (`nprobes=1` scans only 1 cell)
 for good recall — the "feels broken, re-query" reflex. The backend fixes this with
-**adaptive probing** (`backend/search/service.py:244-246`,
-`backend/search/frames.py:84-86`): every vector query is issued with
+**adaptive probing** (`services/search/services/service.py:244-246`,
+`services/search/services/frames.py:84-86`): every vector query is issued with
 `.minimum_nprobes(_VECTOR_NPROBES).maximum_nprobes(_VECTOR_MAX_NPROBES).refine_factor(_VECTOR_REFINE_FACTOR)`,
 where `_VECTOR_NPROBES = 20`, `_VECTOR_MAX_NPROBES = 0` (uncapped — extends toward
 a full-index scan when a *selective* prefilter leaves the first pass short of
 `limit`), and `_VECTOR_REFINE_FACTOR = 3` re-scores the top candidates with
-full-precision vectors (`backend/search/constants.py:49-57`). Uncapped is cheap
+full-precision vectors (`services/search/services/constants.py:49-57`). Uncapped is cheap
 here: the live table is ~35 IVF partitions at 145k rows, so worst case is a
 full-index scan of a few ms. The history of this gotcha (and the `merge_insert`
 crash) is documented in [INVESTIGATION.md](INVESTIGATION.md).
@@ -537,5 +537,5 @@ crash) is documented in [INVESTIGATION.md](INVESTIGATION.md).
 - [INVESTIGATION.md](INVESTIGATION.md) — the `merge_insert` crash and `nprobes` recall, in depth.
 - [`src/rmedia/model/schema.py`](../src/rmedia/model/schema.py) — the authoritative PyArrow schemas.
 - [`src/rmedia/ingest/ingest.py`](../src/rmedia/ingest/ingest.py) — how blob/JSON columns are written.
-- [`backend/media/blobs.py`](../backend/media/blobs.py) — the Blob V2 + HTTP-Range read path.
-- [`backend/search/service.py`](../backend/search/service.py) — the framework-free search core.
+- [`services/viewer/api/v1/endpoints/media.py`](../services/viewer/api/v1/endpoints/media.py) — the Blob V2 + HTTP-Range read path.
+- [`services/search/services/service.py`](../services/search/services/service.py) — the framework-free search core.

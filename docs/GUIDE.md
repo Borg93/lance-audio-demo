@@ -48,7 +48,7 @@ flowchart LR
     subgraph READ["READ SIDE — online, serving"]
         direction TB
         FE["SvelteKit frontend (frontend/)<br/>Bun static server + /api/* proxy"]
-        BE["FastAPI backend (backend/app.py)<br/>/api/search /media /thumbnail /chunk-frame"]
+        BE["FastAPI services (viewer/search/annotator)<br/>/api/search /media /thumbnail /chunk-frame"]
         FE -->|"HTTP /api/* (proxied)"| BE
     end
 
@@ -69,7 +69,7 @@ flowchart LR
 
 - **Write side** = `src/rmedia/` (the `raudio` Typer CLI + the ingest/extract
   modules). Run offline, GPU-heavy, idempotent/resumable.
-- **Read side** = `backend/` (FastAPI) + `frontend/` (SvelteKit). Run online,
+- **Read side** = `services/{viewer,search}` (FastAPI) + `frontend/apps/media` (SvelteKit). Run online,
   mostly CPU; only the embedding step needs a GPU and that lives in a **separate
   vLLM process** reached over HTTP, so FTS-only use works with no GPU at all.
 - **`src/rmedia/vllm/embedding.py` is the one module both sides share** — see §7.
@@ -107,7 +107,7 @@ All four core tables live inside one `transcripts_v2.lance/` directory (gitignor
 local working data). Schemas: [`src/rmedia/model/schema.py`](src/rmedia/model/schema.py).
 A fifth, single-row `topics.lance` is written on the read side by `feature topics`
 (its `hierarchy` column holds the nested topic tree) and is served by `/api/topics`
-(`backend/topics/router.py`) — see §6.
+(`services/viewer/api/v1/endpoints/topics.py`) — see §6.
 
 | Table | Grain | Carries | Key columns |
 |---|---|---|---|
@@ -169,7 +169,7 @@ so frames go into their own append-only table: `extract-chunk-frames` writes new
 fragments, `feature frame_embedding` attaches `frame_embedding` via
 `dataset.add_columns(...)`. No `merge_insert`. Visual / cross-modal search runs
 the frame-vector query against `chunk_frames` and joins back to `chunks` for the
-hit payload (`backend/search/service.py::_frame_search`).
+hit payload (`services/search/services/service.py::_frame_search`).
 
 `chunks` *does* carry a **chunk-level** `frame_embedding` (a second 2048-d vector
 column) — but that is a distinct, atlas-only column: `feature atlas --space visual`

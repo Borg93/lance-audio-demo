@@ -9,7 +9,7 @@
 # vLLM servers are started SEQUENTIALLY (embed fully up before rerank) — starting
 # both at once trips vLLM's GPU memory-profiling race. See docs/REPRODUCE.md.
 #
-# Knobs (env): DB (default transcripts_v2.lance), VLLM_GPU (0), BACKEND_PORT (8000),
+# Knobs (env): DB (default transcripts_v2.lance), VLLM_GPU (0), VIEWER/SEARCH/ANNOTATOR_PORT (8101-3),
 # FRONTEND_PORT (5274), LOG_DIR (/tmp).
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -20,7 +20,9 @@ VLLM_GPU=${VLLM_GPU:-0}
 # another dev stack); forwarded to the make targets and the backend env below.
 EMBED_PORT=${EMBED_PORT:-8001}
 RERANK_PORT=${RERANK_PORT:-8002}
-BACKEND_PORT=${BACKEND_PORT:-8000}
+VIEWER_PORT=${VIEWER_PORT:-8101}
+SEARCH_PORT=${SEARCH_PORT:-8102}
+ANNOTATOR_PORT=${ANNOTATOR_PORT:-8103}
 FRONTEND_PORT=${FRONTEND_PORT:-5274}
 LOG_DIR=${LOG_DIR:-/tmp}
 
@@ -68,17 +70,19 @@ up() {
     wait_healthy "$RERANK_PORT" health "vLLM rerank" 300 || exit 1
   fi
 
-  if healthy "$BACKEND_PORT" api/health; then
-    log "• backend already up (:$BACKEND_PORT)"
+  if healthy "$VIEWER_PORT" livez && healthy "$SEARCH_PORT" livez && healthy "$ANNOTATOR_PORT" livez; then
+    log "• services already up (:$VIEWER_PORT/:$SEARCH_PORT/:$ANNOTATOR_PORT)"
   else
-    start_detached "backend" "$LOG_DIR/rmedia-backend.log" "DB=$DB BACKEND_PORT=$BACKEND_PORT MEDIA_EMBED_URL=http://127.0.0.1:$EMBED_PORT MEDIA_RERANK_URL=http://127.0.0.1:$RERANK_PORT make backend"
-    wait_healthy "$BACKEND_PORT" api/health "backend" 120 || exit 1
+    start_detached "services" "$LOG_DIR/rmedia-services.log" "DB=$DB MEDIA_EMBED_URL=http://127.0.0.1:$EMBED_PORT MEDIA_RERANK_URL=http://127.0.0.1:$RERANK_PORT make services-up"
+    wait_healthy "$VIEWER_PORT" livez "viewer" 120 || exit 1
+    wait_healthy "$SEARCH_PORT" livez "search" 120 || exit 1
+    wait_healthy "$ANNOTATOR_PORT" livez "annotator" 120 || exit 1
   fi
 
   if healthy "$FRONTEND_PORT" ''; then
     log "• frontend already up (:$FRONTEND_PORT)"
   else
-    start_detached "frontend" "$LOG_DIR/rmedia-frontend.log" "BACKEND_PORT=$BACKEND_PORT FRONTEND_PORT=$FRONTEND_PORT make frontend"
+    start_detached "frontend" "$LOG_DIR/rmedia-frontend.log" "FRONTEND_PORT=$FRONTEND_PORT make frontend"
     wait_healthy "$FRONTEND_PORT" '' "frontend" 180 || exit 1
   fi
 
@@ -87,7 +91,7 @@ up() {
 
 down() {
   echo "rmedia stack ↓"
-  for p in "$FRONTEND_PORT" "$BACKEND_PORT" "$RERANK_PORT" "$EMBED_PORT"; do
+  for p in "$FRONTEND_PORT" "$VIEWER_PORT" "$SEARCH_PORT" "$ANNOTATOR_PORT" "$RERANK_PORT" "$EMBED_PORT"; do
     for pid in $(pids_on "$p"); do
       kill "$pid" 2>/dev/null && log "killed pid $pid (:$p)"
     done

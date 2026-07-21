@@ -4,8 +4,7 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
     environment: 'node',
-    // zod 3.25 re-exports `z` as a namespace (`import * as z; export { z }`);
-    // vitest's runner mishandles that unless zod is transformed through Vite.
+    // valibot is ESM-only; inline it so vitest's runner transforms it through Vite.
     server: { deps: { inline: ['valibot'] } },
   },
   resolve: {

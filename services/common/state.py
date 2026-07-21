@@ -26,7 +26,7 @@ class AppState(BaseModel):
 
     The Lance/lancedb handles aren't Pydantic-validatable, hence
     ``arbitrary_types_allowed``. ``embedder``/``reranker`` are mutable slots that
-    :mod:`backend.clients` fills on first use and reuses thereafter. ``settings``
+    :mod:`search.services.clients` fills on first use and reuses thereafter. ``settings``
     carries the typed app config (vLLM URLs, host/port, CORS); it defaults via
     ``get_settings()`` so bare constructions in tests still work.
     """

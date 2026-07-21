@@ -7,7 +7,7 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "bunx tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {

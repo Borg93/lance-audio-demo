@@ -14,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AnyHttpUrl, Field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     embed_url: str = Field(default="http://127.0.0.1:8001", alias="MEDIA_EMBED_URL")
     rerank_url: str = Field(default="http://127.0.0.1:8002", alias="MEDIA_RERANK_URL")
     host: str = Field(default="127.0.0.1", alias="MEDIA_HOST")
-    port: int = Field(default=8000, ge=1, le=65535, alias="MEDIA_PORT")
     db_path: Path = Field(default=Path("transcripts_v2.lance"), alias="MEDIA_DB")
     # Multi-dataset serving (LANCE_MEDIA_MERGE §4.4): the registry root holds
     # one `<id>.lance` dir per dataset; `db_path`'s stem stays the default
@@ -136,11 +135,6 @@ class Settings(BaseSettings):
             return self.s3_db_root
         return str(self.db_root)
 
-    # Externally-reachable origin for media URLs in MCP clip apps (LAN IP,
-    # tunnel, reverse proxy). Unset = derive http://{host}:{port} locally.
-    # AnyHttpUrl: this value lands verbatim in the clip app's CSP allow-list
-    # and media src, so reject non-URL garbage at boot, not in the iframe.
-    media_base_url: AnyHttpUrl | None = Field(default=None, alias="MEDIA_BASE_URL")
 
     @field_validator("cors_origins", mode="before")
     @classmethod

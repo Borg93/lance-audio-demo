@@ -257,6 +257,7 @@ def chunk_frame(
 @router.get("/media-clip/{doc_id}")
 def media_clip(
     doc_id: str,
+    request: Request,
     state: StateDep,
     lo: Annotated[float, Query(ge=0)],
     hi: Annotated[float, Query(gt=0)],
@@ -284,7 +285,10 @@ def media_clip(
     # build_clip always emits an MP4 container (libx264 + mp3), so the response
     # mime is video/mp4 regardless of the source doc's stored mime.
     mime = "video/mp4"
-    source = f"http://127.0.0.1:{state.settings.port}/api/media/{doc_id}"
+    # ffmpeg pulls the source through the SAME origin this request arrived on, so
+    # the loopback works on every launch path (direct :8101, dev proxy, prod
+    # gateway) without a bind-port write-back — the split dropped the monolith's.
+    source = f"{str(request.base_url).rstrip('/')}/api/media/{doc_id}"
     if dataset:
         source += f"?dataset={quote(dataset, safe='')}"
     path = build_clip(source, f"{handle.id}--{doc_id}", lo, hi)
