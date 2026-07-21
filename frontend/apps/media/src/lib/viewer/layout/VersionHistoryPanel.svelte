@@ -2,7 +2,7 @@
   // Compare-versions panel (lives inside the sidebar). The read-side of the write-plane
   // provenance story: this unit's edit history (version · time · count) + a diff of any
   // past version against the current rows. Opt-in (an extra fetch), lazy-loaded. All
-  // fetch/diff logic is in $lib/labeling/history (framework-agnostic); this is the view.
+  // fetch/diff logic is in @lance/labeling/history (framework-agnostic); this is the view.
   import { ChevronDown, ChevronRight, History } from 'lucide-svelte';
   import { cn } from '$lib/utils';
   import {
@@ -11,7 +11,7 @@
     fetchVersionSignatures,
     type AnnotationVersion,
     type RowDiff,
-  } from '$lib/labeling/history';
+  } from '@lance/labeling/history';
   import type { AnnotatorController } from '../annotator.svelte';
 
   let { controller }: { controller: AnnotatorController } = $props();

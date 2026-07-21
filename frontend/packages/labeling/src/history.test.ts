@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffSignatures, rowSignature, type RowSig } from "$lib/labeling/history";
+import { diffSignatures, rowSignature, type RowSig } from "./history";
 
 const sig = (r: Partial<RowSig>): string =>
   rowSignature({ label: "", status: "", shape: "", group: "", text: "", ...r });

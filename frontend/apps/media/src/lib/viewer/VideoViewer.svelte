@@ -7,9 +7,9 @@
   // frame, and each new shape is pinned to that moment (controller.timeCursor →
   // t_start/t_end). One annotations table + Save path with images + audio segments.
   import { onDestroy } from 'svelte';
-  import { loadAnnotations } from '$lib/labeling/annotations-client';
+  import { loadAnnotations } from '@lance/labeling/annotations-client';
   import { Pause, Play } from 'lucide-svelte';
-  import type { PixiContext } from '$lib/engine';
+  import type { PixiContext } from '@lance/engine';
   import { Button, Slider } from '$lib/components/ui';
   import PixiCanvas from './PixiCanvas.svelte';
   import type { ViewerProps } from './types';

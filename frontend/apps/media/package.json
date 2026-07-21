@@ -37,7 +37,9 @@
     "tailwind-merge": "^2.5.5",
     "tailwind-variants": "^0.3.0",
     "valibot": "^1.4.2",
-    "wavesurfer.js": "^7.12.11"
+    "wavesurfer.js": "^7.12.11",
+    "@lance/engine": "workspace:*",
+    "@lance/labeling": "workspace:*"
   },
   "devDependencies": {
     "@lance-media/config": "workspace:*",

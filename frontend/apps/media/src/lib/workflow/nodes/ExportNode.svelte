@@ -11,7 +11,7 @@
     saveTagsAsAnnotations,
     tagBatchFromTaggedHits,
     tagRemovesFromEntries,
-  } from '$lib/labeling/tag-writer';
+  } from '@lance/labeling/tag-writer';
   import NodeShell from './NodeShell.svelte';
 
   let { id, selected }: NodeProps = $props();

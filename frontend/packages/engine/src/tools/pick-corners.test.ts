@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickCorners } from "$lib/engine/tools/MagneticTool";
+import { pickCorners } from "./MagneticTool";
 
 /** A cols×rows response map with the given peaks (everything else 0). */
 function map(cols: number, rows: number, peaks: [number, number, number][]): Float32Array {

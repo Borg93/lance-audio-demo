@@ -19,7 +19,7 @@
     type VoiceSimilarResponse,
   } from '$lib/api';
   import { voiceSearch } from '$lib/voice-search.svelte';
-  import { submitBatchJob } from '$lib/labeling/jobs';
+  import { submitBatchJob } from '@lance/labeling/jobs';
   import { fmtTime, hitKey, queryTerms, makeHighlighter } from '$lib/utils';
   import SearchBar from '$lib/components/search-bar.svelte';
   import SavedViews from '$lib/components/saved-views.svelte';

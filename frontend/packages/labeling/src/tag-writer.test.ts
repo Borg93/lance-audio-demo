@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tagBatchFromTaggedHits, tagRemovesFromEntries } from "$lib/labeling/tag-writer";
+import { tagBatchFromTaggedHits, tagRemovesFromEntries } from "./tag-writer";
 
 // The identity key_fields for a transcripts-shaped descriptor (doc + 2 numeric keys).
 const KEY_FIELDS = ["doc_id", "speech_id", "chunk_id"];

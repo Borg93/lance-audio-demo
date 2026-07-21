@@ -16,7 +16,7 @@ import {
   Pentagon,
   Square,
 } from "lucide-svelte";
-import type { Tool } from "$lib/engine";
+import type { Tool } from "@lance/engine";
 
 export interface ToolDef {
   tool: Tool;

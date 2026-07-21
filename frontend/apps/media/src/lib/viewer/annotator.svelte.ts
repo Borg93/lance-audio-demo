@@ -18,13 +18,13 @@
  */
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import type { Table } from "apache-arrow";
-import type { CommitShape, GeometryUpdate, PixiContext, Tool } from "$lib/engine";
-import { LayerStore, buildBatchTable } from "$lib/engine";
-import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "$lib/labeling/types";
-import { isChunkSelection } from "$lib/labeling/types";
-import { PRODUCERS } from "$lib/labeling/producers";
-import { submitBatchJob } from "$lib/labeling/jobs";
-import { rowSignature } from "$lib/labeling/history";
+import type { CommitShape, GeometryUpdate, PixiContext, Tool } from "@lance/engine";
+import { LayerStore, buildBatchTable } from "@lance/engine";
+import type { LabelDelta, LabelOp, LabelOutcome, Selection } from "@lance/labeling/types";
+import { isChunkSelection } from "@lance/labeling/types";
+import { PRODUCERS } from "@lance/labeling/producers";
+import { submitBatchJob } from "@lance/labeling/jobs";
+import { rowSignature } from "@lance/labeling/history";
 import {
   AnnotationsHttpError,
   type InsertRow,
@@ -35,12 +35,12 @@ import {
   payloadIsEmpty,
   postSave,
   requestAssist,
-} from "$lib/labeling/annotations-client";
+} from "@lance/labeling/annotations-client";
 import { type AnnoRow, effectiveField, projectRows, rawField } from "./annotation-rows";
 
 // Re-exported so the layout components keep their existing import site.
 export type { AnnoRow } from "./annotation-rows";
-export type { InsertRow } from "$lib/labeling/annotations-client";
+export type { InsertRow } from "@lance/labeling/annotations-client";
 
 export type Mode = "view" | "edit";
 
