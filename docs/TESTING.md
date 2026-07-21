@@ -166,24 +166,41 @@ dependency group (`pyproject.toml [dependency-groups]`), so
 `--with pytest --with httpx` form shown above. `httpx` is needed by anything that
 constructs the app via `fastapi.testclient.TestClient` (the backend tests).
 
-### Frontend annotator E2E (real browser, WebGPU)
+### Frontend E2E (real browser, WebGPU) — three suites
 
-`frontend/apps/media/e2e/annotator.e2e.mjs` drives the REAL app in a headless
-Chromium **with WebGPU/Vulkan live** (not jsdom, not a smoke): every drawing tool
-(rect/point/line/polygon/pencil/brush + the OpenCV scissors/magnetic + lasso-select),
-AI-assist Detect (GroundingDINO) + SAM Segment, and draw → save → persist-across-reload.
-Failures mean a user-visible feature broke — this is the suite that caught the orphaned
-CV tools and the swallowed Enter-commit.
+`frontend/apps/media/e2e/` drives the REAL app in a headless Chromium **with
+WebGPU/Vulkan live** (not jsdom, not a smoke). `bun run test:e2e` runs all three;
+shared plumbing (chromium resolution across both playwright layouts, launch args,
+preconditions, PASS/FAIL collector) lives in `e2e/lib.mjs`:
+
+- **`annotator.e2e.mjs`** — the image tool palette: every drawing tool commits
+  (rect/point/line/polygon/pencil/brush + magnetic corner-snap incl. a live SNAP
+  assertion; lasso multi-selects), AI-assist Detect (GroundingDINO) + SAM Segment,
+  draw → save → persist-across-reload. This suite caught the orphaned CV tools and
+  the swallowed Enter-commit.
+- **`temporal.e2e.mjs`** — the audio + video viewers against fixture media in
+  `static/e2e/` (`tone.wav`, `clip.mp4` — the demo doc has no media blob): audio
+  waveform mounts → drag-creates a segment → region-resize round-trips
+  `t_start/t_end` → persists, times shown in the review list; video scrubs → frame
+  snapshot under the overlay → a rect drawn on the paused frame is pinned at the
+  playhead (`t_start≈currentTime`) → persists. Deep-link overrides used:
+  `/annotate?keys=…&kind=audio|video&media=/e2e/…` (same-origin only).
+- **`read-plane.e2e.mjs`** — WebGPU adapter, SavedViews save/apply/delete, and the
+  compare-versions History panel (`/versions` fetch + version rows).
 
 ```bash
-# Preconditions: backend :8000 + `bun run dev --port 5175` (apps/media) running.
+# Preconditions: backend :8000 (MEDIA_ASSIST_URL unset → deterministic assist mocks)
+# + `bun run dev --port 5175` (apps/media) running.
 cd frontend/apps/media && bun run test:e2e
 # Chromium: auto-resolved from ~/.cache/ms-playwright (full build, NOT headless-shell —
-# that lacks WebGPU); override with E2E_CHROME=/path/to/chrome.
+# that lacks WebGPU); override with E2E_CHROME=/path/to/chrome. E2E_KEY overrides the
+# demo unit.
 ```
 
-Re-seeds the demo annotations (`make seed-annotations`) before + after, so runs are
-deterministic and leave the demo clean.
+Each suite re-seeds the demo annotations (`make seed-annotations`) before + after, so
+runs are deterministic and leave the demo clean. NOT covered here: annotations over the
+S3 backend (`MEDIA_S3_*` — the read paths were live-verified separately; the annotation
+write path over S3 is an open combo), and CI wiring (merge-side).
 
 ### Full-pipeline e2e smoke (distinct from the pytest smoke)
 

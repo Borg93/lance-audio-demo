@@ -135,6 +135,9 @@ export class AnnotatorController {
   // Which CV tools have finished their lazy init (wasm + edge/corner maps) — the
   // toolbar shows loading state until then; the E2E suite waits on it.
   readonly cvReady = new SvelteSet<string>();
+  // Live magnetic snap state — true while the cursor is locked onto a detected corner
+  // (surfaced on the toolbar; the E2E asserts snapping actually engages).
+  magneticSnapped = $state(false);
   count = $state(0);
   saving = $state(false);
   saveError = $state<string | null>(null);
@@ -316,6 +319,8 @@ export class AnnotatorController {
     this.cvCapable = im.cvCapable; // still image loaded ⇒ the magnetic CV tool is available
     this.cvReady.clear();
     im.onCvToolReady = (tool) => this.cvReady.add(tool);
+    this.magneticSnapped = false;
+    im.onMagneticSnap = (snapped) => (this.magneticSnapped = snapped);
     im.onSelect = (index) => {
       this.selectedIndex = index;
       this._mirrorSelection(im.getSelectedSet());

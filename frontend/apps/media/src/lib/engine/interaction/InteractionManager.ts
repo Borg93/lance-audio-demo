@@ -54,6 +54,8 @@ export class InteractionManager {
   onDirtyChange?: (hasDirtyEdits: boolean) => void;
   /** Fires when an OpenCV tool's lazy init (wasm + corner maps) completes. */
   onCvToolReady?: (tool: "magnetic") => void;
+  /** Fires when the magnetic cursor snaps onto / off a detected corner. */
+  onMagneticSnap?: (snapped: boolean) => void;
 
   // The still image the OpenCV magnetic tool reads pixels from. Set by the viewer
   // after the backdrop loads; null for video frames (CV tools stay unavailable).
@@ -81,6 +83,7 @@ export class InteractionManager {
     // 4.12 fails to even initialize). Re-add if a build with a working binding lands.
     const magneticTool = new MagneticTool(ctx);
     magneticTool.onCommit = (shape) => this.onCommit?.(shape);
+    magneticTool.onSnapChange = (snapped) => this.onMagneticSnap?.(snapped);
     this.tools.set("magnetic", magneticTool);
 
     const pencilTool = new PencilTool(ctx);

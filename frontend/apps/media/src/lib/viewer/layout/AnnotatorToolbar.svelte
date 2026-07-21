@@ -89,6 +89,7 @@
         title={`${t.label} (${t.key})${cvLoading ? ' — loading OpenCV…' : ''}`}
         aria-pressed={controller.activeTool === t.tool}
         data-cvready={t.cv ? controller.cvReady.has(t.tool) : undefined}
+        data-snapped={t.tool === 'magnetic' ? controller.magneticSnapped : undefined}
         onclick={() => controller.setTool(t.tool)}
       >
         <Icon class={cn('size-4', cvLoading && 'animate-pulse')} />

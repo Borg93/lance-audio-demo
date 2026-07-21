@@ -114,6 +114,8 @@ export class MagneticTool implements Tool {
   private isClosable = false;
 
   onCommit?: (shape: CommitShape) => void;
+  /** Fires when the cursor snaps onto / off a detected corner — UI shows snap state. */
+  onSnapChange?: (snapped: boolean) => void;
 
   constructor(ctx: InteractionContext) {
     this.ctx = ctx;
@@ -193,6 +195,7 @@ export class MagneticTool implements Tool {
   }
 
   onPointerMove(x: number, y: number): void {
+    const wasSnapped = this.isSnapped;
     // Snap to nearest keypoint
     if (this.keypointIndex && this.keypoints.length > 0) {
       const maxDist = 15 / this.ctx.getViewportScale();
@@ -213,6 +216,7 @@ export class MagneticTool implements Tool {
       this.cursorY = y;
       this.isSnapped = false;
     }
+    if (this.isSnapped !== wasSnapped) this.onSnapChange?.(this.isSnapped);
 
     // Check snap-to-close
     if (this.points.length >= 6) {

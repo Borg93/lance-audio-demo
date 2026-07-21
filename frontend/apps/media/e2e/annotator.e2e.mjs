@@ -14,70 +14,14 @@
  * Run: `bun run test:e2e` (from apps/media). Re-seeds the demo annotations before + after,
  * so the suite is deterministic and leaves the demo clean.
  */
-import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
+import { BASE, KEY, assertPreconditions, collector, launchBrowser, seed } from "./lib.mjs";
 
-const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:5175";
-const API = process.env.E2E_API ?? "http://127.0.0.1:8000";
-const KEY = process.env.E2E_KEY ?? "fe00cd746463ad2c/0/19";
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
+const { ok, finish } = collector("annotator E2E");
 
-function chromePath() {
-  if (process.env.E2E_CHROME) return process.env.E2E_CHROME;
-  const cache = path.join(process.env.HOME ?? "", ".cache/ms-playwright");
-  const builds = existsSync(cache)
-    ? readdirSync(cache)
-        .filter((d) => /^chromium-\d+$/.test(d))
-        .sort((a, b) => Number(a.split("-")[1]) - Number(b.split("-")[1])) // numeric, not lexical
-    : [];
-  for (const b of builds.reverse()) {
-    // The binary layout changed across Playwright versions: chrome-linux64/ (new) vs chrome-linux/ (old).
-    for (const layout of ["chrome-linux64/chrome", "chrome-linux/chrome"]) {
-      const p = path.join(cache, b, layout);
-      if (existsSync(p)) return p;
-    }
-  }
-  throw new Error("no chromium found — set E2E_CHROME or `npx playwright-core install chromium`");
-}
-
-const seed = () =>
-  execFileSync("make", ["seed-annotations", "DB=transcripts_v2.lance"], { cwd: REPO, stdio: "pipe" });
-
-const results = [];
-const ok = (name, pass, detail = "") => {
-  results.push({ name, pass });
-  console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
-};
-
-// ── preconditions ──
-for (const [name, url] of [
-  ["backend", `${API}/api/datasets`],
-  ["dev server", `${BASE}/`],
-  ["demo unit (E2E_KEY)", `${API}/api/annotations/${KEY}`],
-]) {
-  const res = await fetch(url).catch(() => null);
-  if (!res?.ok) {
-    console.error(`PRECONDITION FAILED: ${name} not reachable at ${url}`);
-    process.exit(2);
-  }
-}
+await assertPreconditions();
 seed();
 
-const browser = await chromium.launch({
-  executablePath: chromePath(),
-  headless: false, // new-headless below keeps WebGPU/Vulkan available
-  args: [
-    "--headless=new",
-    "--no-sandbox",
-    "--enable-unsafe-webgpu",
-    "--enable-features=Vulkan",
-    "--use-angle=vulkan",
-    "--ignore-gpu-blocklist",
-  ],
-});
+const browser = await launchBrowser();
 const page = await browser.newPage();
 const pageErrors = [];
 page.on("pageerror", (e) => pageErrors.push(e.message));
@@ -193,6 +137,24 @@ const magReady = await page
   .catch(() => false);
 ok("magnetic: OpenCV init completes", magReady);
 if (magReady) {
+  // SNAP assertion: sweep the cursor across the (corner-rich) frame and require the
+  // live snap indicator to engage — proving keypoints were detected AND the cursor
+  // actually locked onto one, not just that a polygon committed.
+  let snapped = false;
+  outer: for (let fy = 0.2; fy <= 0.8; fy += 0.15) {
+    for (let fx = 0.15; fx <= 0.85; fx += 0.1) {
+      await page.mouse.move(...pt(fx, fy), { steps: 4 });
+      const s = await page
+        .locator('[data-testid="annotator-toolbar"] button[data-snapped="true"]')
+        .count();
+      if (s > 0) {
+        snapped = true;
+        break outer;
+      }
+    }
+  }
+  ok("magnetic: cursor SNAPS onto a detected corner", snapped);
+
   const before = await count();
   const [mx, my] = pt(0.35, 0.70);
   await page.mouse.click(mx, my);
@@ -258,7 +220,5 @@ try {
   } catch {
     console.error("WARNING: post-run re-seed failed — run `make seed-annotations` manually");
   }
-  const passed = results.filter((r) => r.pass).length;
-  console.log(`\n=== E2E: ${passed}/${results.length} passed${crashed ? " (CRASHED before completing)" : ""} ===`);
-  process.exit(!crashed && passed === results.length ? 0 : 1);
+  finish(crashed);
 }
