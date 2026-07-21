@@ -15,16 +15,12 @@ from typing import Any
 from fastapi import APIRouter
 
 from backend.core.exceptions import NotFoundError
-from backend.deps import StateDep
+from backend.deps import DatasetParam, StateDep
 from backend.lancekit.alignments import parse_alignments_json
 from backend.lancekit.descriptor import Declared
+from backend.lancekit.keys import chunk_key_filter, validate_doc_key
 from backend.lancekit.predicate import eq
-from backend.media_api.media import (
-    DatasetParam,
-    chunk_key_filter,
-    table_dataset,
-    validate_doc_key,
-)
+from backend.lancekit.registry import table_dataset
 from backend.state import dataset_handle
 
 logger = logging.getLogger(__name__)

@@ -56,12 +56,11 @@ stringly-typed seams, and a handful of dead exports.
 
 ### P2 — seams + types
 
-- **[medium/layering] Move the dataset-access kernel out of the viewer group** — `annotations/`
-  (a future annotator SERVICE) imports `DatasetParam` / `table_dataset` / `chunk_key_filter` /
-  `validate_doc_key` from `media_api/media.py` (a viewer feature module). Per the group rule
-  ("shared primitives come only from core/lancekit/state/deps — never the sibling group"), these
-  four are descriptor/dataset primitives that belong in `backend/lancekit`; moving them makes the
-  3-service lift touch zero viewer code. Mechanical, touches every importer in media_api.
+- **[medium/layering] Move the dataset-access kernel out of the viewer group — DONE** —
+  `validate_doc_key`/`chunk_key_filter` → `lancekit/keys.py`, `table_dataset` →
+  `lancekit/registry.py`, `DatasetParam` → `backend/deps.py`; all nine importers rewired.
+  `annotations/` + `assist` now import zero viewer modules — the annotator-service lift
+  touches no viewer code.
 
 - **[medium/duplication]** `lancekit/writer.py:90` — LocalCatalogWriteTransport (90-108) is byte-identical to LanceTableWriter (42-59) — same three methods, same bodies — and RestCatalogWriteTransport.merge_upsert/merge_insert_only (137-151 vs 153-166) duplicate the Arrow-IPC-file serialization differing only in the when_matched_update_all flag.
 - **[medium/dead-code]** `lancekit/writer.py:77` — CatalogTableWriter stores self._id = table_id but never uses it, and the class as a whole is a no-op pass-through: CatalogWriteTransport's protocol is structurally identical to TableWriter, so every method just forwards.

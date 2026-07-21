@@ -14,9 +14,11 @@ import logging
 import threading
 from pathlib import Path
 
+import lance
 import lancedb
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
+from backend.core.exceptions import NotFoundError
 from backend.lancekit import store
 from backend.lancekit.descriptor import DatasetDescriptor, load_dataset_descriptor
 from backend.lancekit.introspect import table_info
@@ -134,3 +136,31 @@ class DatasetRegistry:
 
     def default(self) -> DatasetHandle:
         return self.get(self._default_id)
+
+
+def table_dataset(handle: DatasetHandle, table: str) -> lance.LanceDataset:
+    """Open one table of the dataset as a ``lance.LanceDataset`` (blob-capable).
+
+    Opens over the object store when the dataset is S3-backed
+    (``handle.storage_options``); the local existence check is skipped for URIs
+    (``lance.dataset`` raises if the table is absent).
+    """
+    uri = handle.table_uri(table)
+    # Local: a fast directory check gives a clean 404. Over an object store we
+    # can't cheaply stat, so translate lance.dataset's own "not found" raise into
+    # the same NotFoundError — otherwise a missing / mid-rebuild table would
+    # escape as a raw 500 instead of the 404 the local path returns.
+    if handle.storage_options is None and not (handle.path / f"{table}.lance").is_dir():
+        raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}")
+    try:
+        ds = lance.dataset(uri, storage_options=handle.storage_options)
+    except (ValueError, OSError) as e:
+        msg = str(e).lower()
+        if "not found" in msg or "does not exist" in msg:
+            raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}") from e
+        raise
+    # Fold observed drift back into the cached descriptor (a write bumped the
+    # version, or the table was created after the dataset was first opened) —
+    # otherwise the registry's TableInfo stays frozen at first get() forever.
+    handle.sync_table_info(table, int(ds.version))
+    return ds

@@ -14,9 +14,9 @@ from typing import Annotated, Any
 import httpx
 from fastapi import APIRouter, Query
 
-from backend.deps import StateDep
+from backend.deps import DatasetParam, StateDep
 from backend.lancekit.introspect import ColumnInfo
-from backend.media_api.media import DatasetParam, table_dataset
+from backend.lancekit.registry import table_dataset
 from backend.media_api.transcripts import alignments_binding
 from backend.schemas.system import ColumnKind, DbFacts, FilterColumn, HealthResponse, VllmPing
 from backend.state import dataset_handle

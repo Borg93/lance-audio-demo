@@ -12,9 +12,10 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from backend.core.exceptions import NotFoundError
-from backend.deps import StateDep
+from backend.deps import DatasetParam, StateDep
+from backend.lancekit.keys import chunk_key_filter, validate_doc_key
+from backend.lancekit.registry import table_dataset
 from backend.media_api.annotations.schema import ANNOTATIONS_TABLE
-from backend.media_api.media import DatasetParam, chunk_key_filter, table_dataset, validate_doc_key
 from backend.state import dataset_handle
 
 router = APIRouter(tags=["annotate"])

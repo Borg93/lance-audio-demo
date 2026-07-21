@@ -14,8 +14,10 @@ import pyarrow as pa
 from fastapi import APIRouter
 
 from backend.core.exceptions import ValidationError
-from backend.deps import AuthorDep, StateDep
+from backend.deps import AuthorDep, DatasetParam, StateDep
 from backend.lancekit.descriptor import Declared
+from backend.lancekit.keys import validate_doc_key
+from backend.lancekit.registry import table_dataset
 from backend.lancekit.writer import open_writer
 from backend.media_api.annotations.commit import check_base_version, delete_by_ids, finalize_commit
 from backend.media_api.annotations.schema import (
@@ -26,7 +28,6 @@ from backend.media_api.annotations.schema import (
     TagWrite,
     identity_values,
 )
-from backend.media_api.media import DatasetParam, table_dataset, validate_doc_key
 from backend.state import dataset_handle
 
 logger = logging.getLogger(__name__)

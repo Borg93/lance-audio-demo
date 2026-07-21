@@ -23,18 +23,13 @@ import lance
 from fastapi import APIRouter, Query, Response
 
 from backend.core.exceptions import NotFoundError, ValidationError
-from backend.deps import StateDep
+from backend.deps import DatasetParam, StateDep
 from backend.lancekit.alignments import parse_alignments_json
 from backend.lancekit.descriptor import AtlasSpace, Declared
+from backend.lancekit.keys import chunk_key_filter, validate_doc_key
 from backend.lancekit.predicate import and_, eq, isin
-from backend.lancekit.registry import DatasetHandle
-from backend.media_api.media import (
-    FRAME_INDEX_COLUMN,
-    DatasetParam,
-    chunk_key_filter,
-    table_dataset,
-    validate_doc_key,
-)
+from backend.lancekit.registry import DatasetHandle, table_dataset
+from backend.media_api.media import FRAME_INDEX_COLUMN
 from backend.media_api.points import build_points
 from backend.media_api.system import DURATION_COLUMN
 from backend.media_api.transcripts import alignments_binding

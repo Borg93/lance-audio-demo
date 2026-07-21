@@ -16,7 +16,7 @@ compaction; positional ``indices`` are not, so they are never used here.
 import logging
 import math
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from typing import Annotated
 from urllib.parse import quote
 
@@ -25,10 +25,10 @@ from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.core.exceptions import NotFoundError, ValidationError
-from backend.deps import StateDep
-from backend.lancekit.descriptor import Declared
-from backend.lancekit.predicate import and_, eq
-from backend.lancekit.registry import DatasetHandle
+from backend.deps import DatasetParam, StateDep
+from backend.lancekit.keys import chunk_key_filter, validate_doc_key
+from backend.lancekit.predicate import eq
+from backend.lancekit.registry import DatasetHandle, table_dataset
 from backend.media_api.clips import MAX_CLIP_S, build_clip
 from backend.state import dataset_handle
 
@@ -44,64 +44,6 @@ _STREAM_CHUNK = 1 << 20  # 1 MiB: amortizes seek cost, bounds per-stream memory
 FRAME_INDEX_COLUMN = "frame_idx"
 
 # ── key + table primitives shared by the media_api routers ──────────────────
-
-
-def validate_doc_key(declared: Declared, doc_id: str) -> str:
-    """Whitelist-validate a doc key against the descriptor's pattern — validation
-    ONLY, returning the raw key.
-
-    The returned value is stamped into stored row identity and deterministic tag
-    ids, so it must never be SQL-escaped here; escaping happens where a predicate
-    is rendered (``lancekit.predicate``). The pattern is still the first injection
-    guard for every filter that interpolates the key.
-    """
-    if not re.fullmatch(declared.identity.doc_key_pattern, doc_id):
-        raise ValidationError("invalid doc_id")
-    return doc_id
-
-
-def chunk_key_filter(declared: Declared, doc_id: str, rest: Sequence[int]) -> str:
-    """SQL predicate for one row keyed by (doc key, *other identity fields).
-
-    ``doc_id`` must already be validated (and is escaped here at render time);
-    ``rest`` values pair positionally with the non-doc key fields (int-cast, so
-    they can't inject).
-    """
-    identity = declared.identity
-    clauses = [eq(identity.doc_key, doc_id)]
-    others = [f for f in identity.key_fields if f != identity.doc_key]
-    # strict=False: pairs positionally, tolerating identities with fewer
-    # non-doc key fields than the legacy 3-segment route shape provides.
-    clauses.extend(eq(field, int(value)) for field, value in zip(others, rest, strict=False))
-    return and_(*clauses)
-
-
-def table_dataset(handle: DatasetHandle, table: str) -> lance.LanceDataset:
-    """Open one table of the dataset as a ``lance.LanceDataset`` (blob-capable).
-
-    Opens over the object store when the dataset is S3-backed
-    (``handle.storage_options``); the local existence check is skipped for URIs
-    (``lance.dataset`` raises if the table is absent).
-    """
-    uri = handle.table_uri(table)
-    # Local: a fast directory check gives a clean 404. Over an object store we
-    # can't cheaply stat, so translate lance.dataset's own "not found" raise into
-    # the same NotFoundError — otherwise a missing / mid-rebuild table would
-    # escape as a raw 500 instead of the 404 the local path returns.
-    if handle.storage_options is None and not (handle.path / f"{table}.lance").is_dir():
-        raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}")
-    try:
-        ds = lance.dataset(uri, storage_options=handle.storage_options)
-    except (ValueError, OSError) as e:
-        msg = str(e).lower()
-        if "not found" in msg or "does not exist" in msg:
-            raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}") from e
-        raise
-    # Fold observed drift back into the cached descriptor (a write bumped the
-    # version, or the table was created after the dataset was first opened) —
-    # otherwise the registry's TableInfo stays frozen at first get() forever.
-    handle.sync_table_info(table, int(ds.version))
-    return ds
 
 
 def rowid_for_doc(ds: lance.LanceDataset, doc_key: str, doc_id: str) -> int | None:
@@ -218,7 +160,6 @@ def _frames_binding(handle: DatasetHandle) -> tuple[str, str, str | None] | None
     return table, blob_column, mime_column
 
 
-DatasetParam = Annotated[str | None, Query(description="Dataset id (default DB when omitted).")]
 
 
 # ── routes ───────────────────────────────────────────────────────────────────

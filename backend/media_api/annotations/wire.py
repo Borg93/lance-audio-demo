@@ -12,11 +12,12 @@ import pyarrow as pa
 from fastapi import APIRouter, Query, Response
 
 from backend.core.exceptions import NotFoundError
-from backend.deps import StateDep
+from backend.deps import DatasetParam, StateDep
+from backend.lancekit.keys import chunk_key_filter, validate_doc_key
 from backend.lancekit.reader import open_reader
+from backend.lancekit.registry import table_dataset
 from backend.media_api.annotations.schema import ANNOTATIONS_TABLE, EMPTY_SCHEMA
 from backend.media_api.annotations.versions import checkout
-from backend.media_api.media import DatasetParam, chunk_key_filter, table_dataset, validate_doc_key
 from backend.state import dataset_handle
 
 router = APIRouter(tags=["annotate"])

@@ -17,9 +17,9 @@ import pytest
 from backend.core.exceptions import ValidationError
 from backend.lancekit.descriptor import DatasetDescriptor, Declared
 from backend.lancekit.introspect import discover_tables
+from backend.lancekit.keys import chunk_key_filter, validate_doc_key
 from backend.lancekit.predicate import and_, eq, isin, ne, quote_literal
-from backend.lancekit.registry import DatasetHandle
-from backend.media_api.media import chunk_key_filter, table_dataset, validate_doc_key
+from backend.lancekit.registry import DatasetHandle, table_dataset
 
 
 class TestQuoteLiteral:

@@ -13,7 +13,9 @@ from collections.abc import Mapping, Sequence
 import pyarrow as pa
 from fastapi import APIRouter
 
-from backend.deps import AuthorDep, StateDep
+from backend.deps import AuthorDep, DatasetParam, StateDep
+from backend.lancekit.keys import chunk_key_filter, validate_doc_key
+from backend.lancekit.registry import table_dataset
 from backend.lancekit.writer import open_writer
 from backend.media_api.annotations.commit import check_base_version, delete_by_ids, finalize_commit
 from backend.media_api.annotations.schema import (
@@ -24,7 +26,6 @@ from backend.media_api.annotations.schema import (
     SaveResult,
     identity_values,
 )
-from backend.media_api.media import DatasetParam, chunk_key_filter, table_dataset, validate_doc_key
 from backend.state import dataset_handle
 
 logger = logging.getLogger(__name__)

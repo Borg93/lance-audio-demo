@@ -12,7 +12,8 @@ from typing import Any
 
 import pytest
 from backend.lancekit.descriptor import Declared
-from backend.media_api.media import IGNORE_RANGE, parse_range, validate_doc_key
+from backend.lancekit.keys import validate_doc_key
+from backend.media_api.media import IGNORE_RANGE, parse_range
 from backend.search_api.filters import build_where_clause
 from backend.search_api.postprocess import rrf_fuse
 from fastapi import HTTPException

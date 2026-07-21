@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, Query, Request
 
 from backend.state import AppState
 
@@ -21,6 +21,9 @@ def get_state(request: Request) -> AppState:
 
 
 StateDep = Annotated[AppState, Depends(get_state)]
+
+#: Optional ``?dataset=`` query param addressing a registry dataset (None = default).
+DatasetParam = Annotated[str | None, Query(description="Dataset id (default DB when omitted).")]
 
 
 def get_author(x_user: Annotated[str | None, Header(alias="X-User")] = None) -> str:

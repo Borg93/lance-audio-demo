@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 from backend.core.exceptions import ConflictError
 from backend.lancekit.lineage_emit import emit_save
 from backend.lancekit.predicate import isin
+from backend.lancekit.registry import table_dataset
 from backend.media_api.annotations.schema import ANNOTATIONS_TABLE, SaveResult
-from backend.media_api.media import table_dataset
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

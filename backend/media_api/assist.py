@@ -18,8 +18,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from backend.core.exceptions import ServiceUnavailableError
-from backend.deps import StateDep
-from backend.media_api.media import DatasetParam, validate_doc_key
+from backend.deps import DatasetParam, StateDep
+from backend.lancekit.keys import validate_doc_key
 from backend.state import AppState, dataset_handle
 
 logger = logging.getLogger(__name__)
