@@ -50,7 +50,23 @@ async function proxy(req: Request, base: string): Promise<Response> {
     headers,
     body: req.method === 'GET' || req.method === 'HEAD' ? undefined : req.body,
   });
-  return new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
+  // fetch() auto-decompresses the body, so the upstream's content-encoding /
+  // content-length now describe bytes that no longer exist — forwarding them
+  // makes the browser try to gunzip plain bytes (ERR_CONTENT_DECODING_FAILED).
+  const respHeaders = new Headers(upstream.headers);
+  respHeaders.delete('content-encoding');
+  respHeaders.delete('content-length');
+  return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
+}
+
+// svelte-adapter-bun serves this based app's PAGES at /annotate/ but its ASSETS
+// at the bare /_app/ — so a direct /annotate/_app/* request (not pre-stripped by
+// an upstream proxy) is rewritten to /_app/* before the app handler sees it.
+function stripAssetBase(req: Request): Request {
+  const url = new URL(req.url);
+  if (!url.pathname.startsWith('/annotate/_app/')) return req;
+  url.pathname = url.pathname.slice('/annotate'.length);
+  return new Request(url, req);
 }
 
 Bun.serve({
@@ -59,7 +75,7 @@ Bun.serve({
   async fetch(req, server) {
     const { pathname } = new URL(req.url);
     if (pathname.startsWith('/api/')) return proxy(req, apiUpstream(pathname));
-    return app.fetch(req, server);
+    return app.fetch(stripAssetBase(req), server);
   },
 });
 console.log(`→ annotator zone:  http://localhost:${PORT}/annotate`);

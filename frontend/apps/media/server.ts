@@ -31,7 +31,7 @@ const args = Object.fromEntries(
 const VIEWER = (args.viewer ?? args.api ?? 'http://127.0.0.1:8101').replace(/\/$/, '');
 const SEARCH = (args.search ?? 'http://127.0.0.1:8102').replace(/\/$/, '');
 const ANNOTATOR = (args.annotator ?? 'http://127.0.0.1:8103').replace(/\/$/, '');
-// The annotator ZONE app (owns /annotate, kit.paths.base) — its own bun server.
+// The annotator ZONE app (owns /annotate + /annotate_app) — its own bun server.
 const ANNOTATE_ZONE = (args['annotate-zone'] ?? 'http://127.0.0.1:5176').replace(/\/$/, '');
 
 /** Route an /api/* path to the service that owns that domain. */
@@ -59,16 +59,29 @@ const { getHandler } = (await import(resolve(here, 'build/handler.js'))) as {
 const app = getHandler();
 
 // ─── streaming proxy to an explicit base (Range headers flow through) ─────────
-async function proxy(req: Request, base: string): Promise<Response> {
+// `stripBase` handles the svelte-adapter-bun quirk: the annotator zone's built
+// server serves its pages at the BASED path (/annotate/) but its immutable
+// assets at the BARE path (/_app/). So /annotate/_app/* is forwarded with the
+// /annotate prefix removed; pages and everything else go through verbatim.
+async function proxy(req: Request, base: string, stripBase?: string): Promise<Response> {
   const url = new URL(req.url);
+  let pathname = url.pathname;
+  if (stripBase && pathname.startsWith(`${stripBase}/_app/`))
+    pathname = pathname.slice(stripBase.length);
   const headers = new Headers(req.headers);
   headers.delete('host');
-  const upstream = await fetch(`${base}${url.pathname}${url.search}`, {
+  const upstream = await fetch(`${base}${pathname}${url.search}`, {
     method: req.method,
     headers,
     body: req.method === 'GET' || req.method === 'HEAD' ? undefined : req.body,
   });
-  return new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
+  // fetch() auto-decompresses the body, so the upstream's content-encoding /
+  // content-length now describe bytes that no longer exist — forwarding them
+  // makes the browser try to gunzip plain bytes (ERR_CONTENT_DECODING_FAILED).
+  const respHeaders = new Headers(upstream.headers);
+  respHeaders.delete('content-encoding');
+  respHeaders.delete('content-length');
+  return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
 }
 
 // ─── Router: /api → per-domain service, /annotate → annotator zone, else app ──
@@ -79,7 +92,7 @@ Bun.serve({
     const { pathname } = new URL(req.url);
     if (pathname.startsWith('/api/')) return proxy(req, apiUpstream(pathname));
     if (pathname === '/annotate' || pathname.startsWith('/annotate/'))
-      return proxy(req, ANNOTATE_ZONE);
+      return proxy(req, ANNOTATE_ZONE, '/annotate');
     return app.fetch(req, server);
   },
 });
