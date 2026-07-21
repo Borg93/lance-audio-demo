@@ -14,12 +14,13 @@ import lance
 import lancedb
 import pyarrow as pa
 import pytest
-from backend.core.exceptions import ValidationError
-from backend.lancekit.descriptor import DatasetDescriptor, Declared
-from backend.lancekit.introspect import discover_tables
-from backend.lancekit.keys import chunk_key_filter, validate_doc_key
-from backend.lancekit.predicate import and_, eq, isin, ne, quote_literal
-from backend.lancekit.registry import DatasetHandle, table_dataset
+
+from common.core.exceptions import ValidationError
+from common.lancekit.descriptor import DatasetDescriptor, Declared
+from common.lancekit.introspect import discover_tables
+from common.lancekit.keys import chunk_key_filter, validate_doc_key
+from common.lancekit.predicate import and_, eq, isin, ne, quote_literal
+from common.lancekit.registry import DatasetHandle, table_dataset
 
 
 class TestQuoteLiteral:

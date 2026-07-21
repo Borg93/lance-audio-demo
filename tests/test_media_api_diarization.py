@@ -1,7 +1,7 @@
 """Diarization endpoint (media_api port) over a synthetic turns table.
 
 Port of ``tests/test_backend_diarization.py`` to the descriptor-driven
-``backend.media_api.diarization`` router: ``built: false`` when the capability
+``viewer.api.v1.endpoints.diarization`` router: ``built: false`` when the capability
 is undeclared / the table or doc is absent, turns sorted by start, speakers
 sorted-distinct, the doc_id whitelist (now the descriptor's
 ``identity.doc_key_pattern``) enforced before any filter interpolation — plus
@@ -16,12 +16,13 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from backend.core.config import Settings
-from backend.core.handlers import register_handlers
-from backend.media_api import diarization
-from backend.state import AppState
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from common.core.config import Settings
+from common.core.handlers import register_handlers
+from common.state import AppState
+from viewer.api.v1.endpoints import diarization
 
 DOC_ID = "0123456789abcdef"
 # (turn_id, speaker_label, start, end) — deliberately NOT pre-sorted by start.

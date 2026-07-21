@@ -106,10 +106,29 @@ def main() -> None:
 
     # ── 6) backend: assert every endpoint + search mode ──────────────────────
     print("\n── backend (FastAPI TestClient) ──")
-    from backend import create_app
+    import os
+
+    os.environ["MEDIA_DB"] = str(db)
+    from common.core.config import get_settings
+
+    get_settings.cache_clear()
     from fastapi.testclient import TestClient
 
-    client = TestClient(create_app(db))
+    from search.main import create_search_app
+    from viewer.main import create_viewer_app, create_viewer_state
+
+    # In-process mirror of the dev proxy's zone routing: /api/search → search
+    # service, everything else → viewer. One shared AppState, like production.
+    state = create_viewer_state()
+    viewer_client = TestClient(create_viewer_app(state=state))
+    search_client = TestClient(create_search_app(state))
+
+    class SplitClient:
+        def get(self, url: str, **kw):
+            c = search_client if url.startswith("/api/search") else viewer_client
+            return c.get(url, **kw)
+
+    client = SplitClient()
 
     # a query string guaranteed to hit: the first chunk's own text
     chunks = lance.dataset(str(db / "chunks.lance"))

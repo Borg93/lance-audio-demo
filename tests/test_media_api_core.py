@@ -17,10 +17,11 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from backend.core.config import Settings
-from backend.media_api import create_media_app
 from fastapi.testclient import TestClient
 from lance import blob_array, blob_field
+
+from common.core.config import Settings
+from viewer.main import create_viewer_app
 
 DOC = "abcd1234"  # matches the descriptor's ^[a-f0-9]{8}$ doc-key pattern
 MEDIA = bytes(range(256)) * 8  # 2048 deterministic bytes
@@ -156,7 +157,7 @@ def client(tmp_path: Path) -> TestClient:
         MEDIA_DB_ROOT=root,
         MEDIA_DESCRIPTOR_DIR=descriptor_dir,
     )
-    return TestClient(create_media_app(settings))
+    return TestClient(create_viewer_app(settings))
 
 
 class TestDatasets:

@@ -13,13 +13,14 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from backend.lancekit.descriptor import (
+from lance import blob_array, blob_field
+
+from common.lancekit.descriptor import (
     Declared,
     load_dataset_descriptor,
     validate_descriptor,
 )
-from backend.lancekit.introspect import discover_tables
-from lance import blob_array, blob_field
+from common.lancekit.introspect import discover_tables
 
 DIM = 8
 

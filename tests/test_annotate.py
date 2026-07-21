@@ -13,11 +13,12 @@ from typing import TYPE_CHECKING
 import lance
 import pyarrow as pa
 import pytest
-from backend.lancekit.descriptor import Declared
-from backend.media_api.annotations.save import build_delta, new_rows
-from backend.media_api.annotations.schema import EMPTY_SCHEMA, NewAnnotation, TagWrite
-from backend.media_api.annotations.tags import check_keys_arity, tag_id, tag_rows
-from backend.media_api.annotations.wire import ipc_stream
+
+from annotator.annotations.save import build_delta, new_rows
+from annotator.annotations.schema import EMPTY_SCHEMA, NewAnnotation, TagWrite
+from annotator.annotations.tags import check_keys_arity, tag_id, tag_rows
+from annotator.annotations.wire import ipc_stream
+from common.lancekit.descriptor import Declared
 
 _MEDIA_DECLARED = Declared.model_validate(
     {"identity": {"key_fields": ["doc_id", "speech_id", "chunk_id"]}}
@@ -165,7 +166,7 @@ def test_schema_single_source_of_truth(tmp_path: Path) -> None:
 
 
 def test_get_author_seam_defaults_to_anon_and_trims() -> None:
-    from backend.deps import get_author
+    from common.deps import get_author
 
     assert get_author(None) == "anon"  # no header → always an author
     assert get_author("   ") == "anon"  # blank → anon
@@ -261,7 +262,7 @@ def test_check_keys_arity_rejects_mismatched_client_keys() -> None:
     # keys pair POSITIONALLY with the descriptor's non-doc identity fields; a short
     # list would stamp NULL identity columns (rows no chunk filter ever matches) and
     # a long one silently drops keys — both must 400 at the boundary, before any write.
-    from backend.core.exceptions import ValidationError
+    from common.core.exceptions import ValidationError
 
     ok = [TagWrite(doc_id="d1", keys=[0, 19], labels=["x"])]
     check_keys_arity(_MEDIA_DECLARED, ok)  # correct arity passes
@@ -340,7 +341,7 @@ def test_tag_resave_preserves_human_review(tmp_path: Path) -> None:
 def test_iso_timestamp_formats_version_timestamps() -> None:
     from datetime import datetime
 
-    from backend.media_api.annotations.versions import iso_timestamp
+    from annotator.annotations.versions import iso_timestamp
 
     assert iso_timestamp(datetime(2026, 7, 20, 12, 0, 0)) == "2026-07-20T12:00:00"  # datetime → ISO
     assert iso_timestamp("already-a-string") == "already-a-string"
@@ -372,8 +373,8 @@ def test_version_history_counts_this_units_rows_per_version(tmp_path: Path) -> N
 
 
 def test_checkout_translates_bad_version_to_notfound(tmp_path: Path) -> None:
-    from backend.core.exceptions import NotFoundError
-    from backend.media_api.annotations.versions import checkout
+    from annotator.annotations.versions import checkout
+    from common.core.exceptions import NotFoundError
 
     uri = str(tmp_path / "annotations.lance")
     lance.write_dataset(pa.Table.from_pylist([{"id": "a1"}], schema=_full_schema()), uri)
@@ -384,7 +385,7 @@ def test_checkout_translates_bad_version_to_notfound(tmp_path: Path) -> None:
 
 
 def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:
-    from backend.lancekit.lineage_emit import build_save_event
+    from common.lancekit.lineage_emit import build_save_event
 
     uri = str(tmp_path / "annotations.lance")
     lance.write_dataset(

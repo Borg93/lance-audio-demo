@@ -11,14 +11,16 @@ export default defineConfig({
     include: ['@techstark/opencv-js'],
   },
   server: {
-    // During `bun run dev`, proxy /api/* straight to the FastAPI backend
-    // so the SvelteKit dev server can be tested without launching the
-    // Bun proxy. Production build still goes through frontend/server.ts.
+    // During `bun run dev`, proxy /api/* to the three lance-media services by
+    // path — the routing-based (zones) composition seam from the micro-frontends
+    // skill: annotator owns the write plane, search owns retrieval, viewer owns
+    // the rest. Production goes through frontend/server.ts with the same map.
     proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-      },
+      '/api/annotations': { target: 'http://127.0.0.1:8103', changeOrigin: true },
+      '/api/assist': { target: 'http://127.0.0.1:8103', changeOrigin: true },
+      '/api/jobs': { target: 'http://127.0.0.1:8103', changeOrigin: true },
+      '/api/search': { target: 'http://127.0.0.1:8102', changeOrigin: true },
+      '/api': { target: 'http://127.0.0.1:8101', changeOrigin: true },
     },
   },
 });

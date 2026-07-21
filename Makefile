@@ -30,7 +30,7 @@ GPU             ?= 2
 	embed-speaker-turns build-speakers cluster-speakers \
 	caption-chunk-frames embed-captions captions topics \
 	atlas atlas-visual atlas-caption atlas-all features-all stack-up stack-down \
-	compact maintain e2e-smoke backend frontend frontend-build frontend-dev labeler dev \
+	compact maintain e2e-smoke backend services-up services-down frontend frontend-build frontend-dev labeler dev \
 	seed-annotations annotate \
 	hf-upload-db hf-upload-videos hf-upload-all hf-download-db hf-download-all \
 	reingest search query demo shell clean clean-db clean-run reset download
@@ -188,8 +188,16 @@ BACKEND_PORT ?= 8000
 # Prefer this over `frontend-dev` for remote use — no Vite recompile spinner.
 FRONTEND_PORT ?= 5274
 
-backend:              ## Run the FastAPI backend (Lance reads, /api/*).
-	uv run rmedia --db $(DB) serve --host $(BACKEND_HOST) --port $(BACKEND_PORT)
+backend:              ## Run all three lance-media services (viewer/search/annotator).
+	uv run rmedia --db $(DB) serve --host $(BACKEND_HOST)
+
+services-up:          ## Start viewer(:8101) + search(:8102) + annotator(:8103) detached.
+	@for svc in viewer search annotator; do \
+	  (MEDIA_DB=$(DB) nohup uv run python -c "from $$svc.main import run; run()" > /tmp/lance-$$svc.log 2>&1 &) ; done
+	@sleep 6; for p in 8101 8102 8103; do curl -sf -o /dev/null http://127.0.0.1:$$p/livez && echo ":$$p up" || echo ":$$p DOWN"; done
+
+services-down:        ## Stop the three services by port.
+	@for p in 8101 8102 8103; do kill $$(lsof -ti :$$p) 2>/dev/null || true; done; echo stopped
 
 # Turborepo workspace: the app lives in apps/media, shared config in packages/config.
 FRONTEND_DIR    ?= ./frontend

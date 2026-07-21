@@ -1,23 +1,6 @@
-"""Standalone entrypoint for FastMCP tooling — dev preview, inspector, CLI.
+"""STALE: referenced backend.mcp which no longer exists (pre-split MCP mount).
 
-Exposes the same MCP server the backend mounts at ``/mcp/``, but as a bare
-``mcp`` instance the ``fastmcp`` CLI can load directly (no FastAPI, no
-uvicorn). The backend on :8000 keeps running independently — pick free ports:
-
-    # Browser preview of the APP tools (results table, clip viewer) with an
-    # MCP message inspector — no MCP host needed:
-    uv run fastmcp dev apps scripts/mcp_dev.py --mcp-port 8010 --dev-port 8080
-
-    # Poke at the data tools from the terminal:
-    uv run fastmcp list scripts/mcp_dev.py
-    uv run fastmcp call scripts/mcp_dev.py search_chunks query=skatt mode=fts n=3
-
-Note: this opens its own read-only Lance handles to MEDIA_DB (default
-``transcripts_v2.lance``) — safe alongside the running backend.
+Re-home under a service if the MCP mount returns; kept for the config reference only.
 """
 
-from backend.core.config import get_settings
-from backend.mcp.server import build_mcp
-from backend.state import open_resources
-
-mcp = build_mcp(open_resources(get_settings().db_path))
+raise SystemExit("scripts/mcp_dev.py is stale — backend.mcp was removed in the services split")

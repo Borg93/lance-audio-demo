@@ -11,15 +11,15 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from backend.lancekit.descriptor import Declared
-from backend.lancekit.keys import validate_doc_key
-from backend.media_api.media import IGNORE_RANGE, parse_range
-from backend.search_api.filters import build_where_clause
-from backend.search_api.postprocess import rrf_fuse
 from fastapi import HTTPException
 
+from common.lancekit.descriptor import Declared
+from common.lancekit.keys import validate_doc_key
 from rmedia.modalities.av.frames import sample_times
 from rmedia.retrieval.search import extract_query_terms, parse_alignments_json, timecode
+from search.services.filters import build_where_clause
+from search.services.postprocess import rrf_fuse
+from viewer.api.v1.endpoints.media import IGNORE_RANGE, parse_range
 
 
 class TestTimecode:

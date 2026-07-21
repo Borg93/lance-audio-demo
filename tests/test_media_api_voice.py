@@ -1,7 +1,7 @@
 """Voice endpoints (media_api port) over synthetic voice tables + a minimal descriptor.
 
 Port of ``tests/test_backend_voice.py`` to the descriptor-driven
-``backend.media_api.voice`` router: status built/unbuilt, the three anchor
+``viewer.api.v1.endpoints.voice`` router: status built/unbuilt, the three anchor
 forms (turn_id | speaker | t), exactly-one-anchor validation, the same-doc
 exclusion toggle, the turn→max-overlap-chunk join, the uniform Hit shape
 (+ voice fields), the result-count cap, the upload anchor form, identity
@@ -23,13 +23,15 @@ import lance
 import numpy as np
 import pyarrow as pa
 import pytest
-from backend.core.config import Settings
-from backend.core.handlers import register_handlers
-from backend.media_api import voice, voice_service
-from backend.media_api.wespeaker import VOICE_EMBED_DIM
-from backend.state import AppState
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from common.core.config import Settings
+from common.core.handlers import register_handlers
+from common.state import AppState
+from viewer.api.v1.endpoints import voice
+from viewer.services import voice_service
+from viewer.services.wespeaker import VOICE_EMBED_DIM
 
 DOC_A = "aaaaaaaaaaaaaaaa"
 DOC_B = "bbbbbbbbbbbbbbbb"

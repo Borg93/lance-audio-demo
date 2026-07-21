@@ -8,7 +8,8 @@ the schema-agnostic contract.
 from __future__ import annotations
 
 import pytest
-from backend.lancekit.descriptor import (
+
+from common.lancekit.descriptor import (
     Declared,
     Display,
     FtsBinding,
@@ -18,14 +19,14 @@ from backend.lancekit.descriptor import (
     TimeBinding,
     VectorBinding,
 )
-from backend.lancekit.introspect import ColumnInfo, TableInfo
-from backend.search_api.filters import (
+from common.lancekit.introspect import ColumnInfo, TableInfo
+from search.services.filters import (
     build_where_clause,
     extract_filters,
     topic_layer_columns,
 )
-from backend.search_api.spec import SearchMode, SearchSpec, available_modes
-from backend.search_api.target import hit_columns
+from search.services.spec import SearchMode, SearchSpec, available_modes
+from search.services.target import hit_columns
 
 # ── SearchSpec: validation + clamping ─────────────────────────────────────────
 

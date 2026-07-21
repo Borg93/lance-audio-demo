@@ -10,7 +10,10 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 export const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:5175";
-export const API = process.env.E2E_API ?? "http://127.0.0.1:8000";
+// API goes through the dev proxy (same origin the app uses) — under the split
+// deployment the proxy path-routes to viewer/search/annotator, so the suites
+// exercise the real zone composition, not one monolith port.
+export const API = process.env.E2E_API ?? "http://127.0.0.1:5175";
 export const KEY = process.env.E2E_KEY ?? "fe00cd746463ad2c/0/19";
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 

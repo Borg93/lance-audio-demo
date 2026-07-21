@@ -13,10 +13,10 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from backend.core.exceptions import NotFoundError
-from backend.media_api.annotations.versions import checkout
 from typer.testing import CliRunner
 
+from annotator.annotations.versions import checkout
+from common.core.exceptions import NotFoundError
 from rmedia.cli._app import app
 
 runner = CliRunner()

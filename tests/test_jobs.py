@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from backend.media_api.jobs import JobRequest, JobScope, job_id_for, scope_size
+from annotator.api.v1.endpoints.jobs import JobRequest, JobScope, job_id_for, scope_size
 
 
 def _req(

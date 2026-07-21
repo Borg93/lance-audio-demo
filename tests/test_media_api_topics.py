@@ -1,10 +1,10 @@
 """Topics endpoint (media_api port) over a synthetic single-row JSONB table.
 
-New coverage for ``backend.media_api.topics`` (the old topics router had no
+New coverage for ``viewer.api.v1.endpoints.topics`` (the old topics router had no
 endpoint tests): ``built: false`` when the capability is undeclared or the
 table is absent/empty, the single-JSONB-row contract (hierarchy decoded,
 layers/n_chunks surfaced), the per-request re-read, and the vendored
-``backend.lancekit.topics_meta`` helpers.
+``common.lancekit.topics_meta`` helpers.
 """
 
 from __future__ import annotations
@@ -16,13 +16,14 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from backend.core.config import Settings
-from backend.core.handlers import register_handlers
-from backend.lancekit.topics_meta import NOISE_LABEL, topic_layer_columns
-from backend.media_api import topics
-from backend.state import AppState
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from common.core.config import Settings
+from common.core.handlers import register_handlers
+from common.lancekit.topics_meta import NOISE_LABEL, topic_layer_columns
+from common.state import AppState
+from viewer.api.v1.endpoints import topics
 
 _DECLARED = {
     "identity": {"key_fields": ["doc_id"]},
@@ -140,7 +141,7 @@ class TestDatasetParam:
 
 
 class TestTopicsMeta:
-    """The vendored ``backend.lancekit.topics_meta`` helpers."""
+    """The vendored ``common.lancekit.topics_meta`` helpers."""
 
     def test_layer_columns_sorted_numerically(self) -> None:
         names = ["topic_l10", "text", "topic_l0", "topic_l2", "doc_topic"]

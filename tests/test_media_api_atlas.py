@@ -18,10 +18,11 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from backend.core.config import Settings
-from backend.media_api import create_media_app
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from common.core.config import Settings
+from viewer.main import create_viewer_app
 
 DOC_A = "d001"
 DOC_B = "d002"
@@ -97,7 +98,7 @@ def app_client(tmp_path: Path) -> tuple[FastAPI, TestClient]:
         MEDIA_DB_ROOT=root,
         MEDIA_DESCRIPTOR_DIR=descriptor_dir,
     )
-    app = create_media_app(settings)
+    app = create_viewer_app(settings)
     return app, TestClient(app)
 
 

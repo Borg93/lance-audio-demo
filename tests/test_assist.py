@@ -7,7 +7,7 @@ live via curl + playwright). These pin the shape shape the annotator renders.
 
 from __future__ import annotations
 
-from backend.media_api.assist import AssistRequest, Region, _mock
+from annotator.api.v1.endpoints.assist import AssistRequest, Region, _mock
 
 
 def test_mock_boxes_the_drawn_region_labeled_with_the_prompt() -> None:

@@ -24,20 +24,21 @@ import lancedb
 import numpy as np
 import pyarrow as pa
 import pytest
-from backend.core.config import Settings
-from backend.core.exceptions import ServiceUnavailableError
-from backend.core.handlers import register_handlers
-from backend.search_api import clients
-from backend.search_api.frames import frame_search
-from backend.search_api.postprocess import parse_alignments_json, rrf_fuse
-from backend.search_api.router import router as search_router
-from backend.search_api.service import run_search
-from backend.search_api.spec import SearchMode, SearchSpec
-from backend.search_api.target import resolve_target
-from backend.search_api.vector import vector_search
-from backend.state import AppState, dataset_handle
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+
+from common.core.config import Settings
+from common.core.exceptions import ServiceUnavailableError
+from common.core.handlers import register_handlers
+from common.state import AppState, dataset_handle
+from search.api.v1.router import router as search_router
+from search.services import clients
+from search.services.frames import frame_search
+from search.services.postprocess import parse_alignments_json, rrf_fuse
+from search.services.service import run_search
+from search.services.spec import SearchMode, SearchSpec
+from search.services.target import resolve_target
+from search.services.vector import vector_search
 
 DIM = 16
 
@@ -497,7 +498,7 @@ class TestRrfFuse:
 
 @pytest.fixture
 def client(articles_state: AppState) -> TestClient:
-    from backend.search_api import deps as search_deps
+    from search.api import dependencies as search_deps
 
     app = FastAPI()
     register_handlers(app)
@@ -607,7 +608,7 @@ class TestResultCache:
         return SearchSpec(q=kw.pop("q", "carbon"), mode=kw.pop("mode", SearchMode.FTS), **kw)
 
     def test_hit_skips_recompute_and_returns_same(self, articles) -> None:
-        from backend.search_api.result_cache import run_cached
+        from search.services.result_cache import run_cached
 
         cache: dict = {}
         calls = {"n": 0}
@@ -623,7 +624,7 @@ class TestResultCache:
         assert len(cache) == 1
 
     def test_disabled_size_zero_always_recomputes(self, articles) -> None:
-        from backend.search_api.result_cache import run_cached
+        from search.services.result_cache import run_cached
 
         cache: dict = {}
         calls = {"n": 0}
@@ -638,7 +639,7 @@ class TestResultCache:
         assert cache == {}
 
     def test_distinct_queries_get_distinct_entries(self, articles) -> None:
-        from backend.search_api.result_cache import run_cached
+        from search.services.result_cache import run_cached
 
         cache: dict = {}
         calls = {"n": 0}
@@ -652,7 +653,7 @@ class TestResultCache:
         assert calls["n"] == 2 and len(cache) == 2
 
     def test_lru_eviction_drops_oldest(self, articles) -> None:
-        from backend.search_api.result_cache import run_cached
+        from search.services.result_cache import run_cached
 
         cache: dict = {}
         for i in range(5):
@@ -660,7 +661,7 @@ class TestResultCache:
         assert len(cache) == 3  # capped at max_size, oldest evicted
 
     def test_query_hash_covers_filters_and_image(self) -> None:
-        from backend.search_api.result_cache import query_hash
+        from search.services.result_cache import query_hash
 
         spec = self._spec(q="a")
         assert query_hash(spec, {"lang": "en"}, None) != query_hash(spec, {"lang": "sv"}, None)
@@ -670,7 +671,7 @@ class TestResultCache:
         assert query_hash(spec, {"a": "1", "b": "2"}, None) == query_hash(spec, {"b": "2", "a": "1"}, None)
 
     def test_version_signature_covers_every_search_table(self, articles) -> None:
-        from backend.search_api.result_cache import version_signature
+        from search.services.result_cache import version_signature
 
         sig = version_signature(articles)
         # articles reads paras (row + fts) and shots (visual/scene) — both versioned.
@@ -679,7 +680,7 @@ class TestResultCache:
     def test_a_version_change_invalidates(self, articles, monkeypatch) -> None:
         # A table write bumps the signature → the key changes → recompute. Driven
         # here by faking the signature so the shared corpus stays untouched.
-        import backend.search_api.result_cache as rc
+        import search.services.result_cache as rc
 
         cache: dict = {}
         calls = {"n": 0}
@@ -713,7 +714,7 @@ class TestEnsureClients:
         raise RuntimeError("server down")
 
     def test_cached_embedder_short_circuits(self, articles_state, monkeypatch) -> None:
-        import backend.search_api.encoders.embedding as embedding_mod
+        import search.services.encoders.embedding as embedding_mod
 
         sentinel = object()
         articles_state.embedder = sentinel
@@ -722,7 +723,7 @@ class TestEnsureClients:
         assert clients.ensure_embedder(articles_state) is sentinel
 
     def test_embedder_gets_url_and_descriptor_dim(self, articles_state, monkeypatch) -> None:
-        import backend.search_api.encoders.embedding as embedding_mod
+        import search.services.encoders.embedding as embedding_mod
 
         class Recorder:
             def __init__(self, embed_url: str, *, expected_dim: int) -> None:
@@ -736,7 +737,7 @@ class TestEnsureClients:
         assert articles_state.embedder is made  # written back for reuse
 
     def test_no_arg_fake_skips_dim_resolution(self, monkeypatch) -> None:
-        import backend.search_api.encoders.embedding as embedding_mod
+        import search.services.encoders.embedding as embedding_mod
 
         # A registry-less state: resolving the dim would fail, but a fake whose
         # signature takes no kwargs must never trigger it.
@@ -746,7 +747,7 @@ class TestEnsureClients:
         assert clients.ensure_embedder(state) is made
 
     def test_embedder_failure_maps_to_503(self, articles_state, monkeypatch) -> None:
-        import backend.search_api.encoders.embedding as embedding_mod
+        import search.services.encoders.embedding as embedding_mod
 
         monkeypatch.setattr(embedding_mod, "VLLMEmbeddingClient", self._boom)
         with pytest.raises(ServiceUnavailableError) as exc:
@@ -754,7 +755,7 @@ class TestEnsureClients:
         assert exc.value.status_code == 503
 
     def test_reranker_gets_url_and_caches(self, articles_state, monkeypatch) -> None:
-        import backend.search_api.encoders.reranker as reranker_mod
+        import search.services.encoders.reranker as reranker_mod
 
         class Recorder:
             def __init__(self, rerank_url: str) -> None:
@@ -766,7 +767,7 @@ class TestEnsureClients:
         assert articles_state.reranker is made
 
     def test_reranker_failure_maps_to_503(self, articles_state, monkeypatch) -> None:
-        import backend.search_api.encoders.reranker as reranker_mod
+        import search.services.encoders.reranker as reranker_mod
 
         monkeypatch.setattr(reranker_mod, "VLLMReranker", self._boom)
         with pytest.raises(ServiceUnavailableError) as exc:
@@ -779,7 +780,7 @@ class TestEnsureClients:
 
 class TestVendoredEncoders:
     def test_l2_normalize_validates_expected_dim(self) -> None:
-        from backend.search_api.encoders.image import l2_normalize
+        from search.services.encoders.image import l2_normalize
 
         good = l2_normalize(np.ones((2, DIM), dtype=np.float32), expected_dim=DIM)
         assert good.shape == (2, DIM)
@@ -791,8 +792,9 @@ class TestVendoredEncoders:
         import base64
         import io
 
-        from backend.search_api.encoders.image import _IMAGE_SIDE, image_to_data_url
         from PIL import Image
+
+        from search.services.encoders.image import _IMAGE_SIDE, image_to_data_url
 
         buf = io.BytesIO()
         Image.new("RGB", (640, 360), (200, 30, 30)).save(buf, format="JPEG")
@@ -802,13 +804,13 @@ class TestVendoredEncoders:
         assert decoded.size == (_IMAGE_SIDE, _IMAGE_SIDE)
 
     def test_embedding_client_rejects_nonpositive_dim(self) -> None:
-        from backend.search_api.encoders.embedding import VLLMEmbeddingClient
+        from search.services.encoders.embedding import VLLMEmbeddingClient
 
         with pytest.raises(ValueError):
             VLLMEmbeddingClient("http://127.0.0.1:1", expected_dim=0)
 
     def test_embedding_client_empty_input_shapes_by_expected_dim(self) -> None:
-        from backend.search_api.encoders.embedding import VLLMEmbeddingClient
+        from search.services.encoders.embedding import VLLMEmbeddingClient
 
         client = VLLMEmbeddingClient("http://127.0.0.1:1", expected_dim=DIM)
         assert client.embed_text([]).shape == (0, DIM)

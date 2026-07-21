@@ -19,7 +19,7 @@ import pyarrow as pa
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root → `backend` importable
 
-from backend.media_api.annotations.schema import EMPTY_SCHEMA
+from annotator.annotations.schema import EMPTY_SCHEMA
 
 SCHEMA = pa.schema(
     [

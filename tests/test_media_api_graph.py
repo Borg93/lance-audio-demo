@@ -1,7 +1,7 @@
 """Knowledge-graph endpoints (media_api port) over a synthetic ``kg_*`` graph.
 
 Port of ``tests/test_backend_graph.py`` to the descriptor-driven
-``backend.media_api.graph`` router. Two layers:
+``viewer.api.v1.endpoints.graph`` router. Two layers:
 
 - ``test_enforce_limit_*`` unit-test the pure ``_enforce_limit`` helper — the
   regression guard for the LIMIT-cap bypass.
@@ -21,13 +21,14 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from backend.core.config import Settings
-from backend.core.handlers import register_handlers
-from backend.media_api import graph
-from backend.media_api.graph import _enforce_limit
-from backend.state import AppState
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from common.core.config import Settings
+from common.core.handlers import register_handlers
+from common.state import AppState
+from viewer.api.v1.endpoints import graph
+from viewer.api.v1.endpoints.graph import _enforce_limit
 
 # A 4-entity star: Sverige is mentioned in every chunk, so it co-occurs with
 # everyone — enough structure to exercise MATCH / MENTIONS / RELATIONSHIP.

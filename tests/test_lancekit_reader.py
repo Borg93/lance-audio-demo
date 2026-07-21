@@ -18,8 +18,9 @@ from typing import TYPE_CHECKING
 import lance
 import pyarrow as pa
 import pytest
-from backend.core.config import Settings
-from backend.lancekit.reader import (
+
+from common.core.config import Settings
+from common.lancekit.reader import (
     CatalogTableReader,
     LanceTableReader,
     LocalCatalogTransport,

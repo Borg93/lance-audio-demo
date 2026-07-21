@@ -75,11 +75,29 @@ def cmd_serve(
     host: Annotated[str | None, typer.Option("--host")] = None,
     port: Annotated[int | None, typer.Option("--port")] = None,
 ) -> None:
-    """Launch the API-only FastAPI backend against the Lance DB.
+    """Launch the three lance-media services (viewer/search/annotator) against the DB.
 
-    The Bun frontend in ./frontend/ proxies /api/* to this server.
+    The Bun frontend proxies /api/* per path: annotations/assist/jobs -> annotator,
+    search -> search, everything else -> viewer. `--port` overrides the VIEWER port
+    only (the other two keep their own *_PORT env knobs).
     """
-    from backend import run
+    import os
+    import subprocess
+    import sys
 
     cfg: CliContext = ctx.obj
-    run(db_path=str(cfg.db), host=host, port=port)
+    env = {**os.environ, "MEDIA_DB": str(cfg.db)}
+    if host:
+        env["MEDIA_HOST"] = host
+    if port:
+        env["VIEWER_PORT"] = str(port)
+    procs = [
+        subprocess.Popen([sys.executable, "-c", f"from {svc}.main import run; run()"], env=env)
+        for svc in ("viewer", "search", "annotator")
+    ]
+    try:
+        for p in procs:
+            p.wait()
+    except KeyboardInterrupt:
+        for p in procs:
+            p.terminate()
