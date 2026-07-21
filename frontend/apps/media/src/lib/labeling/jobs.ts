@@ -22,6 +22,9 @@ export interface BatchJob {
   scope: ChunkSelection;
   prompt?: string;
   dataset?: string;
+  /** PROPAGATE (INSID3 / embed-propagate): the few-shot reference — annotation ids of the
+   *  exemplar masks the deriver propagates over `scope` ("1–few exemplars → apply to all"). */
+  exemplars?: string[];
 }
 
 function scopePayload(s: ChunkSelection): { level: string; keys: string[]; where: string | null } {
@@ -41,6 +44,7 @@ export async function submitBatchJob(job: BatchJob): Promise<JobResult> {
       scope: scopePayload(job.scope),
       prompt: job.prompt ?? null,
       dataset: job.dataset ?? null,
+      exemplars: job.exemplars ?? [],
     }),
   });
   if (!res.ok) throw new Error(`job submit failed (HTTP ${res.status})`);

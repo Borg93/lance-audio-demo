@@ -469,6 +469,29 @@ export class AnnotatorController {
     this.assistProducer = producer;
   }
 
+  /** Map exemplar row INDICES → stable annotation ids (the few-shot reference an INSID3
+   *  propagate deriver fetches masks/DINOv3 features by). */
+  private _exemplarIds(indices: number[] | undefined): string[] {
+    const t = this.table;
+    if (!t || !indices?.length) return [];
+    return indices.map((i) => this._raw(t, "id", i)).filter((id): id is string => !!id);
+  }
+
+  /** INSID3 few-shot propagate: take the picked annotations as EXEMPLARS and propagate
+   *  their masks over a chunk-level target selection — a batch deriver over the DINOv3
+   *  space ("1–few exemplars → apply to all from small data"). Flows through apply()/the
+   *  jobs seam like any batch op. */
+  propagate(target: Selection, exemplarIndices?: number[]): LabelOutcome {
+    const picked = exemplarIndices ?? [...this.selectedSet];
+    return this.apply({
+      target,
+      producer: "insid3",
+      op: "propagate",
+      execution: "batch",
+      payload: { exemplars: picked },
+    });
+  }
+
   /** Queue a new row for Save AND render it optimistically — append AT THE END
    *  (index = numRows, so the index-keyed overlay/selection stay valid), re-render the
    *  WebGPU canvas, re-apply pending field patches (sync re-materializes caches).
@@ -669,6 +692,9 @@ export class AnnotatorController {
           op: op.op,
           scope: op.target,
           prompt: op.payload.prompt,
+          // PROPAGATE (INSID3): the few-shot reference exemplars are annotation INDICES in
+          // the open unit — resolve to stable ids the deriver can fetch masks/features by.
+          exemplars: this._exemplarIds(op.payload.exemplars),
         }).catch(() => {}); // fire-and-forget; the read-plane trigger surfaces errors
       }
       return { status: "queued", job: `${spec.source}:${op.op}`, note: "batch deriver enqueued" };

@@ -14,11 +14,13 @@ def _req(
     producer: str = "grounding-dino",
     op: str = "predict",
     scope: JobScope | None = None,
+    exemplars: list[str] | None = None,
 ) -> JobRequest:
     return JobRequest(
         producer=producer,
         op=op,
         scope=scope or JobScope(level="chunks", keys=["d/0/1", "d/0/2"]),
+        exemplars=exemplars or [],
     )
 
 
@@ -33,6 +35,16 @@ def test_job_id_varies_with_producer_op_and_scope() -> None:
     assert _job_id(_req(producer="insid3")) != base
     assert _job_id(_req(op="propagate")) != base
     assert _job_id(_req(scope=JobScope(level="corpus"))) != base
+
+
+def test_insid3_exemplars_are_part_of_the_job_identity() -> None:
+    # INSID3 propagate: a DIFFERENT few-shot reference is a DIFFERENT job (so re-running
+    # with new exemplars isn't deduped to the old one); order-independent.
+    base = _job_id(_req(producer="insid3", op="propagate"))
+    with_ex = _job_id(_req(producer="insid3", op="propagate", exemplars=["a1", "a2"]))
+    assert with_ex != base
+    # same exemplars, different order → same id (sorted)
+    assert with_ex == _job_id(_req(producer="insid3", op="propagate", exemplars=["a2", "a1"]))
 
 
 def test_scope_size_counts_chunks_and_flags_scope_corpus() -> None:

@@ -46,6 +46,11 @@ class JobRequest(BaseModel):
     scope: JobScope
     dataset: str | None = None
     prompt: str | None = None
+    # PROPAGATE (INSID3 / embed-propagate): the few-shot REFERENCE — annotation ids of the
+    # exemplar masks. The deriver reads their masks + DINOv3 features and propagates them
+    # over `scope`. Empty for predict/judge. This is the seam that carries INSID3's
+    # "1–few exemplars → apply to all from small data" through to the lance-ns deriver.
+    exemplars: list[str] = Field(default_factory=list)
 
 
 class JobResult(BaseModel):
@@ -60,9 +65,14 @@ def _scope_size(scope: JobScope) -> int:
 
 
 def _job_id(body: JobRequest) -> str:
-    """Deterministic id from the request — a re-submit of the same op+scope is idempotent
-    (no wall-clock / randomness, so runs are reproducible)."""
-    basis = f"{body.producer}:{body.op}:{body.scope.level}:{_scope_size(body.scope)}:{body.dataset}"
+    """Deterministic id from the request — a re-submit of the same op+scope+exemplars is
+    idempotent (no wall-clock / randomness, so runs are reproducible). Exemplars are part
+    of the identity: propagating a DIFFERENT few-shot reference is a different job."""
+    exemplars = ",".join(sorted(body.exemplars))
+    basis = (
+        f"{body.producer}:{body.op}:{body.scope.level}:{_scope_size(body.scope)}"
+        f":{body.dataset}:{exemplars}"
+    )
     return "job-" + hashlib.sha1(basis.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
@@ -70,7 +80,10 @@ def _job_id(body: JobRequest) -> str:
 def apply(state: StateDep, body: JobRequest) -> JobResult:
     """Submit a batch labeling deriver over a read-plane selection."""
     n = _scope_size(body.scope)
-    logger.info("job apply %s:%s over %s (%s items)", body.producer, body.op, body.scope.level, n)
+    logger.info(
+        "job apply %s:%s over %s (%s items, %d exemplars)",
+        body.producer, body.op, body.scope.level, n, len(body.exemplars),
+    )
     url = state.settings.jobs_url
     if url:
         return _remote(state, url, body)
