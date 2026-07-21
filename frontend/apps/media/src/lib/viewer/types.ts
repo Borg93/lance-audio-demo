@@ -41,42 +41,8 @@ export interface ViewerProps {
   controller?: import("./annotator.svelte").AnnotatorController;
 }
 
-/** Spatial geometry — image + video-frame. Mirrors the engine's shape model
- *  (frontend/src/lib/engine/schema.ts): bbox, oriented box, polygon, HTR baseline,
- *  line, point, and raster MASK. */
-export interface SpatialGeom {
-  shape_type: "rectangle" | "rotation" | "polygon" | "baseline" | "line" | "point" | "mask";
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  rotation?: number;
-  /** Flat `[x0,y0,x1,y1,...]`. */
-  polygon?: number[];
-  /** Base64 PNG (data URL) for raster brush masks. */
-  mask?: string;
-}
-
-/** Temporal facet — audio/video segments + a shape pinned to a video moment.
- *  OPTIONAL: spatial-only rows (documents/HTR) omit it entirely, so ONE annotation
- *  model spans all modalities without a fork. */
-export interface TemporalFacet {
-  /** Segment start/end, seconds (audio + video timeline). */
-  t_start?: number;
-  t_end?: number;
-  /** A spatial shape pinned to a specific video frame. */
-  frame_idx?: number;
-}
-
-/** One annotation across ALL modalities — spatial facet + optional temporal facet
- *  + shared attributes. VIDEO = spatial (mask/bbox/polygon over a frame) AND temporal
- *  (frame_idx/t); AUDIO = temporal only; IMAGE = spatial only. Same table, same
- *  service — the geometry present says which modality it belongs to. */
-export type Annotation = Partial<SpatialGeom> &
-  TemporalFacet & {
-    id: string;
-    label?: string;
-    status?: string;
-    group_id?: string;
-    text?: string;
-  };
+// NOTE: aspirational SpatialGeom/TemporalFacet/Annotation model types were removed
+// 2026-07-21 (never referenced) — the shapes actually flowing through the system are
+// the controller's AnnoRow/InsertRow over the mode-blind annotations table; the
+// "one model spans all modalities" idea lives in the SCHEMA (t_start/t_end columns
+// beside the spatial ones), not in a parallel TS type.

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -35,14 +35,14 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 class JobScope(BaseModel):
     """The chunk-level target set — mirrors the frontend ChunkSelection."""
 
-    level: str  # "chunks" | "scope" | "corpus"
+    level: Literal["chunks", "scope", "corpus"]
     keys: list[str] = Field(default_factory=list)  # level=chunks: descriptor hitKeys
     where: str | None = None  # level=scope: a SQL WHERE (scope.ts ScopeClause)
 
 
 class JobRequest(BaseModel):
     producer: str  # grounding-dino | insid3 | vlm-judge | embed-propagate | …
-    op: str  # predict | propagate | judge
+    op: Literal["predict", "propagate", "judge"]
     scope: JobScope
     dataset: str | None = None
     prompt: str | None = None
@@ -66,13 +66,13 @@ def _scope_size(scope: JobScope) -> int:
 
 def _job_id(body: JobRequest) -> str:
     """Deterministic id from the request — a re-submit of the same op+scope+exemplars is
-    idempotent (no wall-clock / randomness, so runs are reproducible). Exemplars are part
-    of the identity: propagating a DIFFERENT few-shot reference is a different job."""
+    idempotent (no wall-clock / randomness, so runs are reproducible). The scope's actual
+    CONTENT is part of the identity (sorted keys / the WHERE predicate — a same-size but
+    different selection is a different job), as are the exemplars (a different few-shot
+    reference is a different propagate)."""
+    scope = f"{body.scope.level}:{','.join(sorted(body.scope.keys))}:{body.scope.where or ''}"
     exemplars = ",".join(sorted(body.exemplars))
-    basis = (
-        f"{body.producer}:{body.op}:{body.scope.level}:{_scope_size(body.scope)}"
-        f":{body.dataset}:{exemplars}"
-    )
+    basis = f"{body.producer}:{body.op}:{scope}:{body.dataset}:{exemplars}"
     return "job-" + hashlib.sha1(basis.encode(), usedforsecurity=False).hexdigest()[:12]
 
 

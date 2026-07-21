@@ -13,7 +13,7 @@
   import ZoomControls from './ZoomControls.svelte';
   import PageNav from './PageNav.svelte';
   import AiAssistBar from './AiAssistBar.svelte';
-  import type { Tool } from '$lib/engine';
+  import { TOOL_KEYS, isCvTool } from '../tool-defs';
 
   let { unit }: { unit: MediaUnit } = $props();
 
@@ -37,18 +37,6 @@
     if (reviewSelection.total > 0) reviewSelection.go(i);
   }
 
-  const TOOL_KEYS: Record<string, Tool> = {
-    '1': 'select',
-    '2': 'pan',
-    '3': 'rect',
-    '4': 'polygon',
-    '5': 'point',
-    '6': 'line',
-    '7': 'lasso',
-    '8': 'pencil',
-    '9': 'magnetic',
-    b: 'brush',
-  };
   function onKeydown(e: KeyboardEvent): void {
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
@@ -72,7 +60,7 @@
       // Drawing hotkeys need a live spatial engine (controller.ctx) — on a temporal
       // (audio) unit they'd arm a phantom tool with no canvas behind it, and the
       // forwarding below would then swallow the review hotkeys into a no-op.
-      const cvTool = tool === 'magnetic';
+      const cvTool = isCvTool(tool);
       const spatialTool = tool !== 'select' && tool !== 'pan';
       if (
         (controller.canDraw || !spatialTool) &&

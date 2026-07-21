@@ -7,7 +7,7 @@
  * the read-plane trigger and the annotator's batch `apply()` route through here, so
  * there's ONE submit path. See labeling/types.ts + docs/ACTIVE_LABELING.md.
  */
-import type { ChunkSelection } from "./types";
+import type { ChunkSelection, Op } from "./types";
 
 export interface JobResult {
   job_id: string;
@@ -18,7 +18,7 @@ export interface JobResult {
 export interface BatchJob {
   /** Producer registry key (grounding-dino | insid3 | vlm-judge | embed-propagate | …). */
   producer: string;
-  op: string; // predict | propagate | judge
+  op: Op;
   scope: ChunkSelection;
   prompt?: string;
   dataset?: string;

@@ -31,8 +31,11 @@ export * from "./tools/BrushTool.js";
 export * from "./editors/RectEditor.js";
 export * from "./editors/PolygonEditor.js";
 
-// ── Framework-agnostic state stores (plain TS + observer; Svelte binding adapts them) ──
-export * from "./store/AnnotationStore.js";
+// ── Framework-agnostic state stores + Arrow batch construction ──
+// NOTE: a 750-line AnnotationStore + transport seam (a parallel local-first overlay the
+// runes controller never adopted) was removed 2026-07-21 — the controller IS that layer.
+// buildBatchTable (its one used export) lives on in store/batch.ts.
+export * from "./store/batch.js";
 export * from "./store/LayerStore.js";
 
 // ── Temporal surface (audio waveform — the one Canvas2D lane; video reuses ImagePlugin) ──

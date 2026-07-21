@@ -2,29 +2,10 @@
   // Left tool rail — the primary command surface. Fully controlled: reads/writes
   // the AnnotatorController facade, never the engine directly. (Ported from
   // ra-anno Toolbar.svelte, trimmed to functional controls for our engine.)
-  import {
-    MousePointer2,
-    Hand,
-    Square,
-    Pentagon,
-    Crosshair,
-    Minus,
-    Paintbrush,
-    Lasso,
-    Eye,
-    Pencil,
-    PenLine,
-    Magnet,
-    Trash2,
-    Spline,
-    Eraser,
-    Undo2,
-    Redo2,
-    Save,
-  } from 'lucide-svelte';
+  import { Eye, Pencil, Trash2, Spline, Eraser, Undo2, Redo2, Save } from 'lucide-svelte';
   import { Button } from '$lib/components/ui';
   import { cn } from '$lib/utils';
-  import type { Tool } from '$lib/engine';
+  import { TOOL_DEFS } from '../tool-defs';
   import type { AnnotatorController } from '../annotator.svelte';
 
   // `spatial` = this unit has a canvas to draw ON (image / video frame). Audio has no
@@ -33,31 +14,9 @@
   let { controller, spatial = true }: { controller: AnnotatorController; spatial?: boolean } =
     $props();
 
-  type ToolDef = {
-    tool: Tool;
-    icon: typeof MousePointer2;
-    label: string;
-    key: string;
-    drawing: boolean;
-    /** Needs the OpenCV still-image pipeline (unavailable over video frames). */
-    cv?: boolean;
-  };
-  const TOOLS: ToolDef[] = [
-    { tool: 'select', icon: MousePointer2, label: 'Select', key: '1', drawing: false },
-    { tool: 'pan', icon: Hand, label: 'Pan', key: '2', drawing: false },
-    { tool: 'rect', icon: Square, label: 'Rectangle', key: '3', drawing: true },
-    { tool: 'polygon', icon: Pentagon, label: 'Polygon', key: '4', drawing: true },
-    { tool: 'point', icon: Crosshair, label: 'Point', key: '5', drawing: true },
-    { tool: 'line', icon: Minus, label: 'Line', key: '6', drawing: true },
-    { tool: 'lasso', icon: Lasso, label: 'Lasso (select)', key: '7', drawing: true },
-    { tool: 'brush', icon: Paintbrush, label: 'Brush', key: 'B', drawing: true },
-    { tool: 'pencil', icon: PenLine, label: 'Pencil (freehand)', key: '8', drawing: true },
-    { tool: 'magnetic', icon: Magnet, label: 'Magnetic (corner-snap)', key: '9', drawing: true, cv: true },
-  ];
-
   const visible = $derived(
     spatial
-      ? TOOLS.filter((t) => (!t.drawing || controller.canDraw) && (!t.cv || controller.cvCapable))
+      ? TOOL_DEFS.filter((t) => (!t.drawing || controller.canDraw) && (!t.cv || controller.cvCapable))
       : [],
   );
 </script>

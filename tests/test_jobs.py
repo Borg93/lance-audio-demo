@@ -7,12 +7,14 @@ here — these pin the enqueue seam (id determinism, status, scope sizing).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from backend.media_api.jobs import JobRequest, JobScope, _job_id, _scope_size
 
 
 def _req(
     producer: str = "grounding-dino",
-    op: str = "predict",
+    op: Literal["predict", "propagate", "judge"] = "predict",
     scope: JobScope | None = None,
     exemplars: list[str] | None = None,
 ) -> JobRequest:
@@ -35,6 +37,20 @@ def test_job_id_varies_with_producer_op_and_scope() -> None:
     assert _job_id(_req(producer="insid3")) != base
     assert _job_id(_req(op="propagate")) != base
     assert _job_id(_req(scope=JobScope(level="corpus"))) != base
+
+
+def test_job_id_varies_with_scope_content_not_just_size() -> None:
+    # A same-SIZE but different selection is a DIFFERENT job (keys are in the identity).
+    a = _job_id(_req(scope=JobScope(level="chunks", keys=["d/0/1", "d/0/2"])))
+    b = _job_id(_req(scope=JobScope(level="chunks", keys=["d/0/3", "d/0/4"])))
+    assert a != b
+    # order-independent: same selection, different order → same id
+    c = _job_id(_req(scope=JobScope(level="chunks", keys=["d/0/2", "d/0/1"])))
+    assert a == c
+    # scope predicates differ → different job
+    w1 = _job_id(_req(scope=JobScope(level="scope", where="doc_id = 'x'")))
+    w2 = _job_id(_req(scope=JobScope(level="scope", where="doc_id = 'y'")))
+    assert w1 != w2
 
 
 def test_insid3_exemplars_are_part_of_the_job_identity() -> None:
