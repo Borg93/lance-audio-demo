@@ -8,7 +8,7 @@ slight *under*-estimate (so planned sample windows stay inside the file) and the
 looping forever.
 
 The only collaborator is ``read_audio_segment`` (a real ffmpeg fast-seek). We
-patch it AT THE SEAM -- ``rmedia.modalities.av.asr.detect_language.read_audio_segment``, the
+patch it AT THE SEAM -- ``ratch.modalities.av.asr.detect_language.read_audio_segment``, the
 name the module actually calls (it does ``from easytranscriber.audio import
 read_audio_segment`` at module top) -- with a pure fake that simulates a file of
 a known true duration: a read at ``start_sec`` returns audio iff
@@ -28,8 +28,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import rmedia.modalities.av.asr.detect_language as detect_language
-from rmedia.modalities.av.asr.detect_language import _probe_duration_s
+import ratch.modalities.av.asr.detect_language as detect_language
+from ratch.modalities.av.asr.detect_language import _probe_duration_s
 
 # Stand-ins for what real ffmpeg fast-seek hands back: a tiny populated buffer
 # (audio present, ``.size > 0``) vs an empty buffer (past EOF, ``.size == 0``).

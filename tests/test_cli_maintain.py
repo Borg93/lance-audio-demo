@@ -1,4 +1,4 @@
-"""``rmedia maintain`` + ``rmedia tag`` — version GC with milestone exemption.
+"""``ratch maintain`` + ``ratch tag`` — version GC with milestone exemption.
 
 The annotations table commits versions per Save and nothing else prunes
 (docs/LANCEDB_SDK_AUDIT.md probe 4): these tests pin the adopted contract —
@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 
 from annotator.annotations.versions import checkout
 from common.core.exceptions import NotFoundError
-from rmedia.cli._app import app
+from ratch.cli._app import app
 
 runner = CliRunner()
 

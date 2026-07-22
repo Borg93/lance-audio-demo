@@ -1,4 +1,4 @@
-# Studio — merge plan (ranymizer · raudio · multimodal-webgpu-demo → one desktop app)
+# Studio — merge plan (ranymizer · ratch · multimodal-webgpu-demo → one desktop app)
 
 > This is the **why and how** for folding three independent SvelteKit SPAs into a single
 > Tauri 2 desktop application called **Studio**. It is a *planning* document — architecture,
@@ -8,7 +8,7 @@
 >
 > Status of inputs at time of writing (2026-05-29):
 > - **ranymizer** source available at `/tmp/ranymizer-ref` — the structural + styling template.
-> - **raudio** (this repo) source available — the server-backed Search sandbox.
+> - **ratch** (this repo) source available — the server-backed Search sandbox.
 > - **multimodal-webgpu-demo** — **only a static build** is on disk (`/home/blackwell/Desktop/multimodal-webgpu-demo`).
 >   Its source has **not** arrived. Everything about its internals is *inferred* from the build
 >   plus the sibling proxy at `/home/blackwell/Desktop/lance-audio/demo`. Claims about it are
@@ -40,7 +40,7 @@ flowchart TB
     end
 
     FRAME --> SB1["Anonymizer sandbox<br/>(ranymizer — local | mock | server)"]
-    FRAME --> SB2["Search sandbox<br/>(raudio — server-backed, FTS may go offline)"]
+    FRAME --> SB2["Search sandbox<br/>(ratch — server-backed, FTS may go offline)"]
     FRAME --> SB3["Multimodal Lab sandbox<br/>(webgpu demo — on-device, WebGPU/WASM) [INFERRED]"]
 
     classDef shell fill:#1a1a1e,stroke:#818cf8,color:#e9e9ea;
@@ -61,7 +61,7 @@ flowchart TB
 - **Not** byte-for-byte parity between offline FTS and server Tantivy FTS. Offline FTS is an explicit
   *degraded mode* with a visible badge (see §5).
 - **Not** generalizing ranymizer's 2D redaction `Canvas.svelte` — only the *frame* around it is shared.
-- **Not** a face pipeline or new ML scope (per stored design preferences for raudio).
+- **Not** a face pipeline or new ML scope (per stored design preferences for ratch).
 - **Not** rewriting working pieces (api.ts, PlayerPane, the worker protocol) — they port forward.
 
 ---
@@ -71,17 +71,17 @@ flowchart TB
 | App | Path | Role in Studio | Stack today | What Studio reuses |
 |---|---|---|---|---|
 | **ranymizer** | `/tmp/ranymizer-ref` | **Shell template** + the **Anonymizer** sandbox | Tauri 2, Svelte 5, Tailwind 4, shadcn/bits-ui, @xyflow/svelte 1.5, transformers.js v4, valibot, biome | The whole frame: `Editor.svelte` skeleton, `PipelineSketch`/`PipelineInspector` + nodes, the **engine seam** (`engine/{index,types,local,gradio,mock,webgpu,worker}.ts`), `app.css` tokens (dark-first), Tauri config + CSP + capabilities, `state.svelte.ts` singleton pattern, `webgpu.ts` detect/resolve |
-| **raudio** (this repo) | `/home/blackwell/Desktop/lance-audio` | **Search** sandbox (server-backed) | SvelteKit 2, Svelte 5, Tailwind 4, shadcn/bits-ui ^2, zod; Python FastAPI + Lance + Tantivy FTS + vLLM Qwen3-VL | `api.ts` (zod-validated client), `ResizableSplit.svelte`, `PlayerPane` + `TranscriptHighlighter`, `search-bar.svelte` Tune popover, Hit/Doc cards + browse/search toggle, `feature-flags.svelte.ts`, `status-badge.svelte` + `/api/health`, the whole backend |
+| **ratch** (this repo) | `/home/blackwell/Desktop/lance-audio` | **Search** sandbox (server-backed) | SvelteKit 2, Svelte 5, Tailwind 4, shadcn/bits-ui ^2, zod; Python FastAPI + Lance + Tantivy FTS + vLLM Qwen3-VL | `api.ts` (zod-validated client), `ResizableSplit.svelte`, `PlayerPane` + `TranscriptHighlighter`, `search-bar.svelte` Tune popover, Hit/Doc cards + browse/search toggle, `feature-flags.svelte.ts`, `status-badge.svelte` + `/api/health`, the whole backend |
 | **multimodal-webgpu-demo** | `/home/blackwell/Desktop/multimodal-webgpu-demo` (build only) | **Multimodal Lab** sandbox (on-device) **[INFERRED]** | SvelteKit 2, Svelte 5, Tailwind 4, shadcn/bits-ui ^1.3, transformers.js v4, ONNX Runtime Web, layerchart | **[INFERRED via `lance-audio/demo`]** `worker.ts` Whisper pipeline + message protocol, `webgpu.ts` (identical to ranymizer's), `models.ts` registry, `audio-decoder.ts`/`audio-source.ts`, `AudioVisualizerChart.svelte`, `transcript.ts` exporters, batch-job UX |
 
 Key relationships worth stating plainly:
 - ranymizer's `engine/webgpu.ts` is **a verbatim copy** of the demo's `webgpu.ts` (its own comment
   says "from the demo"). This is the first thing to hoist into a shared lib.
-- raudio's backend already has the **offline/online seam baked in**: FTS works with *no GPU and no vLLM*;
+- ratch's backend already has the **offline/online seam baked in**: FTS works with *no GPU and no vLLM*;
   the first semantic/visual/hybrid/all call lazily connects to vLLM and returns a structured **503** if
   unreachable (never a 500). Studio inherits a clean degradation contract for free.
 - All three share **byte-identical design tokens**; only dark/light `:root` placement differs (verified:
-  ranymizer puts dark in `:root` + `.light` opt-in; raudio puts light in `:root` + `.dark` override).
+  ranymizer puts dark in `:root` + `.light` opt-in; ratch puts light in `:root` + `.dark` override).
 
 ---
 
@@ -154,11 +154,11 @@ maps onto its node animation just like ranymizer animates `ocr→gliner→done`.
 
 These three diverge across the apps and must be unified **before** merging or the design system fragments.
 
-| Concern | ranymizer | raudio | demo **[INFERRED]** | **Studio decision** |
+| Concern | ranymizer | ratch | demo **[INFERRED]** | **Studio decision** |
 |---|---|---|---|---|
-| Resize | `ResizeHandle.svelte` (single edge) + paneforge dep (unused) | `ResizableSplit.svelte` (two-pane, localStorage, pointer-capture) | sidebar collapse only | **paneforge** for sandbox sidebars (brief names it as the SIDEBAR idiom); keep raudio's `ResizableSplit` *only* inside the Search canvas (results↔player two-pane) since it is dependency-free and already tuned |
-| Validation | valibot (pipeline config) | zod (API boundary) | — | **zod** at the API/data boundary (raudio's `api.ts` is the load-bearing untrusted-input gate); valibot may remain internal to the Anonymizer config if cheaper to keep than to port |
-| Theme | manual `.dark`/`.light` toggle + `localStorage('ranymizer-theme')` | own `theme-toggle.svelte` flipping `.dark` | `mode-watcher` `defaultMode=system` | **one** mechanism in the shell. Carry raudio's hard-won lesson: theme reactivity must stay **local to the toggle component** (a store-based version failed in prod builds). Recommend the manual `.dark` toggle in the shell layout, persisted, defaulting dark |
+| Resize | `ResizeHandle.svelte` (single edge) + paneforge dep (unused) | `ResizableSplit.svelte` (two-pane, localStorage, pointer-capture) | sidebar collapse only | **paneforge** for sandbox sidebars (brief names it as the SIDEBAR idiom); keep ratch's `ResizableSplit` *only* inside the Search canvas (results↔player two-pane) since it is dependency-free and already tuned |
+| Validation | valibot (pipeline config) | zod (API boundary) | — | **zod** at the API/data boundary (ratch's `api.ts` is the load-bearing untrusted-input gate); valibot may remain internal to the Anonymizer config if cheaper to keep than to port |
+| Theme | manual `.dark`/`.light` toggle + `localStorage('ranymizer-theme')` | own `theme-toggle.svelte` flipping `.dark` | `mode-watcher` `defaultMode=system` | **one** mechanism in the shell. Carry ratch's hard-won lesson: theme reactivity must stay **local to the toggle component** (a store-based version failed in prod builds). Recommend the manual `.dark` toggle in the shell layout, persisted, defaulting dark |
 
 ---
 
@@ -186,7 +186,7 @@ registry** keyed by sandbox id.
 ### 4.2 The generic engine interface (`SandboxEngine`)
 
 Generalized from `engine/types.ts` (`AnonymizerEngine{name, local, meta(), analyze(file,{config,onProgress,onStage}), dispose()}`)
-and from raudio's implicit `RemoteSearchEngine` (the `api.ts` functions) + Python `EmbeddingClient` Protocol.
+and from ratch's implicit `RemoteSearchEngine` (the `api.ts` functions) + Python `EmbeddingClient` Protocol.
 
 | Member | Meaning | Notes |
 |---|---|---|
@@ -261,7 +261,7 @@ flowchart TB
     class REMOTE,GATE off;
 ```
 
-The shell drives this from raudio's existing pieces: `status-badge.svelte` + `/api/health` report
+The shell drives this from ratch's existing pieces: `status-badge.svelte` + `/api/health` report
 reachability and **which modes are enabled**; `feature-flags.svelte.ts` already suppresses 404 storms
 when a capability is absent — the exact pattern for "degrade gracefully when backend feature missing/offline".
 
@@ -286,7 +286,7 @@ semantic/visual/hybrid/rerank (they require vLLM). Do **not** market offline FTS
 
 ### 5.3 Packaged-app transport for the heavy backend
 
-raudio today is browser + a **Bun `/api/*` reverse proxy** (`frontend/server.ts`) that preserves HTTP
+ratch today is browser + a **Bun `/api/*` reverse proxy** (`frontend/server.ts`) that preserves HTTP
 Range for media streaming. **In a packaged Tauri app there is no Bun proxy.** Two options (DECISION §9):
 
 | Option | How | Implications |
@@ -307,7 +307,7 @@ Rust side move in mostly as-is.
 ```text
 studio/
 ├─ package.json                     # Bun workspace root, one reconciled dependency set
-├─ biome.json                       # one linter (from ranymizer; raudio uses ESLint today — reconcile to one)
+├─ biome.json                       # one linter (from ranymizer; ratch uses ESLint today — reconcile to one)
 ├─ apps/
 │  └─ shell/                        # the Tauri + SvelteKit app (ex-ranymizer frontend)
 │     ├─ src/
@@ -316,7 +316,7 @@ studio/
 │     │  │  ├─ shell/               # navigator, SandboxFrame, registry
 │     │  │  └─ sandboxes/
 │     │  │     ├─ anonymizer/       # ex-ranymizer Editor body + engine + pipeline nodes
-│     │  │     ├─ search/           # ex-raudio +page body, PlayerPane, search-bar, api.ts
+│     │  │     ├─ search/           # ex-ratch +page body, PlayerPane, search-bar, api.ts
 │     │  │     └─ lab/              # ex-demo panels + worker [INFERRED — pending source]
 │     │  └─ app.css                 # single reconciled token file (re-exports the package)
 │     └─ src-tauri/                 # ex-ranymizer Tauri: tauri.conf.json, capabilities, lib.rs
@@ -327,21 +327,21 @@ studio/
 │  ├─ engine/                       # the generic SandboxEngine interface + mock helpers
 │  └─ audio/                        # audio-decoder.ts, audio-source.ts, transcript.ts [from demo proxy]
 └─ services/
-   └─ search-backend/               # ex-raudio backend/ + src/rmedia/ (FastAPI + Lance + vLLM client)
+   └─ search-backend/               # ex-ratch backend/ + src/ratch/ (FastAPI + Lance + vLLM client)
         (Python, uv, ruff, ty — unchanged; served remotely or as a sidecar per §5.3)
 ```
 
 **How the three fold in**
 - **ranymizer** → `apps/shell` (frame, router, Tauri base, CSP) **and** `apps/shell/.../sandboxes/anonymizer`.
-- **raudio frontend** → `apps/shell/.../sandboxes/search`; `api.ts` is its data layer verbatim. **raudio
-  backend + `src/rmedia`** → `services/search-backend` essentially unchanged. The Bun `server.ts` proxy
+- **ratch frontend** → `apps/shell/.../sandboxes/search`; `api.ts` is its data layer verbatim. **ratch
+  backend + `src/ratch`** → `services/search-backend` essentially unchanged. The Bun `server.ts` proxy
   role is replaced by Tauri transport (§5.3).
 - **multimodal-webgpu-demo** → `apps/shell/.../sandboxes/lab`, built against the **inferred** proxy shape;
   its worker co-located so Vite `worker.format='es'` + `optimizeDeps.exclude '@huggingface/transformers'`
   + `import.meta.url` resolution keep working. **Re-verify against real source.**
 
 **Dependency reconciliation is real work** (versions diverge): ranymizer is bleeding-edge (svelte 5.55,
-vite 8, ts 6, kit 2.60, bits-ui 2.18, xyflow 1.5), raudio lags (svelte 5.36, vite 7, ts 5.7, bits-ui 2.0),
+vite 8, ts 6, kit 2.60, bits-ui 2.18, xyflow 1.5), ratch lags (svelte 5.36, vite 7, ts 5.7, bits-ui 2.0),
 the demo lags most (svelte 5.0, vite 6, **bits-ui 1.3**, mode-watcher, layerchart next.58). **bits-ui 1.x→2.x
 is a breaking jump** — the demo's `Tabs`/`Select` usage must be ported. Pin one bits-ui + one tailwind-variants.
 
@@ -349,19 +349,19 @@ is a breaking jump** — the demo's `Tabs`/`Select` usage must be ported. Pin on
 
 ## 7. Design-system unification
 
-The good news (verified): ranymizer's `app.css` and raudio's `app.css` carry a **byte-identical token set**
+The good news (verified): ranymizer's `app.css` and ratch's `app.css` carry a **byte-identical token set**
 — dark indigo `#818cf8` / light `#4f46e5`, Inter/Lora/mono, `--radius 0.375rem`, surface/text/border
 scales, `@theme inline` binding tokens to shadcn names. Both files explicitly comment that the palette is
-"the design system shared with the sibling apps … so the three can merge into one UI cleanly." raudio is
+"the design system shared with the sibling apps … so the three can merge into one UI cleanly." ratch is
 already aligned to ranymizer's tokens/Button per stored memory.
 
 **The one structural difference (verified):** dark/light `:root` placement is **mirrored**.
 - ranymizer: dark in `:root`, `.light` opt-in (`:root.light`).
-- raudio: light in `:root`, `.dark` override (`:where(.dark)`), boots dark via `app.html`.
+- ratch: light in `:root`, `.dark` override (`:where(.dark)`), boots dark via `app.html`.
 
 **Decision:** adopt **one direction** — recommend ranymizer's **dark-in-`:root` + `.light` opt-in**, since
-the shell defaults dark and ranymizer is the template. raudio's CSS header already flags this as
-"reconcile at merge time." raudio also adds a `--highlight` (karaoke) token — keep it; it is additive and
+the shell defaults dark and ranymizer is the template. ratch's CSS header already flags this as
+"reconcile at merge time." ratch also adds a `--highlight` (karaoke) token — keep it; it is additive and
 sandbox-specific (Search/Lab playback).
 
 **What remains to fully share**
@@ -383,7 +383,7 @@ parts that already work. Each phase ships something runnable.
 flowchart LR
     P0["P0 — Shell skeleton + nav<br/>ranymizer Tauri base + router + registry + SandboxFrame;<br/>extract design-system + compute + engine packages;<br/>reconcile tokens/theme/resize/validation"]
     P1["P1 — Anonymizer sandbox<br/>port ranymizer Editor body into the frame;<br/>engine seam → runtime registry<br/>(flag dummy PII model)"]
-    P2["P2 — Search sandbox (remote)<br/>port raudio +page/PlayerPane/search-bar/api.ts;<br/>solve packaged-app transport (CSP/sidecar);<br/>health-gated modes; add xyflow Tune graph"]
+    P2["P2 — Search sandbox (remote)<br/>port ratch +page/PlayerPane/search-bar/api.ts;<br/>solve packaged-app transport (CSP/sidecar);<br/>health-gated modes; add xyflow Tune graph"]
     P3["P3 — Multimodal Lab sandbox<br/>port demo (against REAL source);<br/>hoist worker + webgpu + audio libs;<br/>WASM fallback in UI; pre-stage weights"]
     P4["P4 — Offline BM25/FTS<br/>degraded keyword mode + badge;<br/>choose Option A/B/C (§5.2)"]
 
@@ -394,7 +394,7 @@ flowchart LR
 |---|---|---|---|
 | **P0** | Shell + navigation that none of the apps has | App boots in Tauri, navigator switches between empty/placeholder sandboxes, one token file, one theme, paneforge frame | none — all in-hand |
 | **P1** | Anonymizer as first sandbox; prove the frame + runtime engine registry | ranymizer's flow runs inside the frame; engine selectable at runtime | P0; **dummy PII model flagged** (parity not real) |
-| **P2** | Search sandbox, server-backed | raudio search/browse/playback work in-WebView; health badge gates modes; Tune dials rendered as a pipeline graph | P0; **transport DECISION (§5.3)**; CSP widened; Range streaming validated in WebView |
+| **P2** | Search sandbox, server-backed | ratch search/browse/playback work in-WebView; health badge gates modes; Tune dials rendered as a pipeline graph | P0; **transport DECISION (§5.3)**; CSP widened; Range streaming validated in WebView |
 | **P3** | Multimodal Lab, on-device | Whisper transcription runs via WebGPU with WASM fallback in the UI; weights pre-staged | **real demo source** (currently absent); WebGPU-in-WebView verification; audio capture in Tauri |
 | **P4** | Offline keyword search | FTS + browse work offline behind an explicit degraded badge; semantic/visual/hybrid/rerank hard-disabled | P2; **offline-FTS DECISION (§5.2)** |
 
@@ -414,7 +414,7 @@ flowchart LR
 4. **Router shape (blocks P0).** Nested SvelteKit routes per sandbox vs single route + a switcher store.
    *Recommendation:* nested routes (clean deep-linking + lazy chunking), with the registry mapping id→route.
 5. **`:root` theme direction + theme mechanism (P0).** *Recommendation:* dark-in-`:root` + `.light` opt-in;
-   manual toggle kept **local to the component** (raudio's store-based version failed in prod).
+   manual toggle kept **local to the component** (ratch's store-based version failed in prod).
 
 **Known unknowns / risks:**
 - **The webgpu-demo source is not on disk** — only a static build. The `/search` multimodal route is a
@@ -450,7 +450,7 @@ flowchart LR
 | Navigation | net-new router + sandbox registry (nested routes) | none of the three has it; required for a multi-sandbox shell |
 | Frame primitive | `<SandboxFrame>` = header + paneforge sidebar + canvas + pipeline drawer | generalize `Editor.svelte`; slots filled per sandbox |
 | Engine | generic `SandboxEngine` (run/AbortSignal/stream), **runtime** per-sandbox registry | multi-sandbox + in-app backend switching |
-| Resize | paneforge for sidebars; raudio `ResizableSplit` only inside Search canvas | brief names paneforge; raudio split is tuned + dependency-free |
+| Resize | paneforge for sidebars; ratch `ResizableSplit` only inside Search canvas | brief names paneforge; ratch split is tuned + dependency-free |
 | Validation | zod at the data boundary | `api.ts` is the load-bearing untrusted-input gate |
 | Theme | dark-in-`:root` + `.light` opt-in; toggle local to component | matches template; avoids the prod-build store regression |
 | Search transport | remote FastAPI origin first; sidecar later if needed | vLLM is remote regardless; simplest packaging |

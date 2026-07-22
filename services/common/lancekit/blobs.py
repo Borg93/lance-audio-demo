@@ -2,7 +2,7 @@
 
 A blob-v2 column is identified by the ``lance.blob.v2`` Arrow extension type
 (registered when ``lance`` is imported), with the raw ``ARROW:extension:name``
-field-metadata fallback. Deliberately duplicated from ``rmedia.core.blobs``:
+field-metadata fallback. Deliberately duplicated from ``ratch.core.blobs``:
 the backend must not import the pipeline package, and this 30-line seam is the
 documented price of that independence.
 """

@@ -165,7 +165,7 @@ class WorkflowGraph {
   /** A result the user clicked — plays in the Inspector. */
   selectedHit = $state<Hit | null>(null);
 
-  /** The node whose intermediate state the Inspector shows (click a node). */
+  /** The node whose interatchte state the Inspector shows (click a node). */
   inspectedNodeId = $state<string | null>(null);
 
   /** Ids currently selected on the canvas (tracked via `onselectionchange`) —
@@ -558,7 +558,7 @@ class WorkflowGraph {
     this.selectedHit = null;
   }
 
-  /** Show a node's intermediate state (config + results) in the Inspector.
+  /** Show a node's interatchte state (config + results) in the Inspector.
    *  Clearing `selectedHit` lets a node click switch the panel away from a
    *  playing result. (Result-row clicks `stopPropagation`, so they never
    *  reach here and keep playing.) */

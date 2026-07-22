@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rmedia.modalities.av.voiceprint import (
+from ratch.modalities.av.voiceprint import (
     TurnSpan,
     clamped_sample_span,
     duration_sorted_batches,
@@ -24,7 +24,7 @@ from rmedia.modalities.av.voiceprint import (
     embed_turn_slices,
     load_wav_16k_mono,
 )
-from rmedia.model.schema import VOICE_EMBED_DIM
+from ratch.model.schema import VOICE_EMBED_DIM
 
 SR = 16_000
 

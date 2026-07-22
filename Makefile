@@ -1,4 +1,4 @@
-# ─── rmedia dev helpers ────────────────────────────────────────────────
+# ─── ratch dev helpers ────────────────────────────────────────────────
 # All paths are relative to the project root. Override on the CLI:
 #   make search Q='spring of hope'
 #   make demo AUDIO_ROOT=./examples
@@ -19,7 +19,7 @@ OUTPUT_ROOT     := ./output/$(LANGUAGE)
 ALIGNMENTS      := $(OUTPUT_ROOT)/alignments
 THUMBNAILS_DIR  ?= ./thumbnails
 METADATA_CSV    ?= ./video_batcher.csv
-HF_BUCKET       ?=                       # e.g. gborg/raudio-demo
+HF_BUCKET       ?=                       # e.g. gborg/ratch-demo
 GPU             ?= 2
 
 .PHONY: help check-deps bootstrap install lock \
@@ -82,7 +82,7 @@ MODEL     ?= KBLab/kb-whisper-large
 VAD       ?= pyannote
 DEVICE    ?= cuda
 transcribe:           ## Run easytranscriber → writes output/alignments/*.json.
-	uv run rmedia transcribe \
+	uv run ratch transcribe \
 		--audio-dir $(AUDIO_DIR) \
 		--language  $(LANGUAGE) \
 		--model     $(MODEL) \
@@ -90,19 +90,19 @@ transcribe:           ## Run easytranscriber → writes output/alignments/*.json
 		--device    $(DEVICE)
 
 detect-language:      ## Sort $(AUDIO_DIR)/*.{mp4,wav,…} into $(AUDIO_DIR)/<lang>/ subfolders.
-	uv run rmedia detect-language --audio-dir $(AUDIO_DIR) --device $(DEVICE)
+	uv run ratch detect-language --audio-dir $(AUDIO_DIR) --device $(DEVICE)
 
 # ─── Download from the Riksarkivet CSV (resumable, concurrent) ──────────────
 download:             ## Bulk-download videos listed in $(METADATA_CSV) → $(AUDIO_DIR).
-	uv run rmedia download --csv $(METADATA_CSV) --output-dir $(AUDIO_DIR) --concurrency 6
+	uv run ratch download --csv $(METADATA_CSV) --output-dir $(AUDIO_DIR) --concurrency 6
 
 # ─── Thumbnails (ffmpeg frame extraction) ───────────────────────────────────
 thumbnail:            ## Render one JPEG per video under $(AUDIO_DIR) → $(THUMBNAILS_DIR).
-	uv run rmedia thumbnail --input-dir $(AUDIO_DIR) --output-dir $(THUMBNAILS_DIR)
+	uv run ratch thumbnail --input-dir $(AUDIO_DIR) --output-dir $(THUMBNAILS_DIR)
 
 # ─── Ingest ─────────────────────────────────────────────────────────────────
 ingest:               ## Ingest $(SAMPLE) into $(DB) (append).
-	uv run rmedia --db $(DB) --table $(TABLE) ingest $(SAMPLE)
+	uv run ratch --db $(DB) --table $(TABLE) ingest $(SAMPLE)
 
 reingest: clean-db ingest  ## Nuke the DB first, then ingest — safe to re-run.
 
@@ -112,18 +112,18 @@ reingest: clean-db ingest  ## Nuke the DB first, then ingest — safe to re-run.
 #   make ingest-with-media AUDIO_ROOT=./examples
 ingest-with-media:    ## Ingest $(SAMPLE) AND embed source media in the `documents` table.
 	@test -n "$(AUDIO_ROOT)" || (echo "Set AUDIO_ROOT=/path/to/media-dir"; exit 2)
-	uv run rmedia --db $(DB) --table $(TABLE) ingest --audio-root $(AUDIO_ROOT) $(SAMPLE)
+	uv run ratch --db $(DB) --table $(TABLE) ingest --audio-root $(AUDIO_ROOT) $(SAMPLE)
 
 # ─── Full-corpus ingest (metadata CSV + thumbnails + Swedish FTS) ───────────
 # Every row's media_uri is set from --audio-root (→ file:///abs/path/...mp4)
 # by default. Override with MEDIA_BASE_URI for remote storage:
-#   make ingest-full MEDIA_BASE_URI=hf://buckets/you/raudio-videos/
+#   make ingest-full MEDIA_BASE_URI=hf://buckets/you/ratch-videos/
 #   make ingest-full MEDIA_BASE_URI=s3://bucket/videos/
 MEDIA_BASE_URI ?=
 ingest-full:          ## Ingest all $(ALIGNMENTS)/*.json with metadata + thumbnails + Swedish FTS.
 	@test -d "$(ALIGNMENTS)" || (echo "$(ALIGNMENTS) does not exist — run `make transcribe` first."; exit 2)
 	@test -f "$(METADATA_CSV)" || (echo "$(METADATA_CSV) not found"; exit 2)
-	uv run rmedia --db $(DB) --table $(TABLE) ingest \
+	uv run ratch --db $(DB) --table $(TABLE) ingest \
 		$(ALIGNMENTS)/*.json \
 		--metadata-csv $(METADATA_CSV) \
 		$(if $(wildcard $(THUMBNAILS_DIR)),--thumbnail-dir $(THUMBNAILS_DIR),) \
@@ -133,7 +133,7 @@ ingest-full:          ## Ingest all $(ALIGNMENTS)/*.json with metadata + thumbna
 # ─── Rebuild only the FTS index (no re-ingest) ──────────────────────────────
 FTS_LANGUAGE ?= Swedish
 reindex-fts:          ## Rebuild the FTS index with a different language/config (fast).
-	uv run rmedia --db $(DB) --table $(TABLE) reindex-fts --language $(FTS_LANGUAGE)
+	uv run ratch --db $(DB) --table $(TABLE) reindex-fts --language $(FTS_LANGUAGE)
 
 # ─── Full pipeline on a single GPU ──────────────────────────────────────────
 # Steps: transcribe → thumbnail → ingest-full. Assumes $(AUDIO_DIR) already
@@ -141,7 +141,7 @@ reindex-fts:          ## Rebuild the FTS index with a different language/config 
 # silero VAD for reproducibility — override to use pyannote.
 pipeline:             ## Transcribe + thumbnail + ingest for $(LANGUAGE) on GPU $(GPU).
 	@echo "── 1/3 transcribe ──────────────────────────────────────────────"
-	CUDA_VISIBLE_DEVICES=$(GPU) uv run rmedia transcribe \
+	CUDA_VISIBLE_DEVICES=$(GPU) uv run ratch transcribe \
 		--audio-dir $(AUDIO_DIR) --language $(LANGUAGE) --vad $(VAD) \
 		--output-root $(OUTPUT_ROOT)
 	@echo "── 2/3 thumbnails ──────────────────────────────────────────────"
@@ -167,7 +167,7 @@ pipeline-sharded: shards  ## Transcribe all $(SHARDS) shards in parallel (one GP
 	@echo "Launching $(SHARDS) transcribe processes (one per GPU)."
 	@echo "Watch progress with: tail -f $(OUTPUT_ROOT)/shard{0..$$(($(SHARDS)-1))}.log"
 	@for i in $$(seq 0 $$(($(SHARDS)-1))); do \
-		CUDA_VISIBLE_DEVICES=$$i nohup uv run rmedia transcribe \
+		CUDA_VISIBLE_DEVICES=$$i nohup uv run ratch transcribe \
 			--audio-dir $(AUDIO_DIR)/shard$$i --language $(LANGUAGE) --vad $(VAD) \
 			--output-root $(OUTPUT_ROOT) \
 			> $(OUTPUT_ROOT)/shard$$i.log 2>&1 & \
@@ -189,7 +189,7 @@ BACKEND_PORT ?= 8000
 FRONTEND_PORT ?= 5274
 
 backend:              ## Run all three lance-media services (viewer/search/annotator).
-	uv run rmedia --db $(DB) serve --host $(BACKEND_HOST)
+	uv run ratch --db $(DB) serve --host $(BACKEND_HOST)
 
 services-up:          ## Start viewer(:8101) + search(:8102) + annotator(:8103) detached.
 	@for svc in viewer search annotator; do \
@@ -245,7 +245,7 @@ EMBED_MEM_FRAC  ?= 0.45
 RERANK_MEM_FRAC ?= 0.45
 
 # Caption model — a generative VLM (Gemma 4) you ALREADY run locally on :8003.
-# rmedia is only a CLIENT of it: `rmedia feature caption` POSTs frames to this
+# ratch is only a CLIENT of it: `ratch feature caption` POSTs frames to this
 # URL. We do NOT start the server (no Make target spins one up) — point these at
 # wherever your Gemma serves. The client also honours MEDIA_CAPTION_URL/MODEL.
 CAPTION_URL      ?= http://127.0.0.1:8003
@@ -292,7 +292,7 @@ embed-server-docker:  ## Run vLLM embedding server in Docker (no driver pin).
 		--device=nvidia.com/gpu=$(EMBED_GPU) --ipc=host \
 		-p 8001:8001 \
 		-v $(HF_CACHE):/root/.cache/huggingface \
-		--name raudio-embed \
+		--name ratch-embed \
 		$(VLLM_IMAGE) \
 		--model Qwen/Qwen3-VL-Embedding-2B \
 		--runner pooling --port 8001 --enable-prefix-caching \
@@ -306,7 +306,7 @@ embed-server-docker:  ## Run vLLM embedding server in Docker (no driver pin).
 		# count for the 2B tower before trusting the image-embed path (INVESTIGATION.md).
 
 rerank-server-docker: ## Run vLLM reranker server in Docker (no driver pin).
-	# Reranker is text-only in rmedia (cross-encoder over query/doc strings),
+	# Reranker is text-only in ratch (cross-encoder over query/doc strings),
 	# so we disable image+video profiling — frees ~1 GB and skips the
 	# multimodal warmup that would otherwise size a deepstack buffer for
 	# inputs we never send.
@@ -314,8 +314,8 @@ rerank-server-docker: ## Run vLLM reranker server in Docker (no driver pin).
 		--device=nvidia.com/gpu=$(RERANK_GPU) --ipc=host \
 		-p 8002:8002 \
 		-v $(HF_CACHE):/root/.cache/huggingface \
-		-v $(PWD)/src/rmedia/retrieval/qwen3_vl_reranker.jinja:/templates/qwen3_vl_reranker.jinja:ro \
-		--name raudio-rerank \
+		-v $(PWD)/src/ratch/retrieval/qwen3_vl_reranker.jinja:/templates/qwen3_vl_reranker.jinja:ro \
+		--name ratch-rerank \
 		$(VLLM_IMAGE) \
 		--model Qwen/Qwen3-VL-Reranker-2B \
 		--runner pooling --port 8002 \
@@ -326,7 +326,7 @@ rerank-server-docker: ## Run vLLM reranker server in Docker (no driver pin).
 		--chat-template /templates/qwen3_vl_reranker.jinja
 
 vllm-stop:            ## Stop the Docker vLLM containers.
-	-docker stop raudio-embed raudio-rerank 2>/dev/null
+	-docker stop ratch-embed ratch-rerank 2>/dev/null
 
 # vLLM runs in a `uvx`-managed ephemeral env so its torch/torchaudio pins
 # don't fight our cu128 ones. First launch downloads vLLM into uv's tool
@@ -357,7 +357,7 @@ rerank-server:        ## Start vLLM Qwen3-VL-Reranker-2B (port 8002) on GPU $(RE
 		--max-model-len 4096 \
 		--limit-mm-per-prompt '{"image": 0, "video": 0}' \
 		--hf_overrides '{"architectures":["Qwen3VLForSequenceClassification"],"classifier_from_token":["no","yes"],"is_original_qwen3_reranker":true}' \
-		--chat-template ./src/rmedia/retrieval/qwen3_vl_reranker.jinja
+		--chat-template ./src/ratch/retrieval/qwen3_vl_reranker.jinja
 
 # Caption VLM — the live corpus was captioned by an external Gemma-4-31B on
 # :8003 (never started by this repo; no local weights). For local/baseline runs
@@ -379,32 +379,32 @@ caption-server:       ## Start a local caption VLM (port 8003) on GPU $(CAPTION_
 		--limit-mm-per-prompt '{"image": 1}'
 
 embed-chunks:         ## Embed chunks.text → text_embedding column + IVF_PQ index.
-	uv run --extra multimodal rmedia --db $(DB) feature text_embedding --url $(EMBED_URL)
+	uv run --extra multimodal ratch --db $(DB) feature text_embedding --url $(EMBED_URL)
 
 extract-chunk-frames: ## One JPEG per chunk.start into chunk_frames (Ray actor pool).
-	uv run rmedia --db $(DB) extract-chunk-frames --audio-root $(AUDIO_DIR)
+	uv run ratch --db $(DB) extract-chunk-frames --audio-root $(AUDIO_DIR)
 
 embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ index.
-	uv run --extra multimodal rmedia --db $(DB) feature frame_embedding --url $(EMBED_URL)
+	uv run --extra multimodal ratch --db $(DB) feature frame_embedding --url $(EMBED_URL)
 
 speaker-turns:        ## Diarize each video → speaker_turns.lance (who-spoke-when; needs pyannote + cached HF token).
-	uv run rmedia --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+	uv run ratch --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
 
 embed-speaker-turns:  ## Per-turn WeSpeaker 256-d voiceprints → speaker_embeddings.lance (GPU; shardable).
-	uv run rmedia --db $(DB) embed-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+	uv run ratch --db $(DB) embed-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
 
 build-speakers:       ## Duration-weighted centroid per (doc, label) → speakers.lance.
-	uv run rmedia --db $(DB) build-speakers
+	uv run ratch --db $(DB) build-speakers
 
 cluster-speakers:     ## Seeded EVōC over speakers → speaker_cluster (cross-video identities; needs atlas extra).
-	uv run --extra atlas rmedia --db $(DB) cluster-speakers --seed 42 --validate
+	uv run --extra atlas ratch --db $(DB) cluster-speakers --seed 42 --validate
 
 caption-chunk-frames: ## Caption EXISTING frames → chunk_frames.caption (resumable; uses your Gemma at $(CAPTION_URL)).
-	uv run --extra multimodal rmedia --db $(DB) feature caption \
+	uv run --extra multimodal ratch --db $(DB) feature caption \
 		--url $(CAPTION_URL) --model $(CAPTION_MODEL) --checkpoint $(CAPTION_CKPT)
 
 embed-captions:       ## Embed chunk_frames.caption → caption_embedding + IVF_PQ index (needs embed-server).
-	uv run --extra multimodal rmedia --db $(DB) feature caption_embedding --url $(EMBED_URL)
+	uv run --extra multimodal ratch --db $(DB) feature caption_embedding --url $(EMBED_URL)
 
 # Caption pipeline: write the Swedish captions, then embed them for scene search.
 # Reuses existing frames — run `extract-chunk-frames` first if chunk_frames is empty.
@@ -415,15 +415,15 @@ captions: caption-chunk-frames embed-captions  ## Caption frames + embed caption
 # embedding exists: text ← embed-chunks, visual ← embed-chunk-frames,
 # caption ← embed-captions. EVōC is CPU-only (no GPU/embed-server needed).
 atlas:                ## Text EVōC map (atlas_x/y/cluster) from chunks.text_embedding.
-	uv run --extra atlas rmedia --db $(DB) feature atlas
+	uv run --extra atlas ratch --db $(DB) feature atlas
 atlas-visual:         ## Visual EVōC map (atlas_img_*) from frame_embedding.
-	uv run --extra atlas rmedia --db $(DB) feature atlas --space visual
+	uv run --extra atlas ratch --db $(DB) feature atlas --space visual
 atlas-caption:        ## Caption EVōC map (atlas_cap_*) from caption_embedding.
-	uv run --extra atlas rmedia --db $(DB) feature atlas --space caption
+	uv run --extra atlas ratch --db $(DB) feature atlas --space caption
 atlas-all: atlas atlas-visual atlas-caption  ## All three atlas projections.
 
 topics:               ## Build Swedish topic layers (Toponymy, isolated env; needs atlas map + Gemma :8003 + embed :8001).
-	uv run rmedia --db $(DB) feature topics
+	uv run ratch --db $(DB) feature topics
 
 # ─── Complete feature DAG (everything the serving DB carries) ─────────────────
 # The full multimodal + atlas + topics chain in dependency order. Assumes
@@ -438,25 +438,25 @@ features-all: embed-chunks extract-chunk-frames embed-chunk-frames speaker-turns
 pipeline-multimodal: pipeline embed-chunks extract-chunk-frames embed-chunk-frames compact
 
 # ─── Ray Data pipeline (the distributed driver — Phase 1 of LANCE_MEDIA_MERGE) ─
-# `rmedia pipeline` runs registry stages as `read_lance → map_batches(actor pool)
+# `ratch pipeline` runs registry stages as `read_lance → map_batches(actor pool)
 # → driver-side commit`, replacing the ThreadPoolExecutor/`_shard` mechanisms.
 # `plan` prints the stage DAG (shape/table/gate/client/actor·GPU); `run` executes
 # one stage distributed; `index` builds IVF_PQ + FTS/BTREE via lance-ray. In prod
 # (rask) the same entrypoint is submitted to KubeRay — see docs/RASK_LANDING.md.
 STAGE ?= text_embedding
 pipeline-plan:        ## Print the Ray stage DAG (shape, table, gate, client, actors×GPU).
-	uv run rmedia --db $(DB) pipeline plan
+	uv run ratch --db $(DB) pipeline plan
 pipeline-run:         ## Run ONE Ray stage distributed. Usage: make pipeline-run STAGE=frame_embedding
-	uv run --extra multimodal rmedia --db $(DB) pipeline run $(STAGE) \
+	uv run --extra multimodal ratch --db $(DB) pipeline run $(STAGE) \
 		--embed-url $(EMBED_URL) --caption-url $(CAPTION_URL) --audio-root $(AUDIO_DIR)
 pipeline-index:       ## Build the standard indexes (IVF_PQ cosine + FTS/BTREE) distributed via lance-ray.
-	uv run rmedia --db $(DB) pipeline index
+	uv run ratch --db $(DB) pipeline index
 
 # Ray-native equivalent of `features-all`: every per-row column stage through the
 # actor-pool driver (dependency order), then distributed indexing, then the two
 # global fits (EVōC atlas + Toponymy topics stay single-driver — they can't be
 # row-parallel), then compaction. Needs embed :8001/$(EMBED_URL) + Gemma :8003.
-features-all-ray:     ## features-all via the Ray Data pipeline (rmedia pipeline run per stage).
+features-all-ray:     ## features-all via the Ray Data pipeline (ratch pipeline run per stage).
 	$(MAKE) pipeline-run STAGE=text_embedding
 	$(MAKE) pipeline-run STAGE=extract_frames
 	$(MAKE) pipeline-run STAGE=frame_embedding
@@ -469,11 +469,11 @@ features-all-ray:     ## features-all via the Ray Data pipeline (rmedia pipeline
 	$(MAKE) compact
 
 compact:               ## Compact $(TABLE)'s fragments + rebuild its indexes (run after bulk writes; TABLE=chunk_frames for frames).
-	uv run rmedia --db $(DB) --table $(TABLE) compact
+	uv run ratch --db $(DB) --table $(TABLE) compact
 	@echo "── multimodal indexing complete ────────────────────────────────"
 
 maintain:              ## Prune old annotations-table versions (tagged milestones + latest survive; RETENTION_DAYS=14).
-	uv run rmedia --db $(DB) --table annotations maintain --older-than-days $(or $(RETENTION_DAYS),14)
+	uv run ratch --db $(DB) --table annotations maintain --older-than-days $(or $(RETENTION_DAYS),14)
 
 E2E_DOCS        ?= 2
 E2E_FRAME_LIMIT ?= 24
@@ -540,7 +540,7 @@ hf-download-all:      ## Pull Lance + videos + alignments + thumbnails to local.
 # ─── Search ─────────────────────────────────────────────────────────────────
 search:               ## FTS query. Usage: make search Q='best of times'
 	@test -n "$(Q)" || (echo "Set Q=...  (e.g. make search Q='best of times')"; exit 2)
-	uv run rmedia --db $(DB) --table $(TABLE) search '$(Q)'
+	uv run ratch --db $(DB) --table $(TABLE) search '$(Q)'
 
 query: search         ## Alias for `make search`.
 
@@ -551,17 +551,17 @@ query: search         ## Alias for `make search`.
 demo: install reingest  ## Full end-to-end smoke: install + reingest + 3 queries.
 	@echo ""
 	@echo "── query 1 ── 'best of times' ──────────────────────────────────"
-	uv run rmedia --db $(DB) --table $(TABLE) search 'best of times'
+	uv run ratch --db $(DB) --table $(TABLE) search 'best of times'
 	@echo ""
 	@echo "── query 2 ── exact phrase '\"spring of hope\"' ─────────────────"
-	uv run rmedia --db $(DB) --table $(TABLE) search '"spring of hope"'
+	uv run ratch --db $(DB) --table $(TABLE) search '"spring of hope"'
 	@echo ""
 	@echo "── query 3 ── boolean 'wisdom OR foolishness' ──────────────────"
-	uv run rmedia --db $(DB) --table $(TABLE) search 'wisdom OR foolishness' -n 3
+	uv run ratch --db $(DB) --table $(TABLE) search 'wisdom OR foolishness' -n 3
 
 # ─── REPL ───────────────────────────────────────────────────────────────────
-shell:                ## Drop into a Python REPL with rmedia imported as `lm`.
-	uv run python -ic "import rmedia as lm; print('rmedia loaded as `lm`')"
+shell:                ## Drop into a Python REPL with ratch imported as `lm`.
+	uv run python -ic "import ratch as lm; print('ratch loaded as `lm`')"
 
 # ─── Cleanup ────────────────────────────────────────────────────────────────
 clean-db:             ## Delete the Lance database only.

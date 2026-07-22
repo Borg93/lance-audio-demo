@@ -116,7 +116,7 @@ lance-audio-demo/
 ├── frontend/                  turborepo: apps/{media,annotator} + packages/@lance/{engine,labeling,ui,api}
 │   ├── apps/media/            viewer zone (SvelteKit) + server.ts (per-domain /api + /annotate proxy)
 │   └── apps/annotator/        annotator zone (kit.paths.base=/annotate)
-├── src/rmedia/                Python ingestion + search core (Ray/vLLM pipeline)
+├── src/ratch/                Python ingestion + search core (Ray/vLLM pipeline)
 │   ├── cli/                   typer CLI: ingest, feature, extract-chunk-frames, compact, serve, …
 │   ├── model/                 PyArrow schemas (schema.py) + Pydantic DTOs (datamodel.py)
 │   ├── asr/                   in-process Whisper/wav2vec2 (transcribe.py, detect_language.py)
@@ -133,9 +133,9 @@ lance-audio-demo/
                                one on this machine is transcripts_v2.lance)
 ```
 
-Import paths follow the package layout: `raudio.vllm.embedding`,
-`raudio.vllm.reranker`, `backend.search.service`. The embedding and reranker
-clients live under `raudio.vllm`, not `raudio.retrieval`.
+Import paths follow the package layout: `ratch.vllm.embedding`,
+`ratch.vllm.reranker`, `backend.search.service`. The embedding and reranker
+clients live under `ratch.vllm`, not `ratch.retrieval`.
 
 ---
 
@@ -197,7 +197,7 @@ make embed-server-docker            # → http://127.0.0.1:8001
 # (or `make embed-server` to run it via uvx instead of Docker)
 
 # Once-off — populates chunks.text_embedding + builds the IVF_PQ index.
-# Wraps `rmedia feature text_embedding`.
+# Wraps `ratch feature text_embedding`.
 make embed-chunks                   # ~25 min on a 5090 for 145k chunks
 ```
 
@@ -211,7 +211,7 @@ Requires a GPU + the embedding server. Two stages:
 ```bash
 make extract-chunk-frames          # ffmpeg, CPU-bound, ~30 min for 145k chunks
 make embed-chunk-frames            # Qwen3-VL image embeddings → frame_embedding
-                                   # (wraps `rmedia feature frame_embedding`)
+                                   # (wraps `ratch feature frame_embedding`)
 ```
 
 Drag-drop an image onto the search bar to query frames (`mode=visual`); add text
@@ -220,14 +220,14 @@ as well and the request becomes `mode=all` (text + image + scene fusion).
 ### 5. Add scene search (optional)
 
 Requires a generative VLM (Gemma 4) you run yourself on `:8003` (`CAPTION_URL`)
-plus the embedding server. `raudio` is only a *client* of the caption model. Two
+plus the embedding server. `ratch` is only a *client* of the caption model. Two
 stages, both resumable:
 
 ```bash
 make caption-chunk-frames          # POST frames → Gemma → chunk_frames.caption
-                                   # (Swedish captions; wraps `rmedia feature caption`)
+                                   # (Swedish captions; wraps `ratch feature caption`)
 make embed-captions                # Qwen3-VL embeds captions → caption_embedding + IVF_PQ
-                                   # (wraps `rmedia feature caption_embedding`)
+                                   # (wraps `ratch feature caption_embedding`)
 # OR both in one go:
 make captions
 ```
@@ -247,7 +247,7 @@ model terms accepted on the Hub.
 
 ```bash
 make speaker-turns                 # diarize each video → speaker_turns.lance
-                                   # (wraps `rmedia extract-speaker-turns --audio-root input/sv`)
+                                   # (wraps `ratch extract-speaker-turns --audio-root input/sv`)
 ```
 
 Writes a new `speaker_turns.lance` table (`doc_id, turn_id, speaker_label,
@@ -256,10 +256,10 @@ reason as `chunk_frames`. It is append-only, one video at a time, and
 `--only-null` (the default) skips already-diarized videos; pass `--all` to redo
 everything. There is no embedding/vector column, so **no vector reindex is
 needed**. Optional hygiene at corpus scale: a scalar BTREE index on
-`speaker_turns.doc_id` speeds per-video lookup, and `rmedia compact --table
+`speaker_turns.doc_id` speeds per-video lookup, and `ratch compact --table
 speaker_turns` consolidates the per-video append fragments.
 
-**`rmedia serve` has no auto-reload — RESTART the backend after building** so it
+**`ratch serve` has no auto-reload — RESTART the backend after building** so it
 opens `speaker_turns.lance` and serves `GET /api/diarization/{doc_id}`. The
 player then shows a **Speakers** tab (per-speaker lanes + a playhead synced to
 the video, click-to-seek); until the table is built it reads "Diarization not
@@ -437,7 +437,7 @@ commands (the HF kernels API changed); the bundled FlashAttention 2 works.
 - Logs go to `logs/` (rotating, gitignored). Process logs use `tee`, so watch
   them live with `tail -f logs/<file>`.
 - `make vllm-stop` stops both Docker vLLM containers.
-- Feature builds are incremental: `rmedia feature <name>` defaults to
+- Feature builds are incremental: `ratch feature <name>` defaults to
   `--only-null`, processing only rows where the target column is empty. Safe to
   Ctrl-C and resume; pass `--all` to drop and rebuild.
 

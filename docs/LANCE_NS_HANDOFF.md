@@ -27,7 +27,7 @@ file into the lance-ns session. Companion detail: `ANNOTATIONS_SCHEMA_CONTRACT.m
    (`backend/lancekit/predicate.py`) is the single quoting implementation.
 5. **OpenLineage** — does the catalog mover emit spec-2-0-2 RunEvents on `merge_insert`
    (our `lineage_emit` then no-ops), carrying the input `DatasetVersionDatasetFacet` +
-   the training-run params facets (`rmedia_trainingConfig`/`rmedia_selection`)?
+   the training-run params facets (`ratch_trainingConfig`/`ratch_selection`)?
 6. **Jobs enqueue** — a RayJob submit endpoint (our `MEDIA_JOBS_URL`) accepting
    `{producer, op, scope, exemplars}` (INSID3 propagate carries `exemplars`)?
 7. **Interactive assist** — a Ray Serve endpoint (our `MEDIA_ASSIST_URL`) serving
@@ -38,7 +38,7 @@ file into the lance-ns session. Companion detail: `ANNOTATIONS_SCHEMA_CONTRACT.m
 
 ## What lance-ns owns at merge (we deliberately did NOT build these)
 
-- **Table maintenance** — our `rmedia maintain`/`tag` (version GC + milestone tags,
+- **Table maintenance** — our `ratch maintain`/`tag` (version GC + milestone tags,
   tagged + latest survive) is a thin scheduled call to be replaced by catalog-owned
   maintenance. Retention must cover the compare-versions audit horizon.
 - **Catalog-routed writes + FGA** — our server stamps `reviewer` from a trusted header

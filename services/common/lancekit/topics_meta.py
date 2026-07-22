@@ -1,7 +1,7 @@
 """Topic-column metadata shared by the serving groups — vendored from the pipeline.
 
-Vendored (verbatim) from ``src/rmedia/features/topic_tree.py`` (``NOISE_LABEL``
-+ :func:`topic_layer_columns` only): the backend must not import the ``rmedia``
+Vendored (verbatim) from ``src/ratch/features/topic_tree.py`` (``NOISE_LABEL``
++ :func:`topic_layer_columns` only): the backend must not import the ``ratch``
 pipeline package (LANCE_MEDIA_MERGE §4.4), and these two symbols are the whole
 runtime surface it needs — the noise-bucket label surfaced by ``/api/topics``
 and the "which columns are topic layers" rule the topic filter relies on.

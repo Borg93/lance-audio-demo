@@ -26,7 +26,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Env vars are MEDIA_* (§4.4). The legacy RAUDIO_* aliases were dropped in the
+    # Env vars are MEDIA_* (§4.4). Pre-rename env aliases were dropped in the
     # lance-media rename.
     embed_url: str = Field(default="http://127.0.0.1:8001", alias="MEDIA_EMBED_URL")
     rerank_url: str = Field(default="http://127.0.0.1:8002", alias="MEDIA_RERANK_URL")

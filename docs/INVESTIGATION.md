@@ -50,7 +50,7 @@ carried `alignments_json` (`pa.json_()`), a `text_embedding` vector, and a
 > `Invalid user input: there were more fields in the schema than provided
 > column indices / infos` (decoder.rs:438) — confirmed at row counts 1, 100,
 > and 145k.
-> — `src/rmedia/model/schema.py:169-170`
+> — `src/ratch/model/schema.py:169-170`
 
 Commit `3954ee5` ("Phase 2 v2: chunk_frames as a separate Lance table") is the
 fix and records the same diagnosis.
@@ -94,7 +94,7 @@ chunk granularity, and diffs the work list against that set
 (`cli/media.py:154-166`):
 
 ```python
-# src/rmedia/cli/media.py
+# src/ratch/cli/media.py
 frame_keys = existing_frame_keys(frames_path) if (frames_exists and only_null) else set()
 already = {(d, s, c) for d, s, c, _ in frame_keys}
 rows = [
@@ -141,7 +141,7 @@ column has no IVF index yet (flat search), so they are safe at any table size.
 `ensure_vector_index` short-circuits if *any* row in the target column is NULL:
 
 ```python
-# src/rmedia/features/engine.py:263-266
+# src/ratch/features/engine.py:263-266
 nulls = table.count_rows(filter=f"{column} IS NULL")
 if nulls > 0:
     logger.warning(f"skipping index on {column}: {nulls} row(s) still NULL")
@@ -185,7 +185,7 @@ read via `take_blobs("frame_blob", ...)` at `router.py:104`); the legacy
 `chunks.frame_blob` fallback was removed along with the column.
 
 **The frame data is now built.** `frame_embedding` is populated by
-`rmedia feature frame_embedding` (`make embed-chunk-frames`,
+`ratch feature frame_embedding` (`make embed-chunk-frames`,
 `features/columns.py:_run_frame_embedding`, line 366) and on the **live**
 `transcripts_v2.lance` DB it is complete end-to-end: `chunk_frames.frame_embedding`
 has 145,175 rows (zero NULL) with an IVF index `frame_embedding_idx`, so `visual`
@@ -207,7 +207,7 @@ return empty until `make captions` (the Gemma caption pass) runs.
 
 ## Part B — The vLLM image-embed crash (historical — now cleared on the live DB)
 
-`rmedia feature frame_embedding` (`make embed-chunk-frames`,
+`ratch feature frame_embedding` (`make embed-chunk-frames`,
 `features/columns.py:_run_frame_embedding`, line 366) has now **completed
 end-to-end** on the live DB (145,175 frame vectors, indexed). Getting there meant
 clearing the crash documented below: earlier every attempt to embed an image
@@ -262,7 +262,7 @@ The Makefile still flags the residual model/build caveat in two places
 (`Makefile:243-251` and the `embed-server-docker` NOTE at `Makefile:287-289`).
 
 > **Stale code comment to fix (not this doc):** the client comment at
-> `src/rmedia/vllm/image.py:28-30` still reads *"UNVERIFIED end-to-end:
+> `src/ratch/vllm/image.py:28-30` still reads *"UNVERIFIED end-to-end:
 > embed-chunk-frames has never completed on GPU."* That is now out of date — the
 > live DB has 145,175 frame vectors built + indexed (corroborated by
 > [GUIDE.md](GUIDE.md), [STORAGE.md](STORAGE.md), [EMBEDDINGS.md](EMBEDDINGS.md)).
@@ -273,7 +273,7 @@ The Makefile still flags the residual model/build caveat in two places
 ```bash
 make embed-server-docker          # Qwen3-VL-Embedding-2B on :8001, pinned to 153664 px
 make extract-chunk-frames         # populate chunk_frames.frame_blob (if not already)
-make embed-chunk-frames           # rmedia feature frame_embedding → frame_embedding + IVF_PQ
+make embed-chunk-frames           # ratch feature frame_embedding → frame_embedding + IVF_PQ
 ```
 
 Confirm it processes all rows without the `deepstack tokens` ValueError, that
@@ -340,7 +340,7 @@ re-discovered the hard way:
 
 ## One-paragraph mental model
 
-`raudio` works around Lance 4.0 by keeping frames in a separate, append-only
+`ratch` works around Lance 4.0 by keeping frames in a separate, append-only
 `chunk_frames` table (A1) with Python-side resume (A2). Both earlier search bugs
 are fixed: vector queries now set `nprobes=20`/`refine_factor=3` for good recall
 on the 256-partition index (A3), and `visual`/`all` query the real

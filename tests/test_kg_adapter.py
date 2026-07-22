@@ -1,9 +1,9 @@
-"""Pure data-hygiene helpers in ``scripts/kg/adapter.py``.
+"""Pure data-hygiene helpers in ``src/ratch/kg/adapter.py``.
 
 These functions encode every cleanup rule derived from the graph audits
 (junk-drop, type taxonomy, alias-safe slugging, word-boundary descriptions).
 They are deterministic and dependency-light, so they're locked in here as a
-regression guard. ``scripts/kg`` is not a package — load the module by path.
+regression guard. ``src/ratch/kg`` is a plain script dir (no __init__) — load by path.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
-    "kg_adapter", Path(__file__).resolve().parent.parent / "scripts" / "kg" / "adapter.py"
+    "kg_adapter", Path(__file__).resolve().parent.parent / "src" / "ratch" / "kg" / "adapter.py"
 )
 assert _SPEC and _SPEC.loader
 adapter = importlib.util.module_from_spec(_SPEC)
@@ -114,7 +114,7 @@ def test_truncate_desc_passthrough_when_short() -> None:
     assert adapter.truncate_desc("Regeringen styr Sverige.") == "Regeringen styr Sverige."
 
 
-# --- generic-noun classifier (scripts/kg/generic_sv.py), reached via adapter ---
+# --- generic-noun classifier (src/ratch/kg/generic_sv.py), reached via adapter ---
 
 
 @pytest.mark.parametrize(

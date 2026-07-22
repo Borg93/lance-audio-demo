@@ -1,4 +1,4 @@
-"""End-to-end smoke test of the whole rmedia pipeline on a tiny real sample.
+"""End-to-end smoke test of the whole ratch pipeline on a tiny real sample.
 
 Drives the actual CLI through every stage — ingest → embed-chunks →
 extract-chunk-frames → embed-chunk-frames — into a throwaway temp DB (your real
@@ -28,12 +28,12 @@ AUDIO_ROOT = Path("input/sv-test")
 
 
 def _run(*args: str) -> None:
-    """Invoke the rmedia CLI in-process-venv; abort the smoke on non-zero exit."""
-    cmd = [sys.executable, "-m", "rmedia.cli", *args]
-    print(f"\n$ rmedia {' '.join(args)}")
+    """Invoke the ratch CLI in-process-venv; abort the smoke on non-zero exit."""
+    cmd = [sys.executable, "-m", "ratch.cli", *args]
+    print(f"\n$ ratch {' '.join(args)}")
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
-        raise SystemExit(f"stage failed (exit {result.returncode}): rmedia {' '.join(args)}")
+        raise SystemExit(f"stage failed (exit {result.returncode}): ratch {' '.join(args)}")
 
 
 def _pick_stems(n: int) -> list[str]:
@@ -64,7 +64,7 @@ def main() -> None:
     json_paths = [str(ALIGN_DIR / f"{s}.json") for s in stems]
     print(f"sample ({len(stems)}): {', '.join(stems)}")
 
-    tmp = Path(tempfile.mkdtemp(prefix="raudio_e2e_"))
+    tmp = Path(tempfile.mkdtemp(prefix="ratch_e2e_"))
     db = tmp / "transcripts.lance"
     thumbs = tmp / "thumbnails"
 

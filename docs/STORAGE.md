@@ -1,21 +1,21 @@
-# How raudio uses Lance
+# How ratch uses Lance
 
 > The storage layer in depth. The [README](../README.md) is the quickstart and
 > [GUIDE.md](GUIDE.md) is the architecture map; **this doc is the contract
 > between the schema and the Lance file format**. Read it when you touch
-> [`src/rmedia/model/schema.py`](../src/rmedia/model/schema.py),
-> [`src/rmedia/ingest/ingest.py`](../src/rmedia/ingest/ingest.py), or the blob/range code in
+> [`src/ratch/model/schema.py`](../src/ratch/model/schema.py),
+> [`src/ratch/ingest/ingest.py`](../src/ratch/ingest/ingest.py), or the blob/range code in
 > [`services/viewer/api/v1/endpoints/media.py`](../services/viewer/api/v1/endpoints/media.py). For the indexation gotchas that bit us
 > (the `merge_insert` crash, `nprobes` recall) see [INVESTIGATION.md](INVESTIGATION.md).
 
-Everything raudio stores — transcript text, metadata, word alignments, three
+Everything ratch stores — transcript text, metadata, word alignments, three
 families of 2048-d embeddings, JPEG thumbnails, per-chunk video frames, and the
 URIs of the source MP4s — lives in **one Lance dataset directory** (the live one
 on this machine is `transcripts_v2.lance/`; see [§1](#1-the-tables)). There
 are no sidecar JSON files and no disk walks at query time. This is only possible
-because raudio leans on four specific **Lance file format 2.2** capabilities:
+because ratch leans on four specific **Lance file format 2.2** capabilities:
 
-| Feature | What it buys raudio | Where |
+| Feature | What it buys ratch | Where |
 |---|---|---|
 | **Columnar tables** | Cheap full-table FTS/metadata scans without touching media bytes | every table |
 | **Blob V2** (4 storage tiers) | Media URIs *and* small bytes in the same row, range-readable | `media_blob`, `thumbnail`, `frame_blob` |
@@ -82,7 +82,7 @@ erDiagram
 ```
 
 These are physical Lance datasets under one directory:
-`<db>.lance/{chunks,documents,chunk_frames}.lance`, plus two more raudio-produced
+`<db>.lance/{chunks,documents,chunk_frames}.lance`, plus two more ratch-produced
 tables — `speaker_turns.lance` (diarized turns, see [`speaker_turns`](#speaker_turns--the-diarization-table))
 and `topics.lance` (the topic tree, see [`topics`](#topics--the-topic-tree)).
 They are joined **only by key columns**, never by a stored
@@ -90,13 +90,13 @@ foreign-key relation — the backend resolves keys to stable row ids with SQL
 filters (`_rowid_for_filter`, `rowid_for_doc_id` in
 [`services/viewer/api/v1/endpoints/media.py`](../services/viewer/api/v1/endpoints/media.py)). (A knowledge-graph layer
 also writes sibling `kg_chunks`/`kg_entities`/`kg_mentions`/`kg_relationships`
-tables into the same directory from `scripts/kg/adapter.py`, read by
+tables into the same directory from `src/ratch/kg/adapter.py`, read by
 [`services/viewer/api/v1/endpoints/graph.py`](../services/viewer/api/v1/endpoints/graph.py); those are out of scope
 for this doc.)
 
 > **Which DB is live** — the served dataset is **`transcripts_v2.lance/`** (chunks
 > = 145,175 rows; documents = 1,154; chunk_frames = 145,175), and it is also the
-> default (`Makefile` `DB ?= ./transcripts_v2.lance`, and the `rmedia --db` CLI
+> default (`Makefile` `DB ?= ./transcripts_v2.lance`, and the `ratch --db` CLI
 > default). An older empty `./transcripts.lance` may linger on some machines, so
 > confirm you are pointed at `transcripts_v2.lance`.
 
@@ -115,7 +115,7 @@ for this doc.)
 
 ### `chunks` — the scan-cheap text table
 
-One row per transcript chunk ([`CHUNK_SCHEMA`](../src/rmedia/model/schema.py)).
+One row per transcript chunk ([`CHUNK_SCHEMA`](../src/ratch/model/schema.py)).
 It deliberately carries **no audio bytes** — the source media lives on the
 `documents` table keyed by `doc_id`, and the audio rides inside the source MP4
 served by the backend — so FTS and metadata scans stay cheap no matter how much
@@ -124,37 +124,37 @@ media the DB holds. Notable columns:
 - `text` (`nullable=False`) — the column the Tantivy FTS index is built on.
 - `alignments_json` (`pa.json_()`) — JSONB word-alignment tree (§3).
 - `text_embedding` (`FixedSizeList<float32, 2048>`, nullable) — the
-  semantic-search vector. **Not in the base schema**: `rmedia feature text_embedding`
+  semantic-search vector. **Not in the base schema**: `ratch feature text_embedding`
   attaches it after ingest with `dataset.add_columns(...)` (Lance data
-  evolution, via `upsert_scan_column` in `raudio.features.engine`), so ingest
+  evolution, via `upsert_scan_column` in `ratch.features.engine`), so ingest
   never writes a placeholder column.
 - `frame_embedding` (`FixedSizeList<float32, 2048>`, nullable) — a **second
   vector column**, the *chunk-level* image vector for the image-atlas. It is the
   representative-frame (`frame_idx=0`) vector joined from `chunk_frames`
-  (`rmedia feature atlas_visual` for the visual atlas, via
+  (`ratch feature atlas_visual` for the visual atlas, via
   `chunk_frame_embedding_column`). (The IVF index lives on the `chunk_frames`
   copy; the `chunks` copy is the source for the visual atlas projection, not an
   indexed search column.)
 - `caption_embedding` (`FixedSizeList<float32, 2048>`, nullable) — a **third
   vector column**, the chunk-level caption-space vector. The same representative-
   frame join (`chunk_frame_embedding_column`) brings the `frame_idx=0`
-  `caption_embedding` over from `chunk_frames` for `rmedia feature atlas_caption`.
+  `caption_embedding` over from `chunk_frames` for `ratch feature atlas_caption`.
   So `chunks` carries **three** vector columns (`text_embedding`,
   `frame_embedding`, `caption_embedding`).
 - `atlas_x` / `atlas_y` / `atlas_cluster` (text-space), `atlas_img_x` /
   `atlas_img_y` / `atlas_img_cluster` (visual-space) and `atlas_cap_x` /
   `atlas_cap_y` / `atlas_cap_cluster` (caption-space) — nine EVōC projection
-  columns for the Atlas view. The text triplet is written by `rmedia feature
-  atlas` from `text_embedding`; the visual triplet by `rmedia feature
-  atlas_visual` (= `rmedia feature atlas --space visual`) from the chunk-level
-  `frame_embedding`; the caption triplet by `rmedia feature atlas_caption` from
+  columns for the Atlas view. The text triplet is written by `ratch feature
+  atlas` from `text_embedding`; the visual triplet by `ratch feature
+  atlas_visual` (= `ratch feature atlas --space visual`) from the chunk-level
+  `frame_embedding`; the caption triplet by `ratch feature atlas_caption` from
   the chunk-level `caption_embedding`. See
-  [`src/rmedia/features/projection.py`](../src/rmedia/features/projection.py).
+  [`src/ratch/features/projection.py`](../src/ratch/features/projection.py).
 - `topic_l0` / `topic_l1` / `topic_l2` / `doc_topic` (`string`, nullable) — the
-  topic-layer labels written by `rmedia feature topics`, which back the topic
+  topic-layer labels written by `ratch feature topics`, which back the topic
   facet (`SearchSpec.topic`) and are Bitmap-indexed (`doc_topic_idx`,
   `topic_l2_idx`). See [`topics`](#topics--the-topic-tree) and
-  [`src/rmedia/features/topic_tree.py`](../src/rmedia/features/topic_tree.py).
+  [`src/ratch/features/topic_tree.py`](../src/ratch/features/topic_tree.py).
 
 Riksarkivet archival metadata (`referenskod`, `namn`, `bildid`, `extraid`) is
 **denormalised** onto every chunk row so retrieval needs no join — the search
@@ -163,7 +163,7 @@ off the hit.
 
 ### `documents` — the portable media catalog
 
-One row per source media file ([`DOC_SCHEMA`](../src/rmedia/model/schema.py)). It is
+One row per source media file ([`DOC_SCHEMA`](../src/ratch/model/schema.py)). It is
 the only table with media-bearing columns, and both are Blob V2:
 
 - `media_blob` — **Blob V2 External**: stores a URI *string*, not bytes (§2).
@@ -176,7 +176,7 @@ guards every media/thumbnail endpoint with `if state.docs_ds is None`.
 ### `chunk_frames` — the append-only frame table
 
 One row per extracted video frame, captured via ffmpeg
-([`CHUNK_FRAMES_SCHEMA`](../src/rmedia/model/schema.py)). Keyed by
+([`CHUNK_FRAMES_SCHEMA`](../src/ratch/model/schema.py)). Keyed by
 `(doc_id, speech_id, chunk_id, frame_idx)` — a chunk can hold N frames
 (`frame_idx` 0..K-1), with `frame_idx=0` the single representative frame
 captured at `chunk.start`. `frame_blob` is **Blob V2 Inline** (~50 KB JPEG,
@@ -195,8 +195,8 @@ indices / infos` (decoder.rs:438), reproduced at 1, 100, and 145k rows. The Lanc
 2.2 docs recommend "append + `add_columns`" for data-evolution workloads instead,
 so:
 
-- `rmedia extract-chunk-frames` **appends** new fragments (no `merge_insert`).
-- `rmedia feature frame_embedding` attaches `frame_embedding` via
+- `ratch extract-chunk-frames` **appends** new fragments (no `merge_insert`).
+- `ratch feature frame_embedding` attaches `frame_embedding` via
   `dataset.add_columns(...)` — a column-level append that never touches existing
   files and bypasses the `merge_insert` join entirely.
 
@@ -204,10 +204,10 @@ Full post-mortem in [INVESTIGATION.md](INVESTIGATION.md).
 
 ### `speaker_turns` — the diarization table
 
-One row per diarized speaker turn ([`SPEAKER_TURNS_SCHEMA`](../src/rmedia/model/schema.py),
+One row per diarized speaker turn ([`SPEAKER_TURNS_SCHEMA`](../src/ratch/model/schema.py),
 columns `doc_id`, `turn_id`, `speaker_label`, `start`, `end`). Written by
-`rmedia extract-speaker-turns` (`write_speaker_turns` in
-[`src/rmedia/media/diarize.py`](../src/rmedia/media/diarize.py)) — `turn_id` is the
+`ratch extract-speaker-turns` (`write_speaker_turns` in
+[`src/ratch/media/diarize.py`](../src/ratch/media/diarize.py)) — `turn_id` is the
 per-video `enumerate` index over that video's turns. It is **append-only** on the
 same `"2.2"` storage version (`SPEAKER_TURNS_STORAGE_VERSION`) and is read on
 demand by the backend diarization router (`GET /api/diarization/{doc_id}` in
@@ -218,9 +218,9 @@ restart needed.
 
 A single-row table (`topics.lance`) holding the nested topic hierarchy: `hierarchy`
 (`pa.json_()` JSONB — another JSONB consumer alongside `chunks.alignments_json`),
-`layers` (`int32`), `n_chunks` (`int64`). Written by `rmedia feature topics`
+`layers` (`int32`), `n_chunks` (`int64`). Written by `ratch feature topics`
 (`write_topics_table` in
-[`src/rmedia/features/topic_tree.py`](../src/rmedia/features/topic_tree.py)) from the
+[`src/ratch/features/topic_tree.py`](../src/ratch/features/topic_tree.py)) from the
 `chunks.topic_l*` layer columns; pinned to `"2.2"` like the rest.
 
 ---
@@ -230,14 +230,14 @@ A single-row table (`topics.lance`) holding the nested topic hierarchy: `hierarc
 Lance Blob V2 lets a single logical "blob" column pick, per value, *where* the
 bytes physically live. There are **four storage semantics**:
 
-| Tier | Size range | Where bytes live | raudio use |
+| Tier | Size range | Where bytes live | ratch use |
 |---|---|---|---|
 | **Inline** | ≤ 64 KB | Packed into the main data page, alongside scalar columns | `thumbnail`, `frame_blob` |
 | **Packed** | 64 KB – 4 MB | Co-located in a packed blob region of the fragment | — (not used) |
 | **Dedicated** | > 4 MB | Its own blob file in the fragment | — (not used) |
 | **External** | any (URI) | *Outside the dataset* — bytes are wherever the URI points | `media_blob` |
 
-raudio uses exactly **two** of these tiers, on purpose:
+ratch uses exactly **two** of these tiers, on purpose:
 
 - **Inline** for `thumbnail` and `frame_blob`: both are small JPEGs (tens of KB).
   Keeping them in the main data page means no sidecar files and one fewer I/O
@@ -331,7 +331,7 @@ Key facts grounded in `services/viewer/api/v1/endpoints/media.py` and `services/
   `Cache-Control: no-store` because it is range-streamed.
 - `chunk_frame` (`GET /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}?frame_idx=N`,
   default `frame_idx=0`) reads `chunk_frames.frame_blob`. It returns 404 until
-  `rmedia extract-chunk-frames` has populated the `chunk_frames` table.
+  `ratch extract-chunk-frames` has populated the `chunk_frames` table.
 
 ---
 
@@ -363,7 +363,7 @@ in `model/schema.py` but deliberately not used for this column):
 > extension array.
 
 On read, `parse_alignments_json` (in
-[`src/rmedia/retrieval/search.py`](../src/rmedia/retrieval/search.py))
+[`src/ratch/retrieval/search.py`](../src/ratch/retrieval/search.py))
 defensively handles both shapes: if Lance already decoded it (not a `str`) it
 passes through; otherwise `json.loads`. The backend calls this in
 `_postprocess_hits` (`services/search/services/postprocess.py`) so every search hit ships an
@@ -386,7 +386,7 @@ flowchart LR
     end
     T -->|"create_fts_index"| FTS["Tantivy FTS<br/>BM25, Swedish stemmer<br/>with_position=True"]
     TE -->|"create_index IVF_PQ"| ANN["IVF_PQ cosine<br/>num_partitions=256<br/>num_sub_vectors=64"]
-    FE -.->|"raudio feature atlas_visual"| ATL["atlas_img_* (EVōC layout)"]
+    FE -.->|"ratch feature atlas_visual"| ATL["atlas_img_* (EVōC layout)"]
     DI -->|"create_scalar_index BTREE"| BT["BTREE scalar<br/>(key lookups)"]
     FTS --> Q1["mode=fts (BM25)"]
     ANN --> Q2["mode=semantic"]
@@ -408,7 +408,7 @@ fully populated), so `scene`/`scene_fts` return real hits. See
 ### Tantivy full-text (BM25)
 
 Built by `ingest_many` (and rebuilt standalone by `reindex_fts`, exposed as
-`rmedia reindex-fts`):
+`ratch reindex-fts`):
 
 ```python
 table.create_fts_index(
@@ -435,14 +435,14 @@ The non-default flags are each load-bearing:
 Two **BTREE scalar indexes** are also built, on `doc_id` and `audio_path`, to
 speed the key-lookup filters the backend runs constantly. The live `chunks` table
 additionally carries two **BITMAP** indexes — `doc_topic_idx` and `topic_l2_idx`
-— built by `rmedia feature topics` to make the topic facet (`SearchSpec.topic`)
+— built by `ratch feature topics` to make the topic facet (`SearchSpec.topic`)
 cheap to filter on.
 
 ### IVF_PQ cosine vector index
 
-Built by `ensure_vector_index` (in `raudio.features.engine`, called from
-`rmedia feature text_embedding`, `rmedia feature frame_embedding`, and
-`rmedia compact` when it rebuilds indexes — see [`src/rmedia/cli/`](../src/rmedia/cli/)):
+Built by `ensure_vector_index` (in `ratch.features.engine`, called from
+`ratch feature text_embedding`, `ratch feature frame_embedding`, and
+`ratch compact` when it rebuilds indexes — see [`src/ratch/cli/`](../src/ratch/cli/)):
 
 ```python
 table.create_index(
@@ -479,7 +479,7 @@ A third operational fact:
 
 - **Compaction invalidates ANN indexes.** Many small append writes
   (`extract-chunk-frames` flushes, incremental ingests) leave a long tail of small
-  fragments and stale index row addresses; `rmedia compact` runs
+  fragments and stale index row addresses; `ratch compact` runs
   `ds.optimize.compact_files(...)` then rebuilds whichever embedding indexes are
   fully populated.
 
@@ -509,24 +509,24 @@ crash) is documented in [INVESTIGATION.md](INVESTIGATION.md).
 
 | Table.column | Lance feature | Tier / type | Built/written by |
 |---|---|---|---|
-| `chunks.text` | Tantivy FTS | BM25 inverted index | `create_fts_index` (ingest / `rmedia reindex-fts`) |
-| `chunks.text_embedding` | Vector index | IVF_PQ cosine, 2048-d | `rmedia feature text_embedding` (`add_columns`) → `ensure_vector_index` |
-| `chunks.frame_embedding` | Column (data evolution) | 2048-d chunk-level image vec (image-atlas; not indexed on `chunks`) | `rmedia feature atlas_visual` (`chunk_frame_embedding_column`, `add_columns`) |
-| `chunks.caption_embedding` | Column (data evolution) | 2048-d chunk-level caption vec (caption-atlas; not indexed on `chunks`) | `rmedia feature atlas_caption` (`chunk_frame_embedding_column`, `add_columns`) |
-| `chunks.atlas_x` / `atlas_y` / `atlas_cluster` | Column (data evolution) | float / int32 (text-space EVōC) | `rmedia feature atlas` (`add_columns`) |
-| `chunks.atlas_img_x` / `atlas_img_y` / `atlas_img_cluster` | Column (data evolution) | float / int32 (visual-space EVōC) | `rmedia feature atlas_visual` (`add_columns`) |
-| `chunks.atlas_cap_x` / `atlas_cap_y` / `atlas_cap_cluster` | Column (data evolution) | float / int32 (caption-space EVōC) | `rmedia feature atlas_caption` (`add_columns`) |
-| `chunks.topic_l0` / `topic_l1` / `topic_l2` / `doc_topic` | Column + Bitmap index | string (`doc_topic_idx`, `topic_l2_idx` Bitmap) | `rmedia feature topics` (`add_columns`) |
+| `chunks.text` | Tantivy FTS | BM25 inverted index | `create_fts_index` (ingest / `ratch reindex-fts`) |
+| `chunks.text_embedding` | Vector index | IVF_PQ cosine, 2048-d | `ratch feature text_embedding` (`add_columns`) → `ensure_vector_index` |
+| `chunks.frame_embedding` | Column (data evolution) | 2048-d chunk-level image vec (image-atlas; not indexed on `chunks`) | `ratch feature atlas_visual` (`chunk_frame_embedding_column`, `add_columns`) |
+| `chunks.caption_embedding` | Column (data evolution) | 2048-d chunk-level caption vec (caption-atlas; not indexed on `chunks`) | `ratch feature atlas_caption` (`chunk_frame_embedding_column`, `add_columns`) |
+| `chunks.atlas_x` / `atlas_y` / `atlas_cluster` | Column (data evolution) | float / int32 (text-space EVōC) | `ratch feature atlas` (`add_columns`) |
+| `chunks.atlas_img_x` / `atlas_img_y` / `atlas_img_cluster` | Column (data evolution) | float / int32 (visual-space EVōC) | `ratch feature atlas_visual` (`add_columns`) |
+| `chunks.atlas_cap_x` / `atlas_cap_y` / `atlas_cap_cluster` | Column (data evolution) | float / int32 (caption-space EVōC) | `ratch feature atlas_caption` (`add_columns`) |
+| `chunks.topic_l0` / `topic_l1` / `topic_l2` / `doc_topic` | Column + Bitmap index | string (`doc_topic_idx`, `topic_l2_idx` Bitmap) | `ratch feature topics` (`add_columns`) |
 | `chunks.alignments_json` | JSONB | `pa.json_()` | `flatten_chunks` (`json.dumps`) |
 | `chunks.doc_id`, `audio_path` | Scalar index | BTREE | `create_scalar_index` |
 | `documents.media_blob` | Blob V2 | **External** (URI) | `_write_documents_table` (`blob_array`) |
 | `documents.thumbnail` | Blob V2 | Inline (bytes) | `_write_documents_table` (`blob_array`) |
-| `chunk_frames.frame_blob` | Blob V2 | Inline (bytes) | `rmedia extract-chunk-frames` (append, `blob_array`) |
-| `chunk_frames.frame_embedding` | Vector index | IVF_PQ cosine, 2048-d | `rmedia feature frame_embedding` (`add_columns`) → `ensure_vector_index` |
-| `chunk_frames.caption` | Tantivy FTS | BM25 inverted index (`caption_idx`) | `rmedia feature caption` |
-| `chunk_frames.caption_embedding` | Vector index | IVF_PQ cosine, 2048-d (`caption_embedding_idx`) | `rmedia feature caption_embedding` (`add_columns`) → `ensure_vector_index` |
-| `speaker_turns.*` | Columnar table | `"2.2"` storage version | `rmedia extract-speaker-turns` (append) |
-| `topics.hierarchy` | JSONB | `pa.json_()` (topic tree) | `rmedia feature topics` (`write_topics_table`) |
+| `chunk_frames.frame_blob` | Blob V2 | Inline (bytes) | `ratch extract-chunk-frames` (append, `blob_array`) |
+| `chunk_frames.frame_embedding` | Vector index | IVF_PQ cosine, 2048-d | `ratch feature frame_embedding` (`add_columns`) → `ensure_vector_index` |
+| `chunk_frames.caption` | Tantivy FTS | BM25 inverted index (`caption_idx`) | `ratch feature caption` |
+| `chunk_frames.caption_embedding` | Vector index | IVF_PQ cosine, 2048-d (`caption_embedding_idx`) | `ratch feature caption_embedding` (`add_columns`) → `ensure_vector_index` |
+| `speaker_turns.*` | Columnar table | `"2.2"` storage version | `ratch extract-speaker-turns` (append) |
+| `topics.hierarchy` | JSONB | `pa.json_()` (topic tree) | `ratch feature topics` (`write_topics_table`) |
 
 ---
 
@@ -535,7 +535,7 @@ crash) is documented in [INVESTIGATION.md](INVESTIGATION.md).
 - [GUIDE.md](GUIDE.md) — architecture & onboarding map (write side vs read side).
 - [EMBEDDINGS.md](EMBEDDINGS.md) — the embedding + search-mode contract (RRF, rerank).
 - [INVESTIGATION.md](INVESTIGATION.md) — the `merge_insert` crash and `nprobes` recall, in depth.
-- [`src/rmedia/model/schema.py`](../src/rmedia/model/schema.py) — the authoritative PyArrow schemas.
-- [`src/rmedia/ingest/ingest.py`](../src/rmedia/ingest/ingest.py) — how blob/JSON columns are written.
+- [`src/ratch/model/schema.py`](../src/ratch/model/schema.py) — the authoritative PyArrow schemas.
+- [`src/ratch/ingest/ingest.py`](../src/ratch/ingest/ingest.py) — how blob/JSON columns are written.
 - [`services/viewer/api/v1/endpoints/media.py`](../services/viewer/api/v1/endpoints/media.py) — the Blob V2 + HTTP-Range read path.
 - [`services/search/services/service.py`](../services/search/services/service.py) — the framework-free search core.

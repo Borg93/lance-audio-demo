@@ -6,7 +6,7 @@ import lance
 import numpy as np
 import pyarrow as pa
 
-from rmedia.features.indexing import plan_indexes
+from ratch.features.indexing import plan_indexes
 
 DIM = 8
 

@@ -2,7 +2,7 @@
 
 > How we capture *what was actually trained on*, its *params*, and the *data snapshot* —
 > and how that propagates to the user and is viewed. Grounded in this repo's OpenLineage
-> emission (`src/rmedia/lineage.py`, `backend/lancekit/lineage_emit.py`), the `annotations`
+> emission (`src/ratch/lineage.py`, `backend/lancekit/lineage_emit.py`), the `annotations`
 > schema (`annotate.py` `_EMPTY_SCHEMA`), and the AL loop (`docs/ACTIVE_LABELING.md`).
 > Cross-checked against OpenLineage-for-ML + GreptimeDB conventions.
 
@@ -54,7 +54,7 @@ time-travel + the `trained_in_version` stamp — **nothing is duplicated.**
   inputs are `[{namespace,name}]` only, and `measure_stage` (lineage.py) runs on the *output* URI —
   so we must add a **measure-on-INPUT** path emitting `{version, rowCount, SchemaDatasetFacet}` on inputs.
 - **selection-predicate facet** — the WHERE/vector query that curated the subset (`dataset@v` alone
-  under-determines it). Core `sql` run-facet or a custom `rmedia_selection`.
+  under-determines it). Core `sql` run-facet or a custom `ratch_selection`.
 - **`random_seed`** inside the params facet — shuffle/sampling determinism.
 - **Model artifact = its own OUTPUT Dataset** (HF Hub URI, `namespace=models`, its own
   `DatasetVersionDatasetFacet` = model hash/rev, `format`) with columnLineage edges from
@@ -63,11 +63,11 @@ time-travel + the `trained_in_version` stamp — **nothing is duplicated.**
 
 ## Params — one custom RUN facet (+ standard facets)
 
-`run.facets` is `errorMessage`-only today. Add **`rmedia_trainingConfig`** (there is no ratified
+`run.facets` is `errorMessage`-only today. Add **`ratch_trainingConfig`** (there is no ratified
 core hyperparameters/MLModel facet as of 2026):
 
 ```
-rmedia_trainingConfig {
+ratch_trainingConfig {
   _producer, _schemaURL,
   hyperparameters { lr, batch_size, epochs, optimizer, weight_decay },
   random_seed,
@@ -123,7 +123,7 @@ input dataset version → time-travel to the rows it trained on.**
    `seed_annotations.py`): `trained_in_version` (int), `created_at`/`updated_at` (ts),
    `margin` (f32) + `logits` (list<f32>), `encoder_embedding` (list<f32>/blob ref).
 2. **Lineage facet SHAPE** — extend `lineage.py`/`build_run_event`: measure-on-input + input
-   `DatasetVersionDatasetFacet`, `rmedia_trainingConfig` + `rmedia_selection` run facets, the
+   `DatasetVersionDatasetFacet`, `ratch_trainingConfig` + `ratch_selection` run facets, the
    model-artifact output path, `nominalTime`/`ParentRun`, the multi-input columnLineage fix —
    byte-identical to lance-ns constants so it drops into the merged builder seam.
 3. **`trained_in_version` stamp policy + the replay-query contract**.
@@ -143,12 +143,12 @@ the GreptimeDB deploy + Grafana + OTel Collector/Alloy.
 - **Canonical identity key** — `doc_id/speech_id/chunk_id/frame_idx` vs engine `page_id/dataset_id`
   (roadmap blocker #1). Provenance rows key on it.
 - **Do we fine-tune now, or is the near-term loop predict+relabel+re-predict with an external
-  model** (training deferred)? Decides whether *we* emit `rmedia_trainingConfig` or only at merge.
+  model** (training deferred)? Decides whether *we* emit `ratch_trainingConfig` or only at merge.
 - **`trained_in_version` write timing** — stamp on gated COMPLETE (only if promoted), so a
   failed/ungated run never consumes rows out of replay (recommended).
 - **Per-media uncertainty definition** — HTR CTC/token · ASR beam · detection objectness/entropy,
   each needs a real comparable-scale score for cross-corpus ranking + `al_sampling`.
-- **Selection-predicate home** — core `sql` facet vs custom `rmedia_selection` — must match whatever
+- **Selection-predicate home** — core `sql` facet vs custom `ratch_selection` — must match whatever
   lance-ns standardizes so merged/standalone events stay byte-identical.
 - **Auto-accept policy** — does `confidence` gate `status` transitions, and does replay include
   auto-accepted rows?

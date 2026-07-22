@@ -73,7 +73,7 @@ them). Everything else is already in the table.
 5. **OpenLineage** — does the catalog **mover** emit spec-2-0-2 RunEvents on `merge_insert`
    (so our `lineage_emit` becomes a no-op), and does it carry the **input
    `DatasetVersionDatasetFacet`** + a **training-run params facet** contract
-   (`rmedia_trainingConfig`/`rmedia_selection` per `TRAINING_LINEAGE.md`)?
+   (`ratch_trainingConfig`/`ratch_selection` per `TRAINING_LINEAGE.md`)?
 6. **Jobs enqueue** — is there a RayJob submit endpoint (our `MEDIA_JOBS_URL`) accepting
    `{producer, op, scope, exemplars}` (INSID3 propagate carries `exemplars`)?
 7. **Interactive assist** — is a Ray Serve endpoint (our `MEDIA_ASSIST_URL`) serving

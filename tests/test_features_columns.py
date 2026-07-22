@@ -16,9 +16,9 @@ import lance
 import pytest
 
 from fakes import FakeEmbedClient, make_doc
-from rmedia.features.columns import chunk_frame_embedding_column, embed_frame_column
-from rmedia.ingest.ingest import ingest_many
-from rmedia.modalities.av.frames import ExtractedFrame, write_chunk_frames
+from ratch.features.columns import chunk_frame_embedding_column, embed_frame_column
+from ratch.ingest.ingest import ingest_many
+from ratch.modalities.av.frames import ExtractedFrame, write_chunk_frames
 
 
 def _chunk_keys(db: Path) -> list[dict]:

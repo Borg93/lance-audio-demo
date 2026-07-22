@@ -7,7 +7,7 @@ Distilled from a multi-agent study of **X-AnyLabeling** (AI-assisted labeling) a
 ## Verdict
 
 lance-media is already the right shape — the studies confirm the thesis, not reshape
-it. The three planes are in place: **compute** (rmedia silver stages as lance-ray +
+it. The three planes are in place: **compute** (ratch silver stages as lance-ray +
 vLLM jobs = a distributed, real version of ALS's ShadowTrainer/batch inference);
 **store** (the `annotations` Lance table already has `status` /`source`/`confidence`/
 `reviewer`, served as Arrow IPC, written via local-first → `merge_insert`); **query**
@@ -93,7 +93,7 @@ jobs** over bronze, writing ROWS into `annotations` with `status="prediction"`,
 |---|---|---|
 | **SEARCH** (what to relabel) | type-driven search + result cache; the 4 AL strategies are queries: uncertainty `ORDER BY uncertainty DESC`, least-confidence `ORDER BY confidence ASC`, diversity = vector-ANN near-dup/max-min over `embedding` (beats ALS's Jaccard), balanced `GROUP BY label` | populate `uncertainty`/`confidence` (DONE for the demo); a review-queue search mode |
 | **JUDGE/RELABEL** | PixiJS+Arrow annotator, local-first → `merge_insert`, status lifecycle, one-key accept-with-suggested-label | a review-queue view consuming a search result set (not a linear walk) |
-| **RETRAIN** | rmedia stages as lance-ray jobs (= ALS ShadowTrainer, real); training set = `WHERE status='accepted'` ∪ replay (`ORDER BY uncertainty DESC LIMIT k`) — Lance IS the dataset | a retrain trigger (count-gate OR time / uncertainty-drift / class-imbalance, from Lance version deltas) + a before/after eval gate on a frozen holdout |
+| **RETRAIN** | ratch stages as lance-ray jobs (= ALS ShadowTrainer, real); training set = `WHERE status='accepted'` ∪ replay (`ORDER BY uncertainty DESC LIMIT k`) — Lance IS the dataset | a retrain trigger (count-gate OR time / uncertainty-drift / class-imbalance, from Lance version deltas) + a before/after eval gate on a frozen holdout |
 | **RE-PREDICT** | re-run the batch stage on the new model version, rewriting predictions | model artifacts in HF Hub; a config repoint recorded as a lance-ns lineage edge |
 
 ## Adopt / Skip

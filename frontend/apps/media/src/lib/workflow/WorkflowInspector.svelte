@@ -1,5 +1,5 @@
 <script lang="ts">
-  /** Persistent right panel. Click a node → see its inputs + intermediate
+  /** Persistent right panel. Click a node → see its inputs + interatchte
    *  results; click a result → play it here (reuses PlayerPane). */
   import { ArrowLeft, Copy, Download, Eye, EyeOff } from 'lucide-svelte';
   import { activeView } from '@lance/api';

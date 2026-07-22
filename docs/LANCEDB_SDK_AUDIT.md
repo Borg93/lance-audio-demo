@@ -10,7 +10,7 @@ one per adoption candidate, each grounded in file:line evidence.*
 | Layer | API | Where | Why |
 |---|---|---|---|
 | **Data plane** (media bytes, annotations, atlas, graph, introspection) | raw **pylance** `lance.dataset(uri, storage_options=…)` | `lancekit/{reader,writer,introspect,descriptor}`, `media_api/*` | `_rowid`-addressed `take_blobs` (lazy seekable BlobFile), `checkout_version`, `merge_insert` builder, schema metadata — the blob/rowid capabilities the lancedb Table layer wraps more thinly than we need |
-| **Search plane** | **lancedb** `connect` → `open_table`, `MatchQuery`/`PhraseQuery`, rerankers, `create_index(config=FTS()/IvfPq())` | `lancekit/registry.py`, `search_api/*`, `rmedia` ingest/engine | The query-builder surface (FTS/hybrid/rerank) is exactly what the SDK is for |
+| **Search plane** | **lancedb** `connect` → `open_table`, `MatchQuery`/`PhraseQuery`, rerankers, `create_index(config=FTS()/IvfPq())` | `lancekit/registry.py`, `search_api/*`, `ratch` ingest/engine | The query-builder surface (FTS/hybrid/rerank) is exactly what the SDK is for |
 | **Catalog seam** | **lance_namespace** REST client (`QueryTableRequest`, `merge_insert_into_table`, `DeleteFromTableRequest`) | `lancekit/{reader,writer}` catalog transports | The lance-ns merge contract — predicates are *strings on this wire* (constrains everything below) |
 
 ## Adopted now (this commit)
@@ -18,7 +18,7 @@ one per adoption candidate, each grounded in file:line evidence.*
 - **lancedb 0.33.0 → 0.34.0** (user-directed). 615 backend tests + full E2E green.
 - **Unified index API** — all 4 legacy call sites migrated, deprecation warnings gone:
   `create_fts_index(kwargs…)` → `create_index(col, config=FTS(…))` in
-  `rmedia/core/engine.py::ensure_fts_index`, `rmedia/ingest/ingest.py` (ingest +
+  `ratch/core/engine.py::ensure_fts_index`, `ratch/ingest/ingest.py` (ingest +
   `reindex_fts`), `tests/test_search_api_service.py`; legacy
   `create_index(metric=…, vector_column_name=…)` → `create_index(col,
   config=IvfPq(…))` in `ensure_vector_index` (metric now `Literal["l2","cosine","dot"]`).
@@ -64,7 +64,7 @@ default `doc_key_pattern ^[A-Za-z0-9_-]{1,64}$` admits no quotes):
   SQL-*escaped* key, and `save.py`/`tags.py` stamp that escaped value into stored row
   identity and deterministic tag ids. Latent data corruption the moment a descriptor
   uses a permissive doc-key pattern (which the function's docstring advertises).
-- `rmedia/modalities/av/cluster.py:73` interpolates a filesystem path into a `LIKE`
+- `ratch/modalities/av/cluster.py:73` interpolates a filesystem path into a `LIKE`
   filter with **no escaping** (never fires today — callers pass fixed names).
 
 → **P1 backlog: one shared pure-string predicate helper in `backend/lancekit`**
@@ -82,7 +82,7 @@ fallback — tested), `_rowid` addressing that survives compaction, `storage_opt
 threaded so ranged S3 serving works. `fetch_blob_files` is a Table-layer wrapper over
 the *same* pylance BlobFile machinery, and would need new row-id plumbing while
 breaking the NotFoundError/dangling-URI guards written against `LanceDataset`. The only
-real blob item is **data-side and already built**: run `rmedia materialize-blobs`
+real blob item is **data-side and already built**: run `ratch materialize-blobs`
 (external `file://` URIs → managed) for the S3 dataset — the known re-ingest item.
 
 ### 4. Versions / tags / branches / `optimize` — **SPLIT**
@@ -96,12 +96,12 @@ real blob item is **data-side and already built**: run `rmedia materialize-blobs
   table the app writes (`WHATS_LEFT.md` §2 says so). `/versions` materializes the full
   manifest list before capping — slows linearly with save count. **Constraint:** the
   compare-versions audit feature is served *from* retained old versions, so GC needs a
-  retention window ≥ the audit horizon. → **P2 backlog:** extend the `rmedia compact`
+  retention window ≥ the audit horizon. → **P2 backlog:** extend the `ratch compact`
   CLI / a `maintain` make target; at merge this belongs to lance-ns (catalog owns table
   maintenance), so keep it a thin scheduled call, not app machinery.
 - **Version tags: adopt WITH GC** (pylance `ds.tags` — no lancedb migration needed).
   Named review milestones ("batch-1-reviewed") are exempt from cleanup — the durable
-  audit spine once intermediate saves get pruned. Explicitly distinct from
+  audit spine once interatchte saves get pruned. Explicitly distinct from
   `annotations/tags.py` **row** tags (labels ON chunks) — different concept, zero overlap.
 - **Branches: skip (speculative).** No workflow wants isolated writable forks; branches
   would break the linear-version assumptions in the optimistic-concurrency handshake
@@ -120,12 +120,12 @@ real blob item is **data-side and already built**: run `rmedia materialize-blobs
    dead `refresh_descriptor`): per-table re-introspection on observed version drift at
    both open seams (`table_dataset`, `resolve_target`); copy-on-write, best-effort,
    stampede-guarded.
-3. **[P2] Annotations version GC — DONE** (`rmedia maintain` / `make maintain`:
+3. **[P2] Annotations version GC — DONE** (`ratch maintain` / `make maintain`:
    `cleanup_old_versions` with `--older-than-days` retention, tagged versions + latest
    always survive via `error_if_tagged_old_versions=False`) + **version tags — DONE**
-   (`rmedia tag NAME [--version N] [--delete|--list]` — review milestones exempt from
+   (`ratch tag NAME [--version N] [--delete|--list]` — review milestones exempt from
    pruning; a pruned version is a clean 404 through `/versions` checkout).
-4. **[P2] `rmedia materialize-blobs` — DONE 2026-07-21** (parity_new: media_blob 376 MB +
+4. **[P2] `ratch materialize-blobs` — DONE 2026-07-21** (parity_new: media_blob 376 MB +
    thumbnails now managed; re-synced to MinIO; 65 MB blob streamed over S3 + full
    annotations write plane verified against the S3-backed backend).
 5. **[P3] `describe_indices()` migration — DONE 2026-07-21** (`introspect.py`: type from

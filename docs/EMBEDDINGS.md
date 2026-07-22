@@ -1,6 +1,6 @@
 # Multimodal embeddings & reranking (Qwen3-VL + vLLM)
 
-> How `raudio` turns Swedish transcript text and video frames into 2048-d
+> How `ratch` turns Swedish transcript text and video frames into 2048-d
 > vectors in one shared space, and how it cross-encodes query/document pairs for
 > reranking. This is the "shared seam" of the project — read
 > [GUIDE.md §7](GUIDE.md#7-the-shared-seam-vllm-clients) for where it sits in
@@ -9,15 +9,15 @@
 > own deep-dive in **[INVESTIGATION.md](INVESTIGATION.md)** (Part B) — read that
 > before you touch image resolution or vLLM warmup.
 
-Source of truth: [`src/rmedia/vllm/embedding.py`](../src/rmedia/vllm/embedding.py),
-[`src/rmedia/vllm/reranker.py`](../src/rmedia/vllm/reranker.py),
-[`src/rmedia/vllm/image.py`](../src/rmedia/vllm/image.py),
+Source of truth: [`src/ratch/vllm/embedding.py`](../src/ratch/vllm/embedding.py),
+[`src/ratch/vllm/reranker.py`](../src/ratch/vllm/reranker.py),
+[`src/ratch/vllm/image.py`](../src/ratch/vllm/image.py),
 [`Makefile`](../Makefile) (the `embed-server` / `rerank-server` / `*-docker`
-targets), [`src/rmedia/cli/features.py`](../src/rmedia/cli/features.py) +
-[`src/rmedia/features/`](../src/rmedia/features/) (the `feature text_embedding` /
+targets), [`src/ratch/cli/features.py`](../src/ratch/cli/features.py) +
+[`src/ratch/features/`](../src/ratch/features/) (the `feature text_embedding` /
 `feature frame_embedding` commands), [`backend/search/service.py`](../backend/search/service.py)
 (`run_search`), and the chat template
-[`src/rmedia/retrieval/qwen3_vl_reranker.jinja`](../src/rmedia/retrieval/qwen3_vl_reranker.jinja).
+[`src/ratch/retrieval/qwen3_vl_reranker.jinja`](../src/ratch/retrieval/qwen3_vl_reranker.jinja).
 
 ---
 
@@ -31,7 +31,7 @@ servers. The embedder produces vectors; the reranker produces relevance scores.
 | Model ID | `Qwen/Qwen3-VL-Embedding-2B` (`EMBED_MODEL`) | `Qwen/Qwen3-VL-Reranker-2B` (`RERANK_MODEL`) |
 | Role | bi-encoder: text **and** image → one shared vector space | cross-encoder: `(query, document)` pair → one relevance score |
 | Native output | **2048-d** embedding | logits over a `["no", "yes"]` classifier head |
-| What raudio stores/uses | the full **2048** dims (`EMBED_DIM`), L2-normalized | `relevance_score ∈ [0, 1]` = softmax→`yes` probability |
+| What ratch stores/uses | the full **2048** dims (`EMBED_DIM`), L2-normalized | `relevance_score ∈ [0, 1]` = softmax→`yes` probability |
 | Compared via | **cosine** distance (IVF_PQ index) | sort by score, descending |
 | HTTP endpoint | `POST /v1/embeddings` (chat-shaped) | `POST /v1/rerank` |
 | Default URL | `http://127.0.0.1:8001` (`DEFAULT_EMBED_URL`) | `http://127.0.0.1:8002` (`DEFAULT_RERANK_URL`) |
@@ -41,11 +41,11 @@ The Python defaults live in the client constructors (`VLLMEmbeddingClient` in
 `vllm/embedding.py`, `VLLMReranker` in `vllm/reranker.py`) and the module
 constants `EMBED_MODEL`, `RERANK_MODEL`, `DEFAULT_EMBED_URL`,
 `DEFAULT_RERANK_URL`. The vector width is `EMBED_DIM = 2048` in
-[`model/schema.py`](../src/rmedia/model/schema.py) — the single source of truth.
+[`model/schema.py`](../src/ratch/model/schema.py) — the single source of truth.
 
 **Why the full 2048-d (no Matryoshka truncation)?** Qwen3-VL-Embedding-2B emits a
 2048-d vector. You *could* slice to a shorter prefix to halve storage + index
-cost, but `raudio` keeps the full width for maximum retrieval fidelity. The only
+cost, but `ratch` keeps the full width for maximum retrieval fidelity. The only
 transform is L2-normalization (the vLLM pooler returns un-normalized vectors), in
 `vllm/image.py::l2_normalize`:
 
@@ -69,14 +69,14 @@ matched against `frame_embedding`, and an image query vector against
 ## 2. Serving topology — vLLM out of process
 
 The single most important architectural fact: **vLLM does not run inside the
-`raudio` process.** It runs as two independent, long-lived HTTP servers, and
+`ratch` process.** It runs as two independent, long-lived HTTP servers, and
 *both* the offline CLI and the online FastAPI backend are merely HTTP clients of
 them.
 
 ```mermaid
 flowchart LR
-    subgraph clients["raudio process(es) — HTTP clients only"]
-        CLI["raudio CLI<br/>feature text_embedding / feature frame_embedding<br/>(ThreadPoolExecutor, TEXT_CONCURRENCY=32)"]
+    subgraph clients["ratch process(es) — HTTP clients only"]
+        CLI["ratch CLI<br/>feature text_embedding / feature frame_embedding<br/>(ThreadPoolExecutor, TEXT_CONCURRENCY=32)"]
         API["FastAPI backend<br/>run_search (one query at a time)"]
     end
 
@@ -104,7 +104,7 @@ flowchart LR
    together.
 2. **Cold start is expensive.** Loading a model takes tens of seconds and pins
    several GB of GPU memory. If that happened per CLI invocation, every
-   `rmedia feature text_embedding` resume would re-pay it, and every FastAPI
+   `ratch feature text_embedding` resume would re-pay it, and every FastAPI
    restart would re-load. A long-lived server amortizes the load — the model
    stays *warm* across all uses.
 3. **Free throughput.** A persistent server gives vLLM's continuous batcher
@@ -141,7 +141,7 @@ endpoints; pick based on your driver situation.
 | `make rerank-server` | `uvx --python 3.12 --with kernels --from vllm==0.22.0 vllm serve …` | same |
 | `make embed-server-docker` | `docker run vllm/vllm-openai:v0.22.0 …` | **recommended on Blackwell + driver 12.8** — bundles its own CUDA |
 | `make rerank-server-docker` | `docker run vllm/vllm-openai:v0.22.0 …` | same |
-| `make vllm-stop` | `docker stop raudio-embed raudio-rerank` | stop the docker servers |
+| `make vllm-stop` | `docker stop ratch-embed ratch-rerank` | stop the docker servers |
 | `make kernels-prepare` | pre-fetch FlashAttention-3 kernels (sm_120) | one-time, ~200 MB |
 
 **vLLM is pinned to one build across both paths** (`VLLM_PIN ?= vllm==0.22.0`,
@@ -189,14 +189,14 @@ CDI spec not found" on NVIDIA-only hosts.
 --hf_overrides '{"architectures":["Qwen3VLForSequenceClassification"],
                  "classifier_from_token":["no","yes"],
                  "is_original_qwen3_reranker":true}'
---chat-template ./src/rmedia/retrieval/qwen3_vl_reranker.jinja
+--chat-template ./src/ratch/retrieval/qwen3_vl_reranker.jinja
 ```
 
 The reranker is **not** an embedding model — the `hf_overrides` reconfigure it as
 `Qwen3VLForSequenceClassification` with a two-token (`no`/`yes`) classifier head.
 That, plus the chat template, is what turns `/v1/rerank` into a yes/no relevance
 scorer. Disabling image+video multimodal profiling (`{"image": 0, "video": 0}`)
-frees ~1 GB and skips a multimodal warmup raudio never uses — only text
+frees ~1 GB and skips a multimodal warmup ratch never uses — only text
 query/doc strings are ever sent to the reranker.
 
 ---
@@ -254,7 +254,7 @@ inside `run_search` (`backend/search/service.py`), which catches
 
 ### The text embedding request shape
 
-`raudio` does **not** use the plain `input: [str]` form of `/v1/embeddings`. It
+`ratch` does **not** use the plain `input: [str]` form of `/v1/embeddings`. It
 sends a Qwen-VL **chat-shaped** request — `system` (the instruction) + `user`
 (the content) + an empty trailing `assistant` turn — with the vLLM extensions
 `continue_final_message: true` and `add_special_tokens: true`:
@@ -320,7 +320,7 @@ body = {
 }
 ```
 
-On the server, [`qwen3_vl_reranker.jinja`](../src/rmedia/retrieval/qwen3_vl_reranker.jinja)
+On the server, [`qwen3_vl_reranker.jinja`](../src/ratch/retrieval/qwen3_vl_reranker.jinja)
 applies the **same** system text and the same `<Instruct>` / `<Query>` /
 `<Document>` layout. The default instruction in both places is
 `RERANK_INSTRUCTION = "Given a search query, retrieve relevant candidates that
@@ -401,7 +401,7 @@ the top candidates with full-precision vectors (see
   the lists it appears in. In **`hybrid`**, Lance's native `RRFReranker()` fuses
   the FTS + text-vector pair (the hybrid query passes
   `vector_column_name="text_embedding"` because `chunks` has two vector columns).
-  In **`all`**, raudio fuses *up to four* rankings (FTS, text-vector,
+  In **`all`**, ratch fuses *up to four* rankings (FTS, text-vector,
   frame-vector, caption/scene-vector) with its own `_rrf_fuse()` helper, keyed on
   the chunk, because Lance's native RRF only covers the FTS-plus-one-vector case.
   The independent legs are **unioned** by chunk (not chained). The `all` mode is
@@ -510,16 +510,16 @@ keep the Makefile `min_pixels`/`max_pixels` pin equal to `side²`, and ensure
 
 ## 8. The offline embed CLI commands
 
-Both columns are built with one CLI verb — `rmedia feature <name>` — driven by the
-`FEATURES` registry in [`features/columns.py`](../src/rmedia/features/columns.py).
+Both columns are built with one CLI verb — `ratch feature <name>` — driven by the
+`FEATURES` registry in [`features/columns.py`](../src/ratch/features/columns.py).
 Adding a column is one entry in that dict.
 
 | Command | Reads | Writes | Index | Resumable |
 |---|---|---|---|---|
-| `rmedia feature text_embedding` | `chunks.text` | `chunks.text_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
-| `rmedia feature frame_embedding` | `chunk_frames.frame_blob` | `chunk_frames.frame_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | all-or-nothing (skips if column exists; `--all` rebuilds) |
-| `rmedia feature caption` | `chunk_frames.frame_blob` | `chunk_frames.caption` (Gemma 4 Swedish string) via `add_columns` | FTS-able string | all-or-nothing (skips if column exists; `--all` rebuilds) |
-| `rmedia feature caption_embedding` | `chunk_frames.caption` | `chunk_frames.caption_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
+| `ratch feature text_embedding` | `chunks.text` | `chunks.text_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
+| `ratch feature frame_embedding` | `chunk_frames.frame_blob` | `chunk_frames.frame_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | all-or-nothing (skips if column exists; `--all` rebuilds) |
+| `ratch feature caption` | `chunk_frames.frame_blob` | `chunk_frames.caption` (Gemma 4 Swedish string) via `add_columns` | FTS-able string | all-or-nothing (skips if column exists; `--all` rebuilds) |
+| `ratch feature caption_embedding` | `chunk_frames.caption` | `chunk_frames.caption_embedding` (2048-d) via `add_columns` | IVF_PQ cosine | yes — null-fill via `merge_insert`; `--all` rebuilds |
 
 `caption` is a **generative** feature: it POSTs each existing frame to the Gemma 4
 VLM you already run on `:8003` (`--url`/`--model`/`--instruction` or the
@@ -534,10 +534,10 @@ Both default to `--batch-size 256` and `--url http://127.0.0.1:8001`, and build
 the IVF_PQ index with `num_partitions=256`, `num_sub_vectors=64` on completion
 (`--no-create-index` skips it). Both attach the vector column with
 `dataset.add_columns(...)` (Lance "data evolution" — one new column file, no
-fragment rewrites), implemented in `raudio.features.engine`
+fragment rewrites), implemented in `ratch.features.engine`
 (`upsert_scan_column` / `upsert_blob_column` / `ensure_vector_index`) and driven by
 the `embed_text_column` / `embed_frame_column` feature functions in
-`raudio.features.columns`. They differ only in how the UDF gets its input:
+`ratch.features.columns`. They differ only in how the UDF gets its input:
 
 - **`text_embedding` is single-pass** (`upsert_scan_column`): a `lance.batch_udf`
   reads each batch's own `text` column and returns that batch's `text_embedding`,
@@ -566,15 +566,15 @@ rebuilding the indexes after the bulk writes.
 
 | I want to… | Look at |
 |---|---|
-| Change the embed/rerank wire format | [`vllm/embedding.py`](../src/rmedia/vllm/embedding.py) / [`vllm/reranker.py`](../src/rmedia/vllm/reranker.py) **and** [`qwen3_vl_reranker.jinja`](../src/rmedia/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
-| Change the embedding dim / normalization | `EMBED_DIM` in [`model/schema.py`](../src/rmedia/model/schema.py); `l2_normalize()` in [`vllm/image.py`](../src/rmedia/vllm/image.py) |
-| Change embed image resolution | `_IMAGE_SIDE`, `_square_crop()` in [`vllm/image.py`](../src/rmedia/vllm/image.py) + the Makefile pixel pin + [INVESTIGATION.md](INVESTIGATION.md) |
-| Change caption image resolution | `frame_to_data_url` / `_CAPTION_MAX_SIDE` in [`vllm/image.py`](../src/rmedia/vllm/image.py) (full frame, no square crop) |
-| Change the caption model / prompt / language | `MEDIA_CAPTION_*` env or `feature caption --model/--instruction/--url`; defaults in [`vllm/caption.py`](../src/rmedia/vllm/caption.py) |
-| Launch / configure the vLLM servers | [`Makefile`](../Makefile) — `embed-server*`, `rerank-server*` targets (the caption VLM is run externally; raudio is only its client) |
+| Change the embed/rerank wire format | [`vllm/embedding.py`](../src/ratch/vllm/embedding.py) / [`vllm/reranker.py`](../src/ratch/vllm/reranker.py) **and** [`qwen3_vl_reranker.jinja`](../src/ratch/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
+| Change the embedding dim / normalization | `EMBED_DIM` in [`model/schema.py`](../src/ratch/model/schema.py); `l2_normalize()` in [`vllm/image.py`](../src/ratch/vllm/image.py) |
+| Change embed image resolution | `_IMAGE_SIDE`, `_square_crop()` in [`vllm/image.py`](../src/ratch/vllm/image.py) + the Makefile pixel pin + [INVESTIGATION.md](INVESTIGATION.md) |
+| Change caption image resolution | `frame_to_data_url` / `_CAPTION_MAX_SIDE` in [`vllm/image.py`](../src/ratch/vllm/image.py) (full frame, no square crop) |
+| Change the caption model / prompt / language | `MEDIA_CAPTION_*` env or `feature caption --model/--instruction/--url`; defaults in [`vllm/caption.py`](../src/ratch/vllm/caption.py) |
+| Launch / configure the vLLM servers | [`Makefile`](../Makefile) — `embed-server*`, `rerank-server*` targets (the caption VLM is run externally; ratch is only its client) |
 | Change which GPU the servers use | `VLLM_GPU` (both default here) — or `EMBED_GPU` / `RERANK_GPU` to split them — in the Makefile |
 | Change search fusion / add a mode | [`backend/search/service.py`](../backend/search/service.py) — `run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`; modes in [`backend/search/spec.py`](../backend/search/spec.py) |
-| Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/rmedia/vllm/) satisfying `EmbeddingClient`, wire it via `backend/clients.py` / `features/columns.py` |
-| Add a new derived column | one entry in `FEATURES` in [`features/columns.py`](../src/rmedia/features/columns.py) |
-| Run the offline embed passes | `rmedia feature text_embedding` / `frame_embedding` / `caption` / `caption_embedding` ([`cli/features.py`](../src/rmedia/cli/features.py)) |
+| Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/ratch/vllm/) satisfying `EmbeddingClient`, wire it via `backend/clients.py` / `features/columns.py` |
+| Add a new derived column | one entry in `FEATURES` in [`features/columns.py`](../src/ratch/features/columns.py) |
+| Run the offline embed passes | `ratch feature text_embedding` / `frame_embedding` / `caption` / `caption_embedding` ([`cli/features.py`](../src/ratch/cli/features.py)) |
 | Understand the open blockers | [TODO.md](TODO.md) and [INVESTIGATION.md](INVESTIGATION.md) |

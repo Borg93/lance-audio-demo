@@ -1,13 +1,13 @@
 # From audio to searchable text: the ASR pipeline & models
 
 > How a Swedish press-conference MP4 becomes word-aligned transcript JSON that
-> `rmedia ingest` can load. This is the **upstream half** of the write side
+> `ratch ingest` can load. This is the **upstream half** of the write side
 > sketched in the [Architecture Guide](GUIDE.md) §5 — everything that
 > happens *before* a Lance table exists. For the schema those JSONs land in,
 > see [GUIDE.md §4](GUIDE.md#4-the-data-model--four-lance-tables); for the
 > running task list see [TODO.md](TODO.md).
 
-`raudio` does **not** implement ASR. It is a thin operator wrapper around two
+`ratch` does **not** implement ASR. It is a thin operator wrapper around two
 KBLab libraries — [`easytranscriber`](https://github.com/kb-labb/easytranscriber)
 (the pipeline) and `easyaligner` (the forced-alignment backend) — pinning the
 *models* and *defaults* appropriate for a Swedish video archive. The two repo
@@ -15,19 +15,19 @@ modules that matter here are:
 
 | Module | Subcommand | What it does |
 |---|---|---|
-| [`src/rmedia/asr/transcribe.py`](../src/rmedia/asr/transcribe.py) | `rmedia transcribe` | Runs the 4-stage `easytranscriber` pipeline → alignment JSONs |
-| [`src/rmedia/asr/detect_language.py`](../src/rmedia/asr/detect_language.py) | `rmedia detect-language` | Pre-step: classify each file's language, sort into `<lang>/` |
-| [`src/rmedia/model/datamodel.py`](../src/rmedia/model/datamodel.py) | — | The Pydantic v2 models that *describe* the JSON output |
+| [`src/ratch/asr/transcribe.py`](../src/ratch/asr/transcribe.py) | `ratch transcribe` | Runs the 4-stage `easytranscriber` pipeline → alignment JSONs |
+| [`src/ratch/asr/detect_language.py`](../src/ratch/asr/detect_language.py) | `ratch detect-language` | Pre-step: classify each file's language, sort into `<lang>/` |
+| [`src/ratch/model/datamodel.py`](../src/ratch/model/datamodel.py) | — | The Pydantic v2 models that *describe* the JSON output |
 
 ---
 
 ## 1. The 4-stage pipeline at a glance
 
 `easytranscriber.pipelines.pipeline(...)` runs four models in sequence. Each
-stage writes its intermediate output to its own directory under
+stage writes its interatchte output to its own directory under
 `--output-root` (default `output/`), so a crash mid-run is resumable and you
-can inspect any stage. `rmedia transcribe` wires all four together with one call
-in [`run_transcribe`](../src/rmedia/asr/transcribe.py).
+can inspect any stage. `ratch transcribe` wires all four together with one call
+in [`run_transcribe`](../src/ratch/asr/transcribe.py).
 
 ```mermaid
 flowchart TD
@@ -48,7 +48,7 @@ flowchart TD
         F["Viterbi alignment of Whisper text<br/>against wav2vec2 emissions"]
     end
     S4 -->|"AlignmentSegment[] + WordSegment[]"| OUT["output/sv/alignments/*.json<br/>(AudioMetadata)"]
-    OUT --> ING["raudio ingest → Lance"]
+    OUT --> ING["ratch ingest → Lance"]
 ```
 
 **Why two acoustic models?** Whisper (Stage 2) is excellent at *what* was said
@@ -64,9 +64,9 @@ only used to *time* it. This is the same split popularized by WhisperX, which
 ## 2. The models this repo pins
 
 All values below are the **actual defaults** in
-[`src/rmedia/cli/`](../src/rmedia/cli/) (`cmd_transcribe`) and the
+[`src/ratch/cli/`](../src/ratch/cli/) (`cmd_transcribe`) and the
 `DEFAULT_EMISSIONS_MODEL` map in
-[`src/rmedia/asr/transcribe.py`](../src/rmedia/asr/transcribe.py) — not invented.
+[`src/ratch/asr/transcribe.py`](../src/ratch/asr/transcribe.py) — not invented.
 
 | Stage | Flag | Default | Notes |
 |---|---|---|---|
@@ -85,7 +85,7 @@ When `--emissions-model` is omitted (the default), `run_transcribe` resolves it
 from `DEFAULT_EMISSIONS_MODEL` keyed on `--language`:
 
 ```python
-# src/rmedia/asr/transcribe.py
+# src/ratch/asr/transcribe.py
 DEFAULT_EMISSIONS_MODEL = {
     "sv": "KBLab/wav2vec2-large-voxrex-swedish",
     "en": "facebook/wav2vec2-base-960h",
@@ -113,9 +113,9 @@ wheels fail to initialize (driver too old)."* `easytranscriber`, `easyaligner`,
 and `torch` are **core dependencies** (installed by a plain `uv sync`), but
 heavy — so `transcribe.py` imports them **lazily** inside `run_transcribe` and
 raises a clear hint to re-run `uv sync` if they are somehow missing. That keeps
-`rmedia --help` fast and lets the FTS-only / search-only paths run without
+`ratch --help` fast and lets the FTS-only / search-only paths run without
 touching the GPU. (The *optional* extras are `multimodal`, the client-side
-embedding/reranker stack, and `atlas` (evoc / scikit-learn, for `rmedia feature
+embedding/reranker stack, and `atlas` (evoc / scikit-learn, for `ratch feature
 atlas`) — both unrelated to ASR.)
 
 ---
@@ -124,7 +124,7 @@ atlas`) — both unrelated to ASR.)
 
 Before transcription you usually have a folder of mixed-language files. Stage 3
 (emissions) needs the *correct* language-specific wav2vec2 model, so running
-the wrong one wrecks alignment. `rmedia detect-language` samples each file,
+the wrong one wrecks alignment. `ratch detect-language` samples each file,
 classifies it, and sorts files into `<audio-dir>/<lang>/` subfolders that
 `transcribe` then processes one language at a time.
 
@@ -144,7 +144,7 @@ flowchart TD
     MAP --> MV["move file → audio-dir/&lt;lang&gt;/<br/>(unless --no-move / --dry-run)"]
 ```
 
-Grounded details from [`detect_language.py`](../src/rmedia/asr/detect_language.py):
+Grounded details from [`detect_language.py`](../src/ratch/asr/detect_language.py):
 
 - **Two backends, picked by `--model`.** `_mms_probe` loads
   `Wav2Vec2ForSequenceClassification` and softmaxes over its 256 language
@@ -179,8 +179,8 @@ Grounded details from [`detect_language.py`](../src/rmedia/asr/detect_language.p
 ## 4. The data model the pipeline produces
 
 The final alignment JSON deserializes into one `AudioMetadata` per file. The
-nesting is the contract between `easytranscriber` and `rmedia ingest`;
-[`src/rmedia/model/datamodel.py`](../src/rmedia/model/datamodel.py) vendors the Pydantic v2 models so ingest can `AudioMetadata.model_validate_json(raw)` *without*
+nesting is the contract between `easytranscriber` and `ratch ingest`;
+[`src/ratch/model/datamodel.py`](../src/ratch/model/datamodel.py) vendors the Pydantic v2 models so ingest can `AudioMetadata.model_validate_json(raw)` *without*
 importing torch. Field names and shapes match upstream exactly.
 
 ```mermaid
@@ -240,7 +240,7 @@ the key to ingest:
   `score`. These are the word-level timestamps that power "jump to this word in
   the video."
 
-At ingest, [`flatten_chunks`](../src/rmedia/ingest/ingest.py) emits one row per
+At ingest, [`flatten_chunks`](../src/ratch/ingest/ingest.py) emits one row per
 `AudioChunk` and `_pick_alignments` attaches *only the alignments fully
 contained in that chunk's `[start, end]` window* (`a.start >= start and a.end <=
 end`), serialized into the `alignments_json` JSONB column. So the chunk grain is
@@ -309,9 +309,9 @@ wav2vec2 all expect).
 
 ---
 
-## 6. How this feeds `rmedia ingest`
+## 6. How this feeds `ratch ingest`
 
-The alignment JSONs are the *only* input `rmedia ingest` consumes. Their path
+The alignment JSONs are the *only* input `ratch ingest` consumes. Their path
 follows the `--output-root` you pass to `transcribe`: the **Makefile** pipeline
 uses `output/<lang>/` (`OUTPUT_ROOT = ./output/$(LANGUAGE)`), so the Swedish run
 writes `output/sv/alignments/`; the **bare CLI** default for `--output-root` is
@@ -319,17 +319,17 @@ writes `output/sv/alignments/`; the **bare CLI** default for `--output-root` is
 
 ```bash
 # Makefile pipeline (per-language):
-rmedia ingest output/sv/alignments/*.json
+ratch ingest output/sv/alignments/*.json
 # bare CLI default (no --output-root):
-rmedia ingest output/alignments/*.json
+ratch ingest output/alignments/*.json
 ```
 
 ```mermaid
 sequenceDiagram
-    participant CLI as rmedia transcribe
+    participant CLI as ratch transcribe
     participant ET as easytranscriber.pipeline
     participant FS as output/sv/alignments/*.json
-    participant ING as rmedia ingest
+    participant ING as ratch ingest
     participant L as transcripts_v2.lance
 
     CLI->>ET: pipeline(vad, transcription_model, emissions_model, ...)
@@ -352,10 +352,10 @@ The handoff is purely by convention:
   (default `English`, but **use `Swedish`** for this corpus — the English
   stemmer can't reduce forms like `ministern` / `vägen` / `ansåg`). See
   [GUIDE.md §4](GUIDE.md#4-the-data-model--four-lance-tables) and
-  `rmedia reindex-fts` for fixing the stemmer after the fact.
+  `ratch reindex-fts` for fixing the stemmer after the fact.
 - **What the words are for.** The per-word `start`/`end` preserved in
   `alignments_json` is what the search API surfaces as exact word timestamps
-  (`rmedia search --words`) and what the frontend uses to seek the `<video>`
+  (`ratch search --words`) and what the frontend uses to seek the `<video>`
   element. The full read path picks up from
   [GUIDE.md §5 (read side)](GUIDE.md#5-end-to-end-information-flow).
 
@@ -378,7 +378,7 @@ CUDA device is present.
 
 | Module | Subcommand | Make target | What it does |
 |---|---|---|---|
-| [`src/rmedia/media/diarize.py`](../src/rmedia/media/diarize.py) | `rmedia extract-speaker-turns` | `make speaker-turns` | pyannote diarization per video → `speaker_turns.lance` |
+| [`src/ratch/media/diarize.py`](../src/ratch/media/diarize.py) | `ratch extract-speaker-turns` | `make speaker-turns` | pyannote diarization per video → `speaker_turns.lance` |
 
 ```mermaid
 flowchart TD
@@ -391,13 +391,13 @@ flowchart TD
 
 ```bash
 # default model + audio root (input/sv); resumable, one video at a time
-rmedia --db transcripts_v2.lance extract-speaker-turns --audio-root ./input/sv
+ratch --db transcripts_v2.lance extract-speaker-turns --audio-root ./input/sv
 #   or, equivalently, the Make target (honours LIMIT=N for a debug subset):
 make speaker-turns DB=transcripts_v2.lance
 ```
 
-Grounded details from [`diarize.py`](../src/rmedia/media/diarize.py) /
-[`cli/speaker.py`](../src/rmedia/cli/speaker.py):
+Grounded details from [`diarize.py`](../src/ratch/media/diarize.py) /
+[`cli/speaker.py`](../src/ratch/cli/speaker.py):
 
 - **In-process, no server.** A `Diarizer` loads
   `pyannote/speaker-diarization-community-1` (the `--model` default) once and

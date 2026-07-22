@@ -8,8 +8,8 @@ import lance
 import pyarrow as pa
 import pytest
 
-from rmedia.core.driver import _gate_filter
-from rmedia.core.registry import (
+from ratch.core.driver import _gate_filter
+from ratch.core.registry import (
     AUDIO_VIDEO,
     VIDEO_ONLY,
     ActorConfig,
@@ -17,7 +17,7 @@ from rmedia.core.registry import (
     Stage,
     StageShape,
 )
-from rmedia.features.stages import STAGES
+from ratch.features.stages import STAGES
 
 
 class TestMediaGate:

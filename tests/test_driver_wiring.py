@@ -11,8 +11,8 @@ import lance
 import pyarrow as pa
 import pytest
 
-from rmedia.core.driver import run_scan_column_stage
-from rmedia.core.registry import ActorConfig, Stage, StageShape
+from ratch.core.driver import run_scan_column_stage
+from ratch.core.registry import ActorConfig, Stage, StageShape
 
 STAGE = Stage(
     name="shout",

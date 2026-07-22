@@ -8,7 +8,7 @@ Assessment + architecture for folding **ra-anno**
 
 | Plane | Agnostic? | Reality |
 |---|---|---|
-| **Compute / stages** | **Yes — the declaration** | The 3 stage shapes describe a transform (read cols/blobs → produce cols/rows) without saying *how* it runs. lance-ns proves it: the SAME transform runs in-process (`transform_stage`) OR as a distributed Ray Data job (`ray_stage_job`). Ray Data is a **pluggable executor**, not baked in. **Caveat:** our *current* rmedia driver IS coupled to Ray Data (ray.data actors) — the shape is executor-agnostic, the runner we shipped is Ray Data. |
+| **Compute / stages** | **Yes — the declaration** | The 3 stage shapes describe a transform (read cols/blobs → produce cols/rows) without saying *how* it runs. lance-ns proves it: the SAME transform runs in-process (`transform_stage`) OR as a distributed Ray Data job (`ray_stage_job`). Ray Data is a **pluggable executor**, not baked in. **Caveat:** our *current* ratch driver IS coupled to Ray Data (ray.data actors) — the shape is executor-agnostic, the runner we shipped is Ray Data. |
 | **Data / search** | **Yes** | descriptor-driven backend + type-driven search (FTS / vector / hybrid) work over any Lance table; a new embedding column is searchable with zero edits. HTR text + page-image embeddings fit this. |
 | **Viewer** | **NO (this was the oversell)** | lance-media's frontend is a `<video>` player with a **temporal** playhead + temporal-only alignments (`{start,end}` seconds). It cannot render a page image, and has no **spatial** (bbox/polygon) overlay. For HTR/OCR/documents it is the wrong viewer. |
 
@@ -53,7 +53,7 @@ frontend — it's the spatial/document half we lack, already Arrow+WebGPU+Lance.
 
 ## 2. Recommendation: fold ra-anno's ENGINE in; keep lance-media's search/atlas/compute
 
-Don't drop lance-media — its search, atlas, descriptor backend, and rmedia
+Don't drop lance-media — its search, atlas, descriptor backend, and ratch
 pipeline are hard-won. Don't keep two repos either. **Adopt ra-anno's PixiJS+Arrow
 engine as the viewer/annotator core, and bring lance-media's search + atlas +
 compute alongside it.** They are complementary, not competing:
@@ -63,7 +63,7 @@ compute alongside it.** They are complementary, not competing:
 | type-driven **search** (FTS/vector/hybrid) | **PixiJS document viewer** (image, GPU zoom/pan) |
 | **atlas** embedding scatter (WebGPU) | **spatial annotation** (bbox/polygon draw+edit+hit-test) |
 | descriptor-driven rendering, topics, KG | **Arrow-IPC-everywhere** zero-copy data path |
-| the **rmedia pipeline** (bronze→silver stages) | **local-first** editing + undo/redo + `merge_insert` save |
+| the **ratch pipeline** (bronze→silver stages) | **local-first** editing + undo/redo + `merge_insert` save |
 | AV player (keep for audio/video corpora) | replaces FiftyOne + Label Studio |
 
 The descriptor picks the viewer per corpus: **AV corpus → the `<video>` player;
@@ -87,7 +87,7 @@ two viewers, chosen by `document.mime` + capabilities.
                                  └──────────── read/write ─────────────────┘
                                         Lance tables (bronze/silver/gold)
                                         via the lance-ns CATALOG (governed)
-                    compute: rmedia STAGES as lance-ray jobs produce pages/lines/annotations/embeddings
+                    compute: ratch STAGES as lance-ray jobs produce pages/lines/annotations/embeddings
 ```
 
 - **1 · Viewer** — serves `pages` (image bytes, immutable-cached, Range) + the
@@ -142,7 +142,7 @@ waveform on the same Arrow engine — unifies everything but is more to build; d
 ## 5. Compute mapping (this closes the loop with the earlier corrections)
 
 - **bronze** = raw media Lance tables you send in (page images, audio, video, maps).
-- **silver** = rmedia **stages** as lance-ray jobs:
+- **silver** = ratch **stages** as lance-ray jobs:
   - `htr` / `ocr` (`APPEND_ROWS`: page-image blob → `annotations`/`lines` rows with
     text + **bbox/polygon**) — the same shape as `transcribe` (audio→chunks).
   - `embed` (`SCAN_COLUMN`/`BLOB_COLUMN`: text/line/region → `+embedding`).

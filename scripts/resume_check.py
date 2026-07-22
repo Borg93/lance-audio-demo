@@ -23,10 +23,10 @@ import pyarrow as pa
 CHILD = """
 from functools import partial
 import sys
-from rmedia.core.driver import run_scan_column_stage
-from rmedia.core.registry import ActorConfig, Stage, StageShape
-from rmedia.features.embed_columns import VECTOR_TYPE
-from rmedia.features.ray_bindings import text_embed_compute
+from ratch.core.driver import run_scan_column_stage
+from ratch.core.registry import ActorConfig, Stage, StageShape
+from ratch.features.embed_columns import VECTOR_TYPE
+from ratch.features.ray_bindings import text_embed_compute
 
 stage = Stage(
     name="text_embedding",

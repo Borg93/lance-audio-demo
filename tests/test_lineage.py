@@ -8,8 +8,8 @@ import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 
-from rmedia.core.registry import ActorConfig, Stage, StageShape
-from rmedia.lineage import (
+from ratch.core.registry import ActorConfig, Stage, StageShape
+from ratch.lineage import (
     SCHEMA_URL,
     build_run_event,
     column_map,
@@ -21,11 +21,11 @@ from rmedia.lineage import (
 
 
 def test_primitives_are_kernel_owned_and_reexported() -> None:
-    """The facet primitives live in common.lancekit.openlineage; rmedia.lineage
-    re-exports the SAME objects (identity), so the import direction is common←rmedia
+    """The facet primitives live in common.lancekit.openlineage; ratch.lineage
+    re-exports the SAME objects (identity), so the import direction is common←ratch
     and both call sites share one contract."""
     from common.lancekit import openlineage as kernel
-    from rmedia import lineage as pipeline
+    from ratch import lineage as pipeline
 
     assert pipeline.WriteResult is kernel.WriteResult
     assert pipeline.build_run_event is kernel.build_run_event
@@ -178,14 +178,14 @@ class TestMeasureAndEvent:
 
 def test_standalone_and_declared_shapes_are_consistent() -> None:
     # build_run_event consumes a WriteResult with a column_map exactly as measure+column_map produce
-    from rmedia.lineage import WriteResult
+    from ratch.lineage import WriteResult
 
     r = WriteResult(version=1, row_count=2, size_bytes=10, fields=[{"name": "a", "type": "int64"}])
     r.column_map = column_map(_scan_stage())
     event = build_run_event(
         operation="TRANSFORM",
-        job_namespace="rmedia",
-        job_name="rmedia.text_embedding",
+        job_namespace="ratch",
+        job_name="ratch.text_embedding",
         inputs=[("bronze", "chunks")],
         output_namespace="silver",
         output_name="chunks",

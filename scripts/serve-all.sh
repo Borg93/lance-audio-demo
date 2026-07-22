@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bring up (or tear down) the full rmedia stack — the two vLLM servers, the
+# Bring up (or tear down) the full ratch stack — the two vLLM servers, the
 # FastAPI backend, and the Bun frontend — health-gated and detached.
 #
 #   DB=transcripts_v2.lance bash scripts/serve-all.sh up
@@ -54,26 +54,26 @@ start_detached() {  # $1=name $2=logfile  rest=command string
 }
 
 up() {
-  echo "rmedia stack ↑  (DB=$DB, vLLM GPU=$VLLM_GPU)"
+  echo "ratch stack ↑  (DB=$DB, vLLM GPU=$VLLM_GPU)"
 
   if healthy "$EMBED_PORT" health; then
     log "• vLLM embed already up (:$EMBED_PORT)"
   else
-    start_detached "vLLM embed" "$LOG_DIR/rmedia-embed.log" "VLLM_GPU=$VLLM_GPU EMBED_PORT=$EMBED_PORT make embed-server"
+    start_detached "vLLM embed" "$LOG_DIR/ratch-embed.log" "VLLM_GPU=$VLLM_GPU EMBED_PORT=$EMBED_PORT make embed-server"
     wait_healthy "$EMBED_PORT" health "vLLM embed" 300 || exit 1
   fi
 
   if healthy "$RERANK_PORT" health; then
     log "• vLLM rerank already up (:$RERANK_PORT)"
   else
-    start_detached "vLLM rerank" "$LOG_DIR/rmedia-rerank.log" "VLLM_GPU=$VLLM_GPU RERANK_PORT=$RERANK_PORT make rerank-server"
+    start_detached "vLLM rerank" "$LOG_DIR/ratch-rerank.log" "VLLM_GPU=$VLLM_GPU RERANK_PORT=$RERANK_PORT make rerank-server"
     wait_healthy "$RERANK_PORT" health "vLLM rerank" 300 || exit 1
   fi
 
   if healthy "$VIEWER_PORT" livez && healthy "$SEARCH_PORT" livez && healthy "$ANNOTATOR_PORT" livez; then
     log "• services already up (:$VIEWER_PORT/:$SEARCH_PORT/:$ANNOTATOR_PORT)"
   else
-    start_detached "services" "$LOG_DIR/rmedia-services.log" "DB=$DB MEDIA_EMBED_URL=http://127.0.0.1:$EMBED_PORT MEDIA_RERANK_URL=http://127.0.0.1:$RERANK_PORT make services-up"
+    start_detached "services" "$LOG_DIR/ratch-services.log" "DB=$DB MEDIA_EMBED_URL=http://127.0.0.1:$EMBED_PORT MEDIA_RERANK_URL=http://127.0.0.1:$RERANK_PORT make services-up"
     wait_healthy "$VIEWER_PORT" livez "viewer" 120 || exit 1
     wait_healthy "$SEARCH_PORT" livez "search" 120 || exit 1
     wait_healthy "$ANNOTATOR_PORT" livez "annotator" 120 || exit 1
@@ -82,7 +82,7 @@ up() {
   if healthy "$FRONTEND_PORT" ''; then
     log "• frontend already up (:$FRONTEND_PORT)"
   else
-    start_detached "frontend" "$LOG_DIR/rmedia-frontend.log" "FRONTEND_PORT=$FRONTEND_PORT make frontend"
+    start_detached "frontend" "$LOG_DIR/ratch-frontend.log" "FRONTEND_PORT=$FRONTEND_PORT make frontend"
     wait_healthy "$FRONTEND_PORT" '' "frontend" 180 || exit 1
   fi
 
@@ -90,7 +90,7 @@ up() {
 }
 
 down() {
-  echo "rmedia stack ↓"
+  echo "ratch stack ↓"
   for p in "$FRONTEND_PORT" "$VIEWER_PORT" "$SEARCH_PORT" "$ANNOTATOR_PORT" "$RERANK_PORT" "$EMBED_PORT"; do
     for pid in $(pids_on "$p"); do
       kill "$pid" 2>/dev/null && log "killed pid $pid (:$p)"

@@ -23,8 +23,8 @@ from fakes import (
     make_doc,
     write_synthetic_frames,
 )
-from rmedia.core.engine import upsert_scan_column
-from rmedia.features.columns import (
+from ratch.core.engine import upsert_scan_column
+from ratch.features.columns import (
     CAPTION_COLUMN,
     CAPTION_EMBED_COLUMN,
     CHUNK_KEYS,
@@ -34,7 +34,7 @@ from rmedia.features.columns import (
     embed_caption_column,
     summary_column,
 )
-from rmedia.ingest.ingest import ingest_many
+from ratch.ingest.ingest import ingest_many
 
 
 def _chunks(tmp_path: Path) -> Path:

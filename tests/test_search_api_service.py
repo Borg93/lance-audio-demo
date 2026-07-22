@@ -9,7 +9,7 @@ descriptor at runtime. Two datasets share one registry root:
 - ``articles`` — full bindings (fts + semantic + visual + scene w/ captions)
 - ``docs``     — fts only (no vectors, no frame table): the degradation probe
 
-Fakes are local by design (tests/fakes.py belongs to the old rmedia-importing
+Fakes are local by design (tests/fakes.py belongs to the old ratch-importing
 suite and stays untouched).
 """
 

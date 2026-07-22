@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from rmedia.ingest.ingest import (
+from ratch.ingest.ingest import (
     _doc_id,
     _metadata_for,
     _pick_alignments,
@@ -20,14 +20,14 @@ from rmedia.ingest.ingest import (
     ingest_many,
     load_metadata_csv,
 )
-from rmedia.model.datamodel import (
+from ratch.model.datamodel import (
     AlignmentSegment,
     AudioChunk,
     AudioMetadata,
     SpeechSegment,
     WordSegment,
 )
-from rmedia.retrieval.search import nearest_chunks
+from ratch.retrieval.search import nearest_chunks
 
 
 def _doc(

@@ -29,7 +29,7 @@ flowchart LR
     analyst(["Analyst"]):::user
 
     subgraph media["lance-media — THIS repo"]
-        rmedia["rmedia pipeline<br/>Ray + vLLM<br/><i>compute only</i>"]:::mine
+        ratch["ratch pipeline<br/>Ray + vLLM<br/><i>compute only</i>"]:::mine
         app["Search / Viewer app<br/>SvelteKit + WebGPU<br/><i>analysis frontend</i>"]:::mine
     end
 
@@ -50,7 +50,7 @@ flowchart LR
     rask["rask — deploy platform: KubeRay · Dapr · rustfs · CNPG · gateway · MFEs<br/>hosts lance-ns + lance-media; our app replaces its viewer + search MFE"]:::host
 
     analyst --> app
-    rmedia ==>|"ingest + run as movers"| bronze
+    ratch ==>|"ingest + run as movers"| bronze
     app ==>|"read only · governed · no S3 creds"| catalog
     rask -. hosts .-> ns
     rask -. hosts .-> media
@@ -75,7 +75,7 @@ this is the map plus the de-risking proof.
 |---|---|---|
 | **lance-ns** | the **lakehouse**: Lance Namespace REST catalog over pylance `DirectoryNamespace` on S3/rustfs + the event-driven medallion cascade + lineage (→ AGE) + OpenFGA governance + compaction. Ships its **own** frontend (`apps/web` — a lineage/catalog explorer). | **YES.** The catalog's `POST /v1/table/{id}/query`, `/count_rows`, `GET /{id}/blobs` (`data.py:512,570,578`) + Lance's own indexes are the query/data-access engine. |
 | **rask** | the **deployment platform**: operators (CloudNativePG, rustfs-operator, KubeRay+Kueue, NATS, Dapr, Traefik), the service-kit bricks, the SvelteKit MFEs, the gateway. | no — it hosts. |
-| **lance-media** (this repo) | (a) **batch compute** — the rmedia Ray pipeline; (b) a **search/viewer app** — the media-content frontend. | **no — and that's the point.** We are *compute* + an *analysis frontend*, not a catalog. |
+| **lance-media** (this repo) | (a) **batch compute** — the ratch Ray pipeline; (b) a **search/viewer app** — the media-content frontend. | **no — and that's the point.** We are *compute* + an *analysis frontend*, not a catalog. |
 
 lance-ns's own `docs/RASK-INTEGRATION.md` already plans to **contribute the
 lakehouse into rask** (using rask's operators). So all three converge on rask.
@@ -110,10 +110,10 @@ docstring is an open invitation:
 > *"an audio deriver slots into `_DERIVERS` later … Adding a media type = one
 > probe + one deriver here; the platform and the chart do not change."*
 
-**That is our merge surface.** Our rmedia stage registry is a much richer set of
+**That is our merge surface.** Our ratch stage registry is a much richer set of
 derivers than the single `is_image → thumbnail+embedding` one that ships:
 
-| rmedia stage | medallion mapping | layer |
+| ratch stage | medallion mapping | layer |
 |---|---|---|
 | `transcribe`/`htr`/`ocr` (media blob → text rows) | a **deriver** reading the bronze media blob, fanning out chunk/line rows (§4) — *not built as a stage today; see §7* | silver |
 | `extract_frames` (video → frame JPEGs) | a **video deriver** (new `_DERIVERS` entry) — but it *fans out rows* (see §4) | silver |
@@ -151,7 +151,7 @@ We independently built to the same contracts, so these need **no change**:
 
 - **Ingest seam.** lance-ns: `SourceAdapter.iter_objects() -> SourceObject{uri, data}`
   (`services/common/sources.py`, adapters `LocalDirSource`/`S3Source`). Ours:
-  `src/rmedia/ingest/sources.py` — same `SourceAdapter` + content-sniffed MIME.
+  `src/ratch/ingest/sources.py` — same `SourceAdapter` + content-sniffed MIME.
   Our documents-table ingest ≙ their `ingest_to_bronze` (blob-v2 at fmt 2.2,
   `source_uri` provenance, `enable_stable_row_ids=True`).
 - **Blob-v2 at 2.2.** Our `transcripts_v2.lance` is already
@@ -268,9 +268,9 @@ single OpenLineage line.
 - Merged as derivers, our stages inherit spec-true OpenLineage **for free**;
   we must supply an honest `column_map` per stage (our `Stage` declarations
   already carry `read_columns`/`key_columns`/`output_columns`, which map 1:1).
-- **Standalone rmedia today emits NOTHING** — running the pipeline outside
+- **Standalone ratch today emits NOTHING** — running the pipeline outside
   lance-ns (make targets, local Ray) produces no lineage events. Deliberate:
-  emission is the harness's job, and duplicating an emitter in rmedia would
+  emission is the harness's job, and duplicating an emitter in ratch would
   drift from their pinned spec constants. If pre-merge lineage is ever needed,
   the right shape is a thin optional emitter that imports THEIR
   `common/openlineage.py` helpers, not a reimplementation.
@@ -363,7 +363,7 @@ fan-out both run through their real compute seam; 166/166 of their tests green;
 patch in `docs/proofs/lance-ns-media-derivers.patch`).
 
 Merge sequence (all *after* the lance-ns→rask fold-in, none in this repo now):
-1. **Land rmedia as media-lane derivers** — contribute `modalities/` derivers +
+1. **Land ratch as media-lane derivers** — contribute `modalities/` derivers +
    the stage registry into `services/medallion/services/derivers.py` (+ the §4
    fan-out contract). The generic mover, cascade, lineage, FGA, quality stay put.
 2. **Add the media-gold stage** — atlas/topics/KG as `silver→gold` movers writing

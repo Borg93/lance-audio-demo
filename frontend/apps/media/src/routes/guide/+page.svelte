@@ -2030,7 +2030,7 @@
           <p class="text-muted-foreground mt-1 text-xs leading-relaxed">
             The projection is computed offline. Run
             <code class="bg-card rounded px-1 py-0.5 font-mono text-[11px]"
-              >rmedia feature atlas</code
+              >ratch feature atlas</code
             >
             to (re)generate it; the tab shows a prompt until it exists.
           </p>

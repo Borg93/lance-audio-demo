@@ -11,7 +11,7 @@
 
 Fits Toponymy on a spread sample of chunks (reusing text + text_embedding + the
 EVōC atlas map) and PRINTS the Swedish topic names per layer with cluster sizes.
-Writes nothing to the DB — just shows what `raudio feature topics` would produce,
+Writes nothing to the DB — just shows what `ratch feature topics` would produce,
 so you can judge quality before the full run. Uses the async Gemma namer for
 fast concurrent naming. Runs in its own isolated uv env (transformers<5 sealed).
 """

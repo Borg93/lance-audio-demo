@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "raudio-frontend",
+      "name": "lance-media-frontend",
       "devDependencies": {
         "turbo": "^2.3.0",
       },

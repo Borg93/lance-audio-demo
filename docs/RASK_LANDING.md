@@ -22,7 +22,7 @@
 | `backend/media_api/` (viewer role) | ✅ ready to lift | rask brick `components/services/media_api`, `:8805`, gateway `{prefix}/media` | wrap `create_media_app`'s routers in `make_service_app`; **add S3 `storage_options`** |
 | `backend/search_api/` (search role) | ✅ ready to lift | rask brick `components/services/media_search`, `:8806`, prefix **before** `/media` + core catch-all | ditto; lancedb + encoder deps in the brick's own `pyproject` |
 | `frontend/` (SvelteKit) | ✅ ready to lift (valibot + adapter-bun **done**) | a `media` MFE (`/default/media`) | remaining: `@rask/ui` shell, `kit.paths.base`, API target →gateway `:8888` |
-| `src/rmedia/` (Ray pipeline) | ✅ ready to lift | a rask brick job submitted to **KubeRay** via the Ray Jobs REST API | local `ray.init()` → `submit_stage_job`-style submission; entrypoint baked into the ray-lance image |
+| `src/ratch/` (Ray pipeline) | ✅ ready to lift | a rask brick job submitted to **KubeRay** via the Ray Jobs REST API | local `ray.init()` → `submit_stage_job`-style submission; entrypoint baked into the ray-lance image |
 | Lance data (`transcripts_v2.lance` + smoke) | ⚠️ needs a move | S3/rustfs bucket, `dir`→`rest` namespace | copy managed blobs; **re-ingest/rebase the external `media_blob` URIs** |
 | SHOULD features (voice · topics · graph) | ✅ ported + capability-gated | ride along with the two bricks | none (checks in §6) |
 | MCP | ⛔ deferred by decision (P2.9) | — | re-scope in a later goal |
@@ -31,7 +31,7 @@ The backend is already the hard 80%: **module-level `app` + lifespan**, two
 **import-independent** router groups meeting only at the composition root, the
 **target env-var contract** (`MEDIA_DB_ROOT` / `MEDIA_DESCRIPTOR_DIR` /
 `MEDIA_EMBED_URL` / `MEDIA_RERANK_URL`, `core/config.py:32-47`), **zero
-`raudio`/`rmedia` imports**, and per-group thin factories (`create_media_app`
+`ratch`/`ratch` imports**, and per-group thin factories (`create_media_app`
 `media_api/__init__.py:44`; `create_search_app` `search_api/app.py:24`) that
 re-host under `service_kit.make_service_app` without touching a router. The
 **object-storage** gap that used to sit here is now closed on the core read path:
@@ -47,7 +47,7 @@ RustFS, verified) behind env-gated `storage_options` — see §4.2.
 | `backend/media_api/` | `components/services/media_api` (+ `projects/media-api/`) | 8805 | `{prefix}/media` | **never named `viewer`**; datasets/descriptor, blob+Range, thumbnails/frames, transcript, diarization, atlas points, topics/graph/voice sub-resources |
 | `backend/search_api/` | `components/services/media_search` (+ `projects/media-search/`) | 8806 | `{prefix}/media/search` (or sibling `{prefix}/media-search`) — registered **before** `/media` and the core catch-all | FTS/vector/hybrid; query-encoder clients; **lancedb + WeSpeaker deps in the brick's own `pyproject`**, never in service-kit |
 | `frontend/` | `components/frontends/media` MFE, base `/default/media`, dev port 5180 | — | ingress path-routes `/default/media` | `@rask/ui` shell + `@rask/api`; WebGPU/arrow/xyflow port as-is |
-| `src/rmedia/` pipeline | a rask brick job (`scripts/rmedia_stage_job.py` baked into a ray image) | — | — | submitted via Ray Jobs REST (`submit_stage_job` pattern); KubeRay in prod |
+| `src/ratch/` pipeline | a rask brick job (`scripts/ratch_stage_job.py` baked into a ray image) | — | — | submitted via Ray Jobs REST (`submit_stage_job` pattern); KubeRay in prod |
 | Lance DB | S3/rustfs bucket + `dir`→`rest` namespace flip | — | — | `storage_options` via the catalog Settings helper; rebase/re-ingest external `media_blob` |
 
 > ⚠️ **Naming collision (new — not in §9).** rask **already has** a
@@ -227,7 +227,7 @@ Verified live on MinIO — **all four `built:true` over S3**: `/api/voice/status
 8478, Regeringen 4779, EU 2708) — on a compact fixture of the real topics + kg_*
 tables. Every backend read path (tabular, vector, FTS, blob, and all capabilities)
 now serves from S3.
-**External `media_blob` — also DONE:** `rmedia materialize-blobs` converts the
+**External `media_blob` — also DONE:** `ratch materialize-blobs` converts the
 external `file://` pointers to managed blob-v2 bytes so the dataset is
 self-contained on S3 (§4.4, verified end-to-end incl. a 206 Range serve).
 
@@ -259,9 +259,9 @@ So the move is: **(a)** `aws s3 cp --recursive transcripts_v2.lance
 s3://bucket/prefix/transcripts_v2.lance` (managed thumbnail + frames + manifest +
 indices are self-contained, relative internal refs — `file_format.md:3184`); then
 **(b)** fix the external `media_blob`. **DONE — implemented + verified
-(2026-07-16):** `uv run rmedia --db <ds> materialize-blobs` converts external
+(2026-07-16):** `uv run ratch --db <ds> materialize-blobs` converts external
 `media_blob` → **managed** blob-v2 bytes in place (`read_blobs`→`blob_array`
-re-wrap, the lance-ns `ingest_to_bronze` contract; `src/rmedia/ingest/materialize.py`).
+re-wrap, the lance-ns `ingest_to_bronze` contract; `src/ratch/ingest/materialize.py`).
 Proven end-to-end: `documents.media_blob` flipped `kind:3` (external `file://`) →
 `kind:2` (managed, 376 MB in-dataset for the 5-doc sample), moved to S3, and
 resolved over S3 **with every local `input/sv/*.mp4` source hidden** (65 MB, ftyp
@@ -289,7 +289,7 @@ currently only emits the `dir` shape, so a `rest` branch is a small addition.
 
 ## 5. Ray landing — local `ray.init()` → KubeRay
 
-**Today (this repo):** `rmedia pipeline run <stage>` runs
+**Today (this repo):** `ratch pipeline run <stage>` runs
 `read_lance → map_batches(actor pool) → driver-side commit` on a local
 `ray.init()` (`make pipeline-run` / `make features-all-ray`). Actors are warm
 HTTP clients to the vLLM servers; the driver commits. This is the same shape rask
@@ -311,12 +311,12 @@ KubeRay cluster, exactly like lance-ns's medallion mover
   **file format 2.2 + stable row ids**, and — crucially — splits **TABULAR**
   (distributed `lance_ray` read→map→write) vs **MEDIA** (blob-v2 present →
   pylance-native `read_blobs`+`blob_array` driver round-trip, since `lance_ray`
-  write strips blob typing). **This is the identical blob-flow contract rmedia
+  write strips blob typing). **This is the identical blob-flow contract ratch
   already enforces** (invariants §7.10/§7.11): heavy blobs never transit Ray Data
   blocks; actors compute, the driver commits.
 
-So the merge-time job is: bake `rmedia`'s stage registry into a
-`rmedia_stage_job.py` entrypoint (map `STAGE`→registry stage), add a
+So the merge-time job is: bake `ratch`'s stage registry into a
+`ratch_stage_job.py` entrypoint (map `STAGE`→registry stage), add a
 `submit_stage_job`-style caller in the media brick (or reuse medallion's), point
 `ray_address` at the KubeRay head (`http://ray-lance-head:8265` default), and let
 KubeRay handle in-job retry. The global fits (EVōC atlas, Toponymy topics,
@@ -362,7 +362,7 @@ Nothing below happens in this repo; it is the later goal's backlog.
    name collision**; set `RASK_VIEWER_INPUT/OUTPUT`.
 4. **Frontend MFE** (§3): ~~adapter-bun~~ ✅ + ~~zod→valibot~~ ✅ (done in-repo); remaining `@rask/ui` shell (~284
    call-sites) + gateway data target; four-place registration.
-5. **Ray job** (§5): bake an `rmedia_stage_job.py` entrypoint; add a Ray Jobs
+5. **Ray job** (§5): bake an `ratch_stage_job.py` entrypoint; add a Ray Jobs
    REST submitter; point at the KubeRay head.
 6. **Cleanup**: confirm the stale pre-split sibling dirs
    (`backend/{media,search,atlas,system,topics,voice,graph,diarization,mcp}/`)
@@ -387,10 +387,10 @@ independence, no corpus literals, no pipeline coupling, descriptor-only frontend
 P2.1a GATE OK (search_api does not import media_api)
 P2.1b GATE OK (media_api does not import search_api)
 P2.3  GATE OK (0 hits)   # no corpus literals in backend/media_api|search_api
-P2.8  GATE OK (0 hits)   # no raudio/rmedia imports in backend/
+P2.8  GATE OK (0 hits)   # no ratch/ratch imports in backend/
 P3.2  GATE OK (0 hits)   # no corpus literals in frontend/src
 
-$ uv run rmedia pipeline plan
+$ uv run ratch pipeline plan
 stage              shape        table         output             gate         client         actors×cpu/gpu @batch
 text_embedding     scan_column  chunks        text_embedding     all          embed          1–4×1/0 @256
 summary            scan_column  chunks        summary            all          summarize      1–2×1/0 @128
@@ -406,9 +406,9 @@ Gate commands (verbatim from `LANCE_MEDIA_MERGE.md` §6):
 
 ```bash
 grep -rn "text_embedding\|referenskod\|namn\|chunk_frames\|speaker_turns" backend/media_api backend/search_api --exclude-dir=tests && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'   # P2.3
-grep -rn "import raudio\|from raudio\|import rmedia\|from rmedia" backend/ && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'                                                          # P2.8
+grep -rn "import ratch\|from ratch\|import ratch\|from ratch" backend/ && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'                                                          # P2.8
 grep -rn "referenskod\|namn\|text_embedding\|speech_id" frontend/src --include=*.ts --include=*.svelte --exclude-dir=guide && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'          # P3.2
-uv run rmedia --db $DB pipeline plan                                                                                                                                               # P4.2 DAG
+uv run ratch --db $DB pipeline plan                                                                                                                                               # P4.2 DAG
 ```
 
 Frontend behaviour is proven live by `frontend/e2e/evidence.mjs` (`EVIDENCE

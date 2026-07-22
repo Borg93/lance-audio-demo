@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from rmedia.retrieval.search import WordMatch, iter_matching_words, parse_alignments_json
+from ratch.retrieval.search import WordMatch, iter_matching_words, parse_alignments_json
 
 
 class TestParseAlignmentsJson:

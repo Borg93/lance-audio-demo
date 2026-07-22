@@ -2,6 +2,6 @@
 
 Shared by ``backend.media_api`` and ``search.services`` — the only backend
 package either may import besides ``common.core``. Standalone by contract:
-nothing here imports the pipeline package (``rmedia``), so the backend can be
+nothing here imports the pipeline package (``ratch``), so the backend can be
 lifted into rask without dragging the pipeline along (P2.8).
 """

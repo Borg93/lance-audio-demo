@@ -67,7 +67,7 @@
       <div>
         <p class="mb-1 font-medium text-foreground">No embedding map yet</p>
         <p>
-          Run <code class="rounded bg-muted px-1 py-0.5">rmedia feature atlas</code> to build the 2-D
+          Run <code class="rounded bg-muted px-1 py-0.5">ratch feature atlas</code> to build the 2-D
           projection of the chunks table.
         </p>
       </div>

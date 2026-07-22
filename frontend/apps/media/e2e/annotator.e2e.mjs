@@ -4,7 +4,7 @@
  * draw → save → persist. Failures here mean a user-visible feature broke.
  *
  * Preconditions (asserted at start):
- *   - backend at :8000  (`uv run --no-sync rmedia --db transcripts_v2.lance serve`) with
+ *   - backend at :8000  (`uv run --no-sync ratch --db transcripts_v2.lance serve`) with
  *     MEDIA_ASSIST_URL UNSET — the AI-assist checks rely on the deterministic in-repo
  *     mock (backend/media_api/assist.py); a live model endpoint would be nondeterministic.
  *   - dev server at :5175 (`bun run dev --port 5175` in apps/media)

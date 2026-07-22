@@ -17,7 +17,7 @@ justified inline; anything unmarked is a 1:1 correspondence.*
 | `<svc>/services/` | same | Infra-free logic: viewer `clips/points/voice_service/wespeaker`; search `service/target/filters/frames/postprocess/rerank/result_cache/vector/spec/clients` + `encoders/`. |
 | RFC 9457 problem+json | `common/exceptions.py` | Ours: `common/core/{exceptions,handlers}.py` — domain errors → problem details, never `HTTPException`. Same contract. |
 | One uv project, `pythonpath` per package | `pyproject.toml` (`pythonpath=["services","."]`) | Ours: hatch packages `services/{common,viewer,search,annotator}` → imports `from common…`, `from viewer…` — the same import convention. |
-| `make services-up/down`; `rmedia serve` fans out 3 uvicorns | Tiltfile (one image, per-pod uvicorn target) | Same one-artifact/many-entrypoints model, minus k8s. |
+| `make services-up/down`; `ratch serve` fans out 3 uvicorns | Tiltfile (one image, per-pod uvicorn target) | Same one-artifact/many-entrypoints model, minus k8s. |
 
 ### Deliberately NOT adopted (merge-time infra — lance-ns owns it)
 
@@ -35,7 +35,7 @@ justified inline; anything unmarked is a 1:1 correspondence.*
   holds the shared facet contract (`WriteResult`, `facet_fields`, `build_run_event`,
   spec constants, `run_id_for`), mirroring lance-ns `services/common/openlineage.py`.
   Both consumers import DOWN from the kernel: `common.lancekit.lineage_emit` (annotator
-  write path) and `rmedia.lineage` (batch derivers, which adds only the `Stage`-aware
+  write path) and `ratch.lineage` (batch derivers, which adds only the `Stage`-aware
   `column_map`/`measure_stage`/`emit_stage_lineage` and re-exports the primitives for
   its callers). `services/` imports zero pipeline modules — verified by grep.
 

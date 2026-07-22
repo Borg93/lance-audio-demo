@@ -4,7 +4,7 @@ Audience: a developer who opened `tests/` and wants to know what these tests are
 protecting, where the seams are, and whether we're testing the right things.
 This document answers that directly. It judges **value**, not coverage %.
 
-All references use the current package layout — `src/rmedia/{model,ingest,media,
+All references use the current package layout — `src/ratch/{model,ingest,media,
 asr,vllm,features,retrieval,cli}/…` and the split FastAPI backend
 `backend/{app,state,deps,clients}.py` + `backend/{search,media,system}/`. Every
 behaviour called "verified" below runs offline (no GPU, no network, no ffmpeg)
@@ -42,7 +42,7 @@ Both halves of the system are now covered:
 
 Two facts worth knowing about the harness:
 
-1. `backend` and `raudio` are installed (editable) packages, and `tests/` has no
+1. `backend` and `ratch` are installed (editable) packages, and `tests/` has no
    `__init__.py`, so pytest's default import mode puts `tests/` on `sys.path` —
    that's how `from fakes import …` resolves the shared test doubles in
    `tests/fakes.py`. There is no `conftest.py`.
@@ -86,7 +86,7 @@ Two facts worth knowing about the harness:
 (maps each exact string to its own unit vector, so an exact-text query is its
 own nearest neighbour), `FakeReranker`, `FakeCaptionClient`/`FakeSummarizeClient`, and
 builders that write **real** on-disk Lance tables through the production helpers
-(`ingest_many`, `raudio.media.frames.write_chunk_frames`). The no-GPU tests
+(`ingest_many`, `ratch.media.frames.write_chunk_frames`). The no-GPU tests
 dogfood the real writers instead of hand-rolling Arrow tables.
 
 | File | Scope | Highlights |
@@ -106,7 +106,7 @@ dogfood the real writers instead of hand-rolling Arrow tables.
 | `test_backend_filters.py` | WHERE-clause composition + value escaping, pure | SQL-filter composition and single-quote value escaping; no Lance. |
 | `test_backend_diarization.py` | Diarization endpoint, synthetic Lance | The on-demand speaker-turns read over a synthetic `speaker_turns.lance` table (no backend restart needed). |
 | `test_vllm_schemas.py` | vLLM wire contract, pure | The request/response Pydantic value objects parsed at the transport boundary; no network. |
-| `test_backend_clients.py` | Lazy vLLM accessors + DI seam | `ensure_embedder` / `ensure_reranker` cache-then-construct; construction failure maps to **503**; `get_embedder` / `get_reranker` / `get_state` bind to `app.state.resources`. Uses the documented monkeypatch seam (the deferred `raudio.vllm.*` imports inside the accessors). |
+| `test_backend_clients.py` | Lazy vLLM accessors + DI seam | `ensure_embedder` / `ensure_reranker` cache-then-construct; construction failure maps to **503**; `get_embedder` / `get_reranker` / `get_state` bind to `app.state.resources`. Uses the documented monkeypatch seam (the deferred `ratch.vllm.*` imports inside the accessors). |
 | `test_backend_search.py` | Search modes, no GPU | Injects `FakeEmbedClient` so `semantic` / `visual` / `hybrid` / `all` actually run the real `LanceTable.search()` chain (the sync `.search()` vs async-only `.query()` path). Semantic ranks the planted nearest; GET and POST both covered; `all` + rerank runs. |
 | `test_backend_service.py` | `run_search` error & degradation branches | Against a real chunks table with **no** embedding columns: `semantic`/`hybrid`-without-embeddings → 400, `hybrid`-without-text → 400, `visual`-without-frames → empty, `all`-without-embeddings falls back to FTS, `_vector_search`/`_frame_search` missing-column → empty, `_postprocess_hits` parses + pops `alignments_json`. The reranker getter raises if touched — none of these paths should construct it. A `TestSceneSearch` class additionally builds a captioned tmp dataset (`caption` + `caption_embedding` via offline fakes) to cover the scene legs: `scene` ranks frames over `caption_embedding` and joins back to chunks, `scene_fts` runs BM25 over the `caption` text, captions ride along on every mode's hits, and both scene modes degrade to `[]` (not a 500) when frames/captions are absent. |
 | `test_backend_media.py` | Media endpoints, real Blob V2 | Builds a tmp documents table with an External `media_blob` URI + Inline `thumbnail`, mirroring ingest. Covers thumbnail inline JPEG, full + ranged (206) + suffix + unsatisfiable (416) media GETs, invalid-doc-id 400, and `chunk-frame` (404 until frames exist, `frame_idx` selection). |
@@ -126,7 +126,7 @@ The design choices that let the suite stay offline and fast:
 - **`SearchSpec` is pure validation.** No Lance/HTTP/embedding deps, so the
   clamp/enum logic is unit-tested in isolation (`test_search_spec.py`).
 - **Lazy, monkeypatchable vLLM clients.** The accessors in `backend/clients.py`
-  import `raudio.vllm.*` *inside* the function and cache the instance on
+  import `ratch.vllm.*` *inside* the function and cache the instance on
   `AppState`, giving a clean swap point and a 503-on-failure contract
   (`test_backend_clients.py`).
 - **Pure helpers extracted from I/O boundaries.** `vllm/image.py`

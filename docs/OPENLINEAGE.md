@@ -1,6 +1,6 @@
-# OpenLineage emission for rmedia stages — design (DRAFT)
+# OpenLineage emission for ratch stages — design (DRAFT)
 
-Status: **first cut, opt-in, not wired into the driver.** `src/rmedia/lineage.py`
+Status: **first cut, opt-in, not wired into the driver.** `src/ratch/lineage.py`
 builds the pieces; nothing calls it yet. This doc is the plan for wiring it in.
 
 ## Why
@@ -52,7 +52,7 @@ Two things, both pure functions the harness needs from us:
    and blob/vector-aware `facet_fields(schema)`. Byte-for-byte the shape lance-ns's
    `measure` returns.
 
-`src/rmedia/lineage.py` implements both, mirroring their field names so their
+`src/ratch/lineage.py` implements both, mirroring their field names so their
 `build_run_event` consumes our `WriteResult` unchanged.
 
 ## Two modes, one seam
@@ -74,10 +74,10 @@ their builder and delete ours.
 1. **Emit point.** After a stage's Lance write commits (in `core/engine.py` /
    `core/driver.py`, once per stage run), call `emit_stage_lineage(...)`. Blocking
    Lance IO → already off the hot path in the driver.
-2. **Config gate.** `RMEDIA_LINEAGE=off|stdout|dir:<path>|http:<url>` (default
+2. **Config gate.** `RATCH_LINEAGE=off|stdout|dir:<path>|http:<url>` (default
    `off`) selects the sink; `off` skips measure+build entirely (zero overhead),
    exactly like the search cache's `MEDIA_SEARCH_CACHE_SIZE=0`.
-3. **Namespaces.** Standalone: `job_namespace="rmedia"`, dataset namespaces
+3. **Namespaces.** Standalone: `job_namespace="ratch"`, dataset namespaces
    `bronze/silver/gold`. Merged: the harness supplies its real namespaces.
 4. **START/COMPLETE/FAIL.** Draft emits COMPLETE (and FAIL with an
    `errorMessage` facet). A START before the compute is a small addition when the

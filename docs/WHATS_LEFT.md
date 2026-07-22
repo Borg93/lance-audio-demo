@@ -159,7 +159,7 @@ flowchart TB
 
 | Claim in this doc | Status | Evidence |
 |---|---|---|
-| Lance is the system of record; Arrow schema is the registry | ✅ shipped | `backend/state.py:74-109` opens Lance tables; `src/rmedia/model/schema.py` |
+| Lance is the system of record; Arrow schema is the registry | ✅ shipped | `backend/state.py:74-109` opens Lance tables; `src/ratch/model/schema.py` |
 | Data evolution via `add_columns` (no migration) | ✅ shipped | `features/engine.py:128-137` (`@lance.batch_udf`, `add_columns(udf, read_columns=, batch_size=)` — **lance core**, not lancedb) |
 | One model layer, online + offline share a client `Protocol` | ✅ shipped | `vllm/base.py` `VLLMTransport`; online `backend/clients.py`, offline `features/columns.py:345-371` both build `VLLMEmbeddingClient(url)` |
 | ANN (IVF_PQ) + FTS (Tantivy) + reranker | ✅ shipped | `backend/search/*`, `vllm/reranker.py` |
@@ -220,7 +220,7 @@ not a rewrite.** The honest detail:
 > (diarize) → `topic_l*` (topics) → `typicality`/`is_near_dup` (selection). These
 > stages form a **dependency DAG** (embeddings need the transcript column; topics
 > need embeddings). The §1 rewrite isn't "swap the executor" — it's promoting
-> [`features/engine.py`](../src/rmedia/features/engine.py)'s hand-rolled
+> [`features/engine.py`](../src/ratch/features/engine.py)'s hand-rolled
 > `add_columns` + resume into a first-class engine where each stage declares
 > `input_columns → output_columns` and Ray walks the DAG incrementally and
 > idempotently on the GPU pool. This is exactly the workflow Lance is *designed*
@@ -232,20 +232,20 @@ not a rewrite.** The honest detail:
 Today inference is **split across two worlds** that don't share a runtime:
 
 - **Offline** (the write side): batch feature passes driven by the CLI
-  (`rmedia feature text_embedding` / `frame_embedding`, captioning, summaries)
+  (`ratch feature text_embedding` / `frame_embedding`, captioning, summaries)
   talk to a **long-running vLLM HTTP server** (`make embed-server` /
   `rerank-server`, pinned to ports 8001/8002 — see
   [`scripts/serve-all.sh`](../scripts/serve-all.sh)). The embedding client
-  ([`src/rmedia/vllm/embedding.py`](../src/rmedia/vllm/embedding.py)) fans out
+  ([`src/ratch/vllm/embedding.py`](../src/ratch/vllm/embedding.py)) fans out
   in-flight HTTP requests over a `ThreadPoolExecutor` (`TEXT_CONCURRENCY=32`,
   `IMAGE_CONCURRENCY=8`) and relies on vLLM's continuous batching. The
   **resume/checkpoint logic is hand-rolled** in
-  [`src/rmedia/features/engine.py`](../src/rmedia/features/engine.py): a Lance
+  [`src/ratch/features/engine.py`](../src/ratch/features/engine.py): a Lance
   `@batch_udf` with `merge_insert` null-fill for scan-derived columns, and a
   two-pass compute→attach with a **JSONL sidecar checkpoint** for blob-derived
   columns (frame embeds/captions). Orchestration is ad-hoc shell + Makefile
-  targets, with separate one-off scripts (`scripts/build_topics.py`,
-  `scripts/kg/*`, `scripts/caption_eval.py`). **This is exactly the hand-rolled
+  targets, with separate one-off scripts (`src/ratch/features/build_topics.py`,
+  `src/ratch/kg/*`, `scripts/caption_eval.py`). **This is exactly the hand-rolled
   concurrency + resume machinery Ray Data's `map_batches` + actor pool replaces.**
 - **Online** (the read side): the FastAPI backend calls the *same* vLLM servers
   per query for query-vector embedding and reranking. This is already cleanly
@@ -295,8 +295,8 @@ KubeRay CRDs):
   (RayJob) and Serve (RayService) definitions. This Kubernetes layer is the key
   piece that makes the actor model worth adopting at scale, vs. a hand-managed
   local Ray process.
-- **Stop having "separate scripts."** Fold `scripts/build_topics.py`,
-  `scripts/kg/build_kg.py`, the eval scripts, etc. into the same Ray-driven
+- **Stop having "separate scripts."** Fold `src/ratch/features/build_topics.py`,
+  `src/ratch/kg/build_kg.py`, the eval scripts, etc. into the same Ray-driven
   pipeline surface so they're **integrated with the rest of the codebase**
   (shared config, shared dataset handles, shared actors) rather than detached
   entrypoints with their own argument parsing and lifecycle.
@@ -338,30 +338,30 @@ versions, so fragments and superseded manifests pile up on disk.
 
 **What exists today (and its gaps):**
 
-- A `rmedia compact` command **already exists** (`cli/media.py`): it runs
+- A `ratch compact` command **already exists** (`cli/media.py`): it runs
   `dataset.optimize.compact_files(target_rows_per_fragment=1M)` and rebuilds the
   **IVF_PQ vector + BTREE scalar** indices — **but it does not rebuild the
   Tantivy FTS index** (an oversight: the FTS tail silently goes stale after an
   append) and it's manual + chunks-only.
 - `cleanup_old_versions()` is called in **exactly one place** — the KG adapter
-  (`scripts/kg/adapter.py`, `older_than=timedelta(0)`). **Every other table
+  (`src/ratch/kg/adapter.py`, `older_than=timedelta(0)`). **Every other table
   never GCs**, so old versions accumulate indefinitely.
 
 **What's actually missing — the first-class maintenance story:**
 
 - **FTS reindex on compaction** — fold `create_fts_index(..., replace=True)` into
-  `rmedia compact` so BM25 covers the new tail (recall otherwise degrades — cf.
+  `ratch compact` so BM25 covers the new tail (recall otherwise degrades — cf.
   the `nprobes`/recall gotchas in [INVESTIGATION.md](INVESTIGATION.md)).
 - **Garbage collection across all tables** — `cleanup_old_versions(older_than=…)`
   with a real retention window, not just the KG table.
 - **Cover every dataset** — extend compaction/GC/reindex beyond `chunks` to the
   frames/voice/topics/KG tables that the backfills churn hardest.
-- **Scheduling** — a `rmedia maintain` target / periodic job (a §1 Ray job?) so
+- **Scheduling** — a `ratch maintain` target / periodic job (a §1 Ray job?) so
   it isn't a manual ritual.
 - **Mostly wiring existing SDK calls.** The LanceDB Table API already provides the
   whole toolkit: **`table.optimize(cleanup_older_than=…)`** does compaction +
   version prune + **incremental index optimization** (it folds *new* rows into the
-  existing IVF/FTS indices — the tail our current `rmedia compact` leaves
+  existing IVF/FTS indices — the tail our current `ratch compact` leaves
   unindexed; note the old `retrain=` flag is now a deprecated no-op);
   `cleanup_old_versions` for GC; `list_versions` / **`restore(version)`** for the
   "roll back a bad feature pass" case; `tags` / `branches` for named/experimental
@@ -398,7 +398,7 @@ stops scaling.
   incl. REST namespaces / LanceDB Enterprise, is the SQL-side equivalent.)
 - **DuckDB `lance` extension — the optional SQL/OLAP surface (§0).** There is
   **zero DuckDB in the repo today**, and **we don't need it for retrieval** —
-  raudio already does vector/FTS/hybrid search + indexes + compaction on the
+  ratch already does vector/FTS/hybrid search + indexes + compaction on the
   **LanceDB SDK** (`ctx.chunks.search(...)`, `create_fts_index`, `create_index`).
   The extension's value is the **analytical** side: GROUP BY / JOIN / window /
   faceted stats / cross-filter (histograms, group-by-video, the curation panels
@@ -443,7 +443,7 @@ client while the server-side OLAP uses the extension over Lance.
 Both backend and frontend are **hardcoded against the current columns**
 (`doc_id`, `namn`, `referenskod`, `bildid`, `extraid`, `text`, `caption`,
 `text_embedding`, `frame_embedding`, … — see
-[`src/rmedia/model/schema.py`](../src/rmedia/model/schema.py)). Adding a field
+[`src/ratch/model/schema.py`](../src/ratch/model/schema.py)). Adding a field
 means touching the Pydantic models, API serializers, the zod schema, and the
 SvelteKit components. This is the main thing blocking schema evolution.
 
@@ -631,9 +631,9 @@ preserve curated, hand-tuned default views (title selection, default columns) as
 ## 6. 📋 Better preprocessing & configurable chunk units
 
 Chunking is currently **fixed upstream** by the ASR pipeline
-([PIPELINE.md](PIPELINE.md)) — speech segments → ~30 s `AudioChunk`s. raudio
+([PIPELINE.md](PIPELINE.md)) — speech segments → ~30 s `AudioChunk`s. ratch
 itself **does not chunk at all**: `flatten_chunks()`
-([`src/rmedia/ingest/ingest.py`](../src/rmedia/ingest/ingest.py)) just iterates
+([`src/ratch/ingest/ingest.py`](../src/ratch/ingest/ingest.py)) just iterates
 the transcriber's pre-cut chunks and copies each one's `start`/`end`/`text`
 through verbatim — there are **no size limits, no windowing, no rechunking
 parameters**. Hence the known "one press conference floods the page" redundancy
@@ -761,7 +761,7 @@ is rebuilt or incrementally maintained under the new eventing model (§8).
 
 Retrieval today runs on **three separate embedding families**, all from
 Qwen3-VL-Embedding-2B over vLLM ([EMBEDDINGS.md](EMBEDDINGS.md),
-[`src/rmedia/vllm/embedding.py`](../src/rmedia/vllm/embedding.py)): `text_embedding`
+[`src/ratch/vllm/embedding.py`](../src/ratch/vllm/embedding.py)): `text_embedding`
 (transcript text), `frame_embedding` (chunk-level image vector), and
 `caption_embedding`. The search modes (semantic / visual / scene / hybrid /
 fused) exist partly *because* these are distinct vectors in distinct columns
@@ -794,7 +794,7 @@ licensing/serving (does it run under vLLM or need its own actor runtime?).
 
 The entire write side starts with **easytranscriber** (+ easyaligner) — the
 4-stage VAD → Whisper → wav2vec2 CTC → forced-alignment pipeline wrapped by
-`rmedia transcribe` ([PIPELINE.md](PIPELINE.md)). It works, but it's a poor fit
+`ratch transcribe` ([PIPELINE.md](PIPELINE.md)). It works, but it's a poor fit
 going forward: it's an **external dependency we don't control**, its stage-by-
 stage, directory-dumping design (`output/vad/`, `output/transcriptions/`,
 `output/emissions/`, …) is built for single-process batch runs, and it does **not
@@ -806,7 +806,7 @@ is filesystem-staging, not a managed pipeline.
 
 - Each stage (VAD, transcription, alignment) becomes a **Ray Data stage /
   actor** holding a warm model on the GPU, streaming Arrow batches between
-  stages instead of staging intermediates to per-stage directories.
+  stages instead of staging interatchtes to per-stage directories.
 - The KB models stay the same (KB-Whisper, wav2vec2-voxrex, pyannote VAD — the
   *quality* isn't the problem); what changes is the **orchestration**: managed
   GPU scheduling, backpressure, retries, and checkpointing from Ray, on the same
@@ -901,7 +901,7 @@ These bets reinforce each other, which is why they're one doc:
 
 Suggested sequencing: **§5 (schema flexibility)** and **§2 (maintenance)** are
 the highest leverage / lowest risk and unblock the most other work (and §2 is
-half-built — it's mostly finishing `rmedia compact`). **§1 (Ray rewrite on
+half-built — it's mostly finishing `ratch compact`). **§1 (Ray rewrite on
 KubeRay)** is the big foundational change to land before **§6/§9/§10/§11** build
 on it. **§10 (Jina Omni)** should start as an *evaluation* in parallel since it
 could simplify the schema §5 has to model. **§3/§4/§12** and the **§7/§8** infra
@@ -910,10 +910,10 @@ choices follow once the data and runtime shapes settle.
 ---
 
 > **A note on grounding:** the "today" descriptions above were written after a
-> full read of the inference stack (`src/rmedia/vllm`, `features`, `ingest`,
+> full read of the inference stack (`src/ratch/vllm`, `features`, `ingest`,
 > `cli`, `serve-all.sh`, the Makefile), the backend (`backend/**`), the
-> storage/schema layer (`src/rmedia/model/schema.py`, every `lance.write_dataset`
-> / index call), the KG scripts (`scripts/kg/*`), and the SvelteKit frontend.
-> Where a capability already exists in embryo (`/api/columns`, `rmedia compact`,
+> storage/schema layer (`src/ratch/model/schema.py`, every `lance.write_dataset`
+> / index call), the KG scripts (`src/ratch/kg/*`), and the SvelteKit frontend.
+> Where a capability already exists in embryo (`/api/columns`, `ratch compact`,
 > the DI'd online embedder, the no-GPU FTS path) it's called out as such, so the
 > roadmap is about *finishing and reshaping* — not pretending the ground is bare.

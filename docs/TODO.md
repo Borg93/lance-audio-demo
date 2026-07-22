@@ -1,6 +1,6 @@
 # TODO — what's left
 
-Single, forward-looking backlog for `raudio`. **Done work is not listed here** —
+Single, forward-looking backlog for `ratch`. **Done work is not listed here** —
 it lives in the shipped code + git history and in [REPRODUCE.md](REPRODUCE.md) /
 [PIPELINE.md](PIPELINE.md) / [GUIDE.md](GUIDE.md) / [STORAGE.md](STORAGE.md).
 This file replaces the old root `TODO.md` (a closed-item changelog) and `todo2.md`
@@ -18,9 +18,9 @@ This file replaces the old root `TODO.md` (a closed-item changelog) and `todo2.m
 - The `make speaker-turns` batch is backfilling `speaker_turns.lance` (resumable,
   ~2–4 min/video on a shared GPU → ~1–2 days for all ~1,576). Shipped + live for
   done videos (Speakers tab).
-- ✅ **Sharded diarization is shipped** — `rmedia extract-speaker-turns --num-shards N
+- ✅ **Sharded diarization is shipped** — `ratch extract-speaker-turns --num-shards N
   --shard-index i` writes each disjoint slice to `speaker_turns_shard{i}.lance`, folded
-  back with `rmedia merge-speaker-turns` (no concurrent-write race). NOTE: the
+  back with `ratch merge-speaker-turns` (no concurrent-write race). NOTE: the
   `make speaker-turns` target itself does not pass shard flags; sharding is a manual
   N-process launch (one per GPU).
 - 📋 **On-demand diarization** — diarize a video the first time it's opened + cache,
@@ -37,7 +37,7 @@ floods the page" redundancy (adjacent 30 s clips are near-identical).
 
 1. 📋 **Group-by-video** (S, high) — collapse the result list by `doc_id` (frontend
    reshape; optional backend `per_doc_cap`). Hits already carry `doc_id`+`namn`.
-2. 📋 **Uniqueness / near-dup collapse** (M, high) — `rmedia feature uniqueness` over an
+2. 📋 **Uniqueness / near-dup collapse** (M, high) — `ratch feature uniqueness` over an
    embedding column; retrieval-level dedup of adjacent chunks.
 3. 📋 **More-like-this** (M, high) — similarity sort from a hit (reuses `_vector_search`/
    stored embeddings; zero new data/GPU).
@@ -66,7 +66,7 @@ floods the page" redundancy (adjacent 30 s clips are near-identical).
   - (The frame/caption embedding-space redo is a *separate* track — unrelated to voice.)
 - 📋 **Video-level text + summary** — `documents.full_text` (concat chunk text per `doc_id`)
   + `documents.doc_summary` (map-reduce LLM). Enables full-video FTS + summaries.
-- 📋 **Studio desktop merge** — fold ranymizer + raudio + multimodal-webgpu-demo into a
+- 📋 **Studio desktop merge** — fold ranymizer + ratch + multimodal-webgpu-demo into a
   Tauri "Studio" shell (full plan: [STUDIO_MERGE.md](STUDIO_MERGE.md)).
 
 ---

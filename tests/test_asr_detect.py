@@ -11,7 +11,7 @@ pin the parts that would *silently mislabel a batch*: vote aggregation, the
 move/dry-run side effects.
 
 Everything that touches a model or ffmpeg is patched at the seam (the symbol as
-imported into ``rmedia.modalities.av.asr.detect_language``), so the suite is fast + offline:
+imported into ``ratch.modalities.av.asr.detect_language``), so the suite is fast + offline:
 
 - ``_mms_probe`` / ``_whisper_probe`` → a fake probe ``clip -> (lang_raw, prob)``
   we control, so no model is ever loaded.
@@ -28,9 +28,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rmedia.errors import RaudioError
-from rmedia.modalities.av.asr import detect_language as dl
-from rmedia.modalities.av.asr.detect_language import detect_and_sort
+from ratch.errors import RatchError
+from ratch.modalities.av.asr import detect_language as dl
+from ratch.modalities.av.asr.detect_language import detect_and_sort
 
 # Default model id routes to the *whisper* probe branch; an mms-lid id routes to
 # the *mms* branch. We patch both so either branch yields our fake probe.
@@ -318,7 +318,7 @@ def test_audio_dir_not_a_directory_raises_domain_error(tmp_path):
     """A non-directory ``audio_dir`` is a domain error (the CLI maps it to exit 1)."""
     missing = tmp_path / "nope"
 
-    with pytest.raises(RaudioError):
+    with pytest.raises(RatchError):
         detect_and_sort(audio_dir=missing, model=WHISPER_MODEL, move=False)
 
 

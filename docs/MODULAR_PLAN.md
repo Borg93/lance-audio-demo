@@ -6,26 +6,26 @@
 > says why, **this doc is about module boundaries** — the seams and interfaces
 > that let each layer change without dragging the others. Goal stated plainly:
 > **low coupling, high modularity.** Every "today" line below is grounded in the
-> current `raudio` source. For the exhaustive, ranked list of the ~30 hardcoding
+> current `ratch` source. For the exhaustive, ranked list of the ~30 hardcoding
 > chokepoints this plan removes, see [DYNAMISM_BLOCKERS.md](DYNAMISM_BLOCKERS.md).
 
 ---
 
 ## 0. Does this fit the current stack? Yes — the seams already exist
 
-The good news from auditing the code: `raudio` is *already* structured for this.
+The good news from auditing the code: `ratch` is *already* structured for this.
 The data-evolution shape and the swap-points are in place; the plan mostly
 **formalizes** them rather than rewriting.
 
 | Seam already present | Where | Why it matters |
 |---|---|---|
-| Column-creation core is **client-free** | `src/rmedia/features/engine.py` (`upsert_scan_column` / `upsert_blob_column`, pure fns over a path + a `compute` callable) | A Ray/Ray Data driver can fan these out unchanged — the docstring even says so. |
-| Enrichment is a **registry**, one entry per column | `src/rmedia/features/columns.py` (`FEATURES: dict[str, Feature]`, each `Feature{name, table, run}`) | Adding/altering an enrichment is local; the CLI is a thin loop over it. |
+| Column-creation core is **client-free** | `src/ratch/features/engine.py` (`upsert_scan_column` / `upsert_blob_column`, pure fns over a path + a `compute` callable) | A Ray/Ray Data driver can fan these out unchanged — the docstring even says so. |
+| Enrichment is a **registry**, one entry per column | `src/ratch/features/columns.py` (`FEATURES: dict[str, Feature]`, each `Feature{name, table, run}`) | Adding/altering an enrichment is local; the CLI is a thin loop over it. |
 | Model clients are **injected `Protocol`s** | `EmbeddingClient` / `CaptionClient` / `SummarizeClient`; tests inject fakes | The compute logic doesn't depend on vLLM — swap the impl (HTTP server → Ray Serve → Ray actor) without touching column logic. |
 | Online model access is a **factory by URL** | `backend/clients.py` (`ensure_embedder`/`ensure_reranker`, URL from `Settings`, 503 on failure) | Point it at a Ray Serve ingress via `MEDIA_EMBED_URL` — no search-code change. |
-| One **transport**, shared online+offline | `src/rmedia/vllm/base.py` (`VLLMTransport`: httpx POST + threadpool fan-out) | The online query path and offline backfill already hit the same server the same way. |
+| One **transport**, shared online+offline | `src/ratch/vllm/base.py` (`VLLMTransport`: httpx POST + threadpool fan-out) | The online query path and offline backfill already hit the same server the same way. |
 | Search wire is **open dicts** | `backend/search/*` return `list[dict[str, Any]]` (`qb.to_list()`) | New columns can ride the payload without a typed-model change (the blocker is the `_HIT_COLUMNS` `SELECT`, not the envelope — see §5 of WHATS_LEFT). |
-| **FTS-only** path is GPU-free | deferred `raudio.vllm` imports in `backend/clients.py` + `state.py` | The "no Ray, no GPU" deployment already works structurally. |
+| **FTS-only** path is GPU-free | deferred `ratch.vllm` imports in `backend/clients.py` + `state.py` | The "no Ray, no GPU" deployment already works structurally. |
 
 So the work is: (1) make storage object-store + refresh-aware; (2) put **Ray
 Serve** behind the client `Protocol` (online) and **Ray Data** behind the engine

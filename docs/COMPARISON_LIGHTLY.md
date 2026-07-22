@@ -1,4 +1,4 @@
-# raudio vs. LightlyStudio — what we do better, what we can do better
+# ratch vs. LightlyStudio — what we do better, what we can do better
 
 > A code-grounded comparison against [LightlyStudio](https://github.com/lightly-ai/lightly-studio)
 > (the data-curation product) and its [`lightly`](https://github.com/lightly-ai/lightly)
@@ -29,9 +29,9 @@
 
 ## 1. Architecture at a glance
 
-| Axis | **raudio (us)** | **LightlyStudio (them)** |
+| Axis | **ratch (us)** | **LightlyStudio (them)** |
 |---|---|---|
-| System of record | **One Lance dataset**, ~11 tables (`src/rmedia/model/schema.py`) | **Relational**: DuckDB (default) / Postgres+pgvector, via SQLModel+SQLAlchemy+Alembic (`db_manager.py`) |
+| System of record | **One Lance dataset**, ~11 tables (`src/ratch/model/schema.py`) | **Relational**: DuckDB (default) / Postgres+pgvector, via SQLModel+SQLAlchemy+Alembic (`db_manager.py`) |
 | Vectors | **Lance IVF_PQ** ANN + tuned `nprobes`/refine (`backend/search/constants.py`) | SQL column — pgvector `Vector()` / DuckDB `ARRAY(Float)`, cosine `<=>`, **no ANN index** (`db_vector.py`) |
 | Full-text | **Tantivy BM25** native FTS on `text`/`caption` | none of note (filtering is SQL `WHERE`) |
 | Lance / Arrow | the **whole store** | **interchange only** — Arrow serializes 2-D embeddings for HTTP; Lance touched in ~12 files, not the SoR |
@@ -158,7 +158,7 @@
 5. **Product packaging & DX.**
    - **Python SDK with a fluent query builder** — `ls.ImageDataset.load_or_create()`,
      `dataset.query().match(ImageSampleField.tags.contains(...))`, `ls.start_gui()`.
-     We have only CLI + HTTP; an SDK would make raudio scriptable/embeddable.
+     We have only CLI + HTTP; an SDK would make ratch scriptable/embeddable.
    - **Single-artifact distribution** — the built Svelte app is copied into the
      Python package and served by FastAPI (`api/routes/webapp.py`); `pip install`
      and go. Relevant to the [STUDIO_MERGE.md](STUDIO_MERGE.md) shell and an
@@ -186,7 +186,7 @@
 
 Their **annotation** stack (COCO/YOLO/segmentation import, SAM autolabeling
 plugin), **model-evaluation** framework (OD/classification/segmentation metrics),
-and **multi-format export** (labelformat) are *labeling-tool* features. raudio is
+and **multi-format export** (labelformat) are *labeling-tool* features. ratch is
 a **search/exploration** engine over an existing archive, not a labeling tool —
 these are deliberately not our game (though the **plugin/operator system**, scoped
 ROOT/COLLECTION/SAMPLE, is an interesting extensibility model if we ever open up

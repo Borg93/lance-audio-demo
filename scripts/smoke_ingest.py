@@ -1,7 +1,7 @@
 """P1.4 mixed-media smoke: SourceAdapter → agnostic documents table → blob probes.
 
 Ingests the committed synthetic fixtures (mp4 + wav + png) through the
-:class:`~rmedia.ingest.sources.LocalDirSource` seam into a FRESH smoke DB via
+:class:`~ratch.ingest.sources.LocalDirSource` seam into a FRESH smoke DB via
 ``create_dataset`` (storage 2.2 + stable row ids + descriptor stamp): a
 media-agnostic ``documents`` table (doc_id, source_uri, media_mime, media_blob)
 plus a tiny synthetic ``chunks`` table (one probe sentence per doc) so a real
@@ -23,8 +23,8 @@ import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 
-from rmedia.core.dataset import create_dataset, read_descriptor
-from rmedia.ingest.sources import LocalDirSource, sniff_mime
+from ratch.core.dataset import create_dataset, read_descriptor
+from ratch.ingest.sources import LocalDirSource, sniff_mime
 
 DOCUMENTS_SCHEMA = pa.schema(
     [

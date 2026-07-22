@@ -1,7 +1,7 @@
 """OpenLineage facet primitives — the spec-2-0-2 RunEvent contract, kernel-owned.
 
 The shared half of lineage emission: the pieces BOTH the annotation write path
-(``common.lancekit.lineage_emit``) and the batch derivers (``rmedia.lineage``)
+(``common.lancekit.lineage_emit``) and the batch derivers (``ratch.lineage``)
 build — ``WriteResult``, the schema/columnLineage facets, and the standalone
 ``build_run_event`` mirror. Mirrors lance-ns ``services/common/openlineage.py``
 so the constants (``SCHEMA_URL``, the facet ``_schemaURL``s, the ``run_id_for``
@@ -10,7 +10,7 @@ same run identically.
 
 Kernel layer: pure over a pyarrow schema + measured stats, no ``Stage`` and no
 pipeline import. The ``Stage``-aware measurement (``column_map``, ``measure_stage``,
-``emit_stage_lineage``) lives up in ``rmedia.lineage``, which imports from here.
+``emit_stage_lineage``) lives up in ``ratch.lineage``, which imports from here.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ _COLUMN_LINEAGE_FACET_URL = (
     "https://openlineage.io/spec/facets/1-2-0/ColumnLineageDatasetFacet.json"
 )
 _DATASOURCE_FACET_URL = "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json"
-PRODUCER = "https://github.com/Borg93/lance-audio/tree/main/src/rmedia"
+PRODUCER = "https://github.com/Borg93/lance-audio/tree/main/src/ratch"
 # Same UUID5 namespace lance-ns uses, so a run id computed here == the one computed
 # there for the same seed (redeliveries MERGE onto one :Run, never duplicate).
 _RUN_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg93/lance-ns")

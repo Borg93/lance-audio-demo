@@ -401,7 +401,7 @@ def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:
     # spec-2-0-2 RunEvent shape
     assert ev["eventType"] == "COMPLETE"
     assert ev["schemaURL"].endswith("2-0-2/OpenLineage.json#/$defs/RunEvent")
-    assert ev["producer"].endswith("rmedia")  # our emitter, drop-in with lance-ns constants
+    assert ev["producer"].endswith("ratch")  # our emitter, drop-in with lance-ns constants
     assert ev["job"]["name"] == "annotate.merge_insert"
     assert ev["run"]["runId"]  # deterministic uuid5
     # media unit in, annotations table out

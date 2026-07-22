@@ -1,7 +1,7 @@
 """Cross-encoder reranker client for the vLLM Qwen3-VL-Reranker-2B server.
 
-Vendored from ``src/rmedia/clients/reranker.py`` (backend split, §4.4: no
-``rmedia`` imports in ``backend/``), trimmed to the plain HTTP client — the
+Vendored from ``src/ratch/clients/reranker.py`` (backend split, §4.4: no
+``ratch`` imports in ``backend/``), trimmed to the plain HTTP client — the
 LanceDB ``Reranker`` adapter stays in the pipeline package (the search service
 calls :meth:`VLLMReranker.rerank` directly; hybrid fusion uses Lance's
 built-ins). Counterpart to the bi-encoder in

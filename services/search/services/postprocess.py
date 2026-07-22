@@ -4,7 +4,7 @@ Ported from ``backend.search.postprocess``: pops each hit's alignments column
 into ``alignments`` (parsed), attaches the representative-frame caption, and
 provides the RRF fusion for the multi-ranking modes — all keyed on the
 descriptor's identity fields instead of a hardcoded chunk key.
-``parse_alignments_json`` is vendored from ``src/rmedia/retrieval/search.py``
+``parse_alignments_json`` is vendored from ``src/ratch/retrieval/search.py``
 because the backend may not import the pipeline package (§4.4).
 """
 
@@ -31,7 +31,7 @@ def parse_alignments_json(raw: str | list[dict[str, Any]] | None) -> list[dict[s
     Returns an empty list on null, missing, malformed, or non-list input — so
     the annotated return type holds for every branch (Lance may hand back either
     the raw JSON string or an already-decoded value). Vendored verbatim from
-    ``rmedia.retrieval.search.parse_alignments_json``.
+    ``ratch.retrieval.search.parse_alignments_json``.
     """
     if not raw:
         return []

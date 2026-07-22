@@ -1,4 +1,4 @@
-# Reproducing raudio from scratch
+# Reproducing ratch from scratch
 
 > The single authoritative runbook: from a fresh clone to a running, searchable
 > system. For *what each stage does* see [PIPELINE.md](PIPELINE.md) (ASR) and
@@ -23,7 +23,7 @@ paths. Pick one:
 
 > [!NOTE]
 > **Database name.** The default DB is already **`transcripts_v2.lance`** (the
-> `Makefile` `DB ?=` default and the `rmedia --db` CLI default both point at it).
+> `Makefile` `DB ?=` default and the `ratch --db` CLI default both point at it).
 > The commands below still pass `DB=transcripts_v2.lance` explicitly for clarity;
 > override `DB=…` only to build a throwaway or alternate corpus.
 
@@ -65,7 +65,7 @@ make check-deps        # verifies uv + ffmpeg + hf + GPU, prints install hints
 | ASR align (sv) | `KBLab/wav2vec2-large-voxrex-swedish` | in-process (Path B) |
 | Text/image embed | `Qwen/Qwen3-VL-Embedding-2B` | vLLM `:8001` |
 | Reranker | `Qwen/Qwen3-VL-Reranker-2B` | vLLM `:8002` |
-| Captioner | `google/gemma-4-31B-it` | **your** Gemma at `:8003` (external — raudio is only a client) |
+| Captioner | `google/gemma-4-31B-it` | **your** Gemma at `:8003` (external — ratch is only a client) |
 
 Install Python deps:
 
@@ -120,7 +120,7 @@ populated rows / files), so a crash is safe to re-run. Run every command with
 > [!NOTE]
 > **Two equivalent execution paths for the derived columns.** The per-column
 > `make embed-chunks` / `feature …` targets below are the original in-process
-> path. The **Ray Data pipeline** (`rmedia pipeline`, added in Phase 1 of
+> path. The **Ray Data pipeline** (`ratch pipeline`, added in Phase 1 of
 > [LANCE_MEDIA_MERGE.md](LANCE_MEDIA_MERGE.md)) runs the *same* stages as
 > `read_lance → map_batches(actor pool) → driver-side commit` — the form that
 > submits unchanged to KubeRay in production (see
@@ -172,7 +172,7 @@ flowchart TD
 
 | Column(s) | Written by | From |
 |---|---|---|
-| `doc_id · speech_id · chunk_id · audio_path · start · end · duration · text · sample_rate · audio_duration · audio_frames · num_logits · language · language_prob · alignments_json · metadata` | `make ingest-full` (`rmedia ingest`) | the per-video **alignment JSON** from `make transcribe` (easytranscriber 0.2.3 + easyaligner 0.2.3: pyannote VAD → KB-Whisper → wav2vec2-large-voxrex-swedish CTC emissions → forced align). `doc_id`=SHA1(audio_path); `text` is Swedish-FTS-indexed; `alignments_json` is word-level JSONB |
+| `doc_id · speech_id · chunk_id · audio_path · start · end · duration · text · sample_rate · audio_duration · audio_frames · num_logits · language · language_prob · alignments_json · metadata` | `make ingest-full` (`ratch ingest`) | the per-video **alignment JSON** from `make transcribe` (easytranscriber 0.2.3 + easyaligner 0.2.3: pyannote VAD → KB-Whisper → wav2vec2-large-voxrex-swedish CTC emissions → forced align). `doc_id`=SHA1(audio_path); `text` is Swedish-FTS-indexed; `alignments_json` is word-level JSONB |
 | `referenskod · namn · bildid · extraid` | `make ingest-full` | **`video_batcher.csv`**, keyed by `bildid` (= `audio_path` stem) |
 | `text_embedding` (2048-d) | `make embed-chunks` (`feature text_embedding`) | `chunks.text` → embed server `:8001` (Qwen3-VL-Embedding-2B) |
 | `frame_embedding` (2048-d) | `make atlas-visual` (join) | `chunk_frames.frame_embedding` @ frame_idx=0 |
@@ -181,7 +181,7 @@ flowchart TD
 | `atlas_img_x/y/cluster` | `make atlas-visual` | EVōC over `frame_embedding` |
 | `atlas_cap_x/y/cluster` | `make atlas-caption` | EVōC over `caption_embedding` |
 | `topic_l0…topic_l{N} · doc_topic` | `make topics` (`feature topics`) | Toponymy clusters over the atlas map, named by Gemma `:8003` (isolated PEP-723 worker) |
-| `summary` *(not built on live DB)* | `rmedia feature summary` | `chunks.text` → instruct LLM |
+| `summary` *(not built on live DB)* | `ratch feature summary` | `chunks.text` → instruct LLM |
 
 **`chunk_frames.lance`** — one representative frame per chunk (append-only, separate table).
 
@@ -208,7 +208,7 @@ flowchart TD
 
 | Column(s) | Written by | From |
 |---|---|---|
-| `doc_id · turn_id · speaker_label · start · end` | `make speaker-turns` (`rmedia extract-speaker-turns`) | source MP4 (`--audio-root`) → **pyannote** `speaker-diarization-community-1`, in-process. `speaker_label` is anonymous & **per-video only**. No vector column → no IVF index (optional `doc_id` BTREE) |
+| `doc_id · turn_id · speaker_label · start · end` | `make speaker-turns` (`ratch extract-speaker-turns`) | source MP4 (`--audio-root`) → **pyannote** `speaker-diarization-community-1`, in-process. `speaker_label` is anonymous & **per-video only**. No vector column → no IVF index (optional `doc_id` BTREE) |
 
 > **`video_batcher.csv`** (local-only, **gitignored** — `.gitignore:32`; a fresh
 > clone does **not** have it) is the one human-curated bootstrap input,
@@ -304,7 +304,7 @@ on the Hub.
 ```bash
 make speaker-turns DB=$DB AUDIO_DIR=$AUDIO_DIR        # → speaker_turns.lance (all videos)
 make speaker-turns DB=$DB AUDIO_DIR=$AUDIO_DIR LIMIT=5  # debug: first 5 videos only
-#   = rmedia --db $DB extract-speaker-turns --audio-root $AUDIO_DIR
+#   = ratch --db $DB extract-speaker-turns --audio-root $AUDIO_DIR
 #     (--only-null by default skips already-diarized videos; --all rebuilds clean)
 ```
 
@@ -317,7 +317,7 @@ print('turns:', ds.count_rows(), '| videos:', len(set(ds.to_table(columns=['doc_
 
 > **No vector reindex.** `speaker_turns` carries **no** embedding column, so there
 > is nothing to IVF-index and **no `feature … embedding` step** for it. Optional
-> housekeeping only: `make compact DB=$DB TABLE=speaker_turns` (=`rmedia --db $DB
+> housekeeping only: `make compact DB=$DB TABLE=speaker_turns` (=`ratch --db $DB
 > --table speaker_turns compact`) consolidates the per-video append fragments
 > (exactly like `chunk_frames`), and a scalar **BTREE on `doc_id`** speeds the
 > per-video lookup at full-corpus scale.
@@ -332,26 +332,26 @@ print('turns:', ds.count_rows(), '| videos:', len(set(ds.to_table(columns=['doc_
 A Swedish entity/relation graph extracted from the transcripts by **LightRAG**
 (gemma-4-31B), folded into four `kg_*` Lance tables that the `/api/graph` router
 queries live via **lance-graph**'s Cypher engine. **Full guide + knobs:
-[`scripts/kg/README.md`](../scripts/kg/README.md); how to use the graph +
+[`src/ratch/kg/README.md`](../src/ratch/kg/README.md); how to use the graph +
 Cypher cookbook: [`docs/GRAPH.md`](GRAPH.md).** Three steps because LightRAG's
 deps must stay **isolated** from the project venv:
 
 ```bash
 # 1. export chunks → JSONL (project venv)
-uv run python scripts/kg/export_chunks.py --db $DB --out kg_work/chunks.jsonl
+uv run python src/ratch/kg/export_chunks.py --db $DB --out kg_work/chunks.jsonl
 
 # 2. LightRAG extraction (ISOLATED ephemeral env — never the project venv).
 #    Prefer your LOCAL Gemma at :8003 — single-tenant, no network, identical
 #    model to the shared remote. Resumable: re-run after any interruption.
 uv run --no-project --with lightrag-hku --with openai --with tiktoken \
     --with nano-vectordb --with networkx --with numpy \
-    python scripts/kg/build_kg.py --chunks kg_work/chunks.jsonl --work kg_work/rag \
+    python src/ratch/kg/build_kg.py --chunks kg_work/chunks.jsonl --work kg_work/rag \
     --gemma-url http://localhost:8003/v1 --gleaning 0 --persist-interval 300 --dummy-embeddings
 
 # 3. fold LightRAG output → kg_* Lance tables (project venv). DETERMINISTIC:
 #    adapter.py + generic_sv.py clean junk + demote generic group/role/category
 #    nouns to OTHER by pure morphology/blocklist — no LLM, byte-stable re-runs.
-uv run --with networkx python scripts/kg/adapter.py --work kg_work/rag --db $DB
+uv run --with networkx python src/ratch/kg/adapter.py --work kg_work/rag --db $DB
 ```
 
 Gate (tables built + counts):
@@ -364,7 +364,7 @@ curl -sS http://localhost:8101/api/graph/status   # {"built":true,"entities":…
 > with `--num-shards N --shard-index i` into per-shard `--work` dirs, then fold all
 > of them in one step 3 (`adapter.py --work dir0 dir1 … --db $DB`). The flags above
 > (debounced persists + dummy embeddings + `--gleaning 0`) take it from ~8 to ~190
-> docs/min — see `scripts/kg/README.md`.
+> docs/min — see `src/ratch/kg/README.md`.
 >
 > **No restart needed.** The `/api/graph` router's **version-keyed cache** picks up
 > the rewritten `kg_*` tables on the next query — the `/graph` page updates without
@@ -391,7 +391,7 @@ What it brings up (idempotent — skips any port already healthy):
 |---|---|---|---|
 | vLLM embed | 8001 | `make embed-server` | `VLLM_GPU` (default 0) |
 | vLLM rerank | 8002 | `make rerank-server` | `VLLM_GPU` |
-| FastAPI backend | 8000 | `rmedia --db $DB serve` | — |
+| FastAPI backend | 8000 | `ratch --db $DB serve` | — |
 | Frontend (Bun) | 5274 | `frontend/server.ts` (prod build, proxies `/api`) | — |
 
 > FTS-only / search-only? You can skip the vLLM servers and run just `make
@@ -410,7 +410,7 @@ dataset self-contained, move it, serve it.
 # 1. Make media self-contained (the lance-ns way): external file:// media_blob
 #    → managed blob-v2 bytes, so a plain copy carries them and they resolve
 #    off-box. Run LOCALLY (where the file:// sources still resolve), BEFORE moving.
-uv run rmedia --db transcripts_v2.lance materialize-blobs   # → MATERIALIZE OK
+uv run ratch --db transcripts_v2.lance materialize-blobs   # → MATERIALIZE OK
 
 # 2. Move the dataset to the bucket + verify tabular/vector/blob reads over S3.
 uv run --with numpy python scripts/move_to_s3.py transcripts_v2.lance \
@@ -470,7 +470,7 @@ path works without the full corpus; it does **not** exercise transcribe or scene
       enforces this).
 - [ ] On a CUDA-12.8 driver, use `make embed-server-docker` / `rerank-server-docker`.
 - [ ] Blackwell: `make kernels-prepare` once before the native `embed-server`.
-- [ ] Captions/topics need **your own Gemma at `:8003`** — raudio never starts it.
+- [ ] Captions/topics need **your own Gemma at `:8003`** — ratch never starts it.
 - [ ] FTS must be built with `--fts-language Swedish` (the English stemmer mangles
       `ministern`/`vägen`); `make ingest-full` does this, or `make reindex-fts`.
 - [ ] Diarization (`make speaker-turns`) needs a **cached HF token** (`hf auth

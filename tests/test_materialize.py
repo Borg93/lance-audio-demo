@@ -8,7 +8,7 @@ import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 
-from rmedia.ingest.materialize import materialize_blobs
+from ratch.ingest.materialize import materialize_blobs
 
 
 def _external_blob_documents(db: Path, payload: bytes) -> tuple[Path, Path]:

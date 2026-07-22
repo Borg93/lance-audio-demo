@@ -8,7 +8,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from rmedia.core.dataset import (
+from ratch.core.dataset import (
     DESCRIPTOR_METADATA_KEY,
     append_rows,
     create_dataset,

@@ -1,10 +1,10 @@
 """In-process WeSpeaker voiceprint primitives — vendored from the pipeline.
 
-Vendored from ``src/rmedia/modalities/av/voiceprint.py`` (``VoiceEncoder``,
+Vendored from ``src/ratch/modalities/av/voiceprint.py`` (``VoiceEncoder``,
 ``load_wav_16k_mono``, ``l2_normalize``, ``MIN_TURN_DURATION_S``, ``TurnSpan``,
 ``embed_turn_slices`` + their internal helpers) and
-``src/rmedia/modalities/av/diarize.py`` (``extract_wav_16k_mono``,
-``TARGET_SAMPLE_RATE``): the backend must not import the ``rmedia`` pipeline
+``src/ratch/modalities/av/diarize.py`` (``extract_wav_16k_mono``,
+``TARGET_SAMPLE_RATE``): the backend must not import the ``ratch`` pipeline
 package (LANCE_MEDIA_MERGE §4.4), and this file is the upload voice-search
 path's whole model surface. The pipeline-side writers (Lance table output,
 batch drivers) are deliberately NOT vendored — serving only embeds one uploaded
@@ -39,7 +39,7 @@ DEFAULT_MODEL: str = "pyannote/speaker-diarization-community-1"
 EMBEDDING_SUBFOLDER: str = "embedding"
 
 #: Dimensionality of a WeSpeaker-ResNet34 voiceprint (vendored from
-#: ``rmedia.model.schema.VOICE_EMBED_DIM`` — the voice capability's contract).
+#: ``ratch.model.schema.VOICE_EMBED_DIM`` — the voice capability's contract).
 VOICE_EMBED_DIM: int = 256
 
 #: Below this turn duration the encoder's embeddings are unreliable (it was

@@ -1,4 +1,4 @@
-# raudio — Architecture & Onboarding Guide
+# ratch — Architecture & Onboarding Guide
 
 > A developer's map of `lance-audio`. The [README](README.md) is the quickstart
 > (how to install and run); this guide is the **why and how** — the mental
@@ -11,7 +11,7 @@
 
 ## 1. What this is, in one paragraph
 
-`raudio` is a **searchable archive viewer for Swedish press-conference video
+`ratch` is a **searchable archive viewer for Swedish press-conference video
 transcripts**. It ingests [`easytranscriber`](https://github.com/kb-labb/easytranscriber)
 output (word-aligned transcript JSON + the source MP4) into a single, self-contained
 [Lance](https://lancedb.com) dataset, then serves keyword / semantic / visual /
@@ -22,7 +22,7 @@ sidecar JSON files or disk walks at query time.
 
 **Deep-dive docs** (this guide is the overview; these go deep with diagrams):
 - [`docs/PIPELINE.md`](docs/PIPELINE.md) — the ASR pipeline & models (easytranscriber / easyaligner, KB-Whisper, wav2vec2, MMS-LID).
-- [`docs/STORAGE.md`](docs/STORAGE.md) — how raudio uses Lance (Blob V2 tiers, JSONB, IVF_PQ / FTS).
+- [`docs/STORAGE.md`](docs/STORAGE.md) — how ratch uses Lance (Blob V2 tiers, JSONB, IVF_PQ / FTS).
 - [`docs/EMBEDDINGS.md`](docs/EMBEDDINGS.md) — Qwen3-VL embeddings + reranking over vLLM.
 - [`docs/VOICE.md`](VOICE.md) — speaker voiceprints + cross-video voice search (pyannote WeSpeaker, `/api/voice`).
 - [`docs/INVESTIGATION.md`](docs/INVESTIGATION.md) — root-cause analysis of the Lance indexation + vLLM crash issues.
@@ -33,9 +33,9 @@ sidecar JSON files or disk walks at query time.
 
 ```mermaid
 flowchart LR
-    subgraph WRITE["WRITE SIDE — offline, CLI (src/rmedia/)"]
+    subgraph WRITE["WRITE SIDE — offline, CLI (src/ratch/)"]
         direction TB
-        CLI["raudio CLI<br/>transcribe → ingest → feature text_embedding<br/>→ extract-chunk-frames → feature frame_embedding"]
+        CLI["ratch CLI<br/>transcribe → ingest → feature text_embedding<br/>→ extract-chunk-frames → feature frame_embedding"]
     end
 
     subgraph DB["transcripts_v2.lance/ (single Lance dataset)"]
@@ -64,17 +64,17 @@ flowchart LR
 ```
 
 > Both the CLI batch path and the backend serving path call the **same**
-> `src/rmedia/vllm/embedding.py` client (the "shared seam", §7) → the same
+> `src/ratch/vllm/embedding.py` client (the "shared seam", §7) → the same
 > out-of-process vLLM servers.
 
-- **Write side** = `src/rmedia/` (the `raudio` Typer CLI + the ingest/extract
+- **Write side** = `src/ratch/` (the `ratch` Typer CLI + the ingest/extract
   modules). Run offline, GPU-heavy, idempotent/resumable.
 - **Read side** = `services/{viewer,search}` (FastAPI) + `frontend/apps/media` (SvelteKit). Run online,
   mostly CPU; only the embedding step needs a GPU and that lives in a **separate
   vLLM process** reached over HTTP, so FTS-only use works with no GPU at all.
-- **`src/rmedia/vllm/embedding.py` is the one module both sides share** — see §7.
+- **`src/ratch/vllm/embedding.py` is the one module both sides share** — see §7.
 - **`demo/` is unrelated** — a standalone in-browser (transformers.js/WebGPU)
-  transcription playground. It shares zero code with raudio. See §10.
+  transcription playground. It shares zero code with ratch. See §10.
 
 ---
 
@@ -104,7 +104,7 @@ for free. The CLI/backend are just HTTP clients of it.
 ## 4. The data model — four core Lance tables (+ a derived `topics.lance`)
 
 All four core tables live inside one `transcripts_v2.lance/` directory (gitignored —
-local working data). Schemas: [`src/rmedia/model/schema.py`](src/rmedia/model/schema.py).
+local working data). Schemas: [`src/ratch/model/schema.py`](src/ratch/model/schema.py).
 A fifth, single-row `topics.lance` is written on the read side by `feature topics`
 (its `hierarchy` column holds the nested topic tree) and is served by `/api/topics`
 (`services/viewer/api/v1/endpoints/topics.py`) — see §6.
@@ -216,21 +216,21 @@ carry no identity across videos (the cross-video "voice search" axis is built
 
 ```mermaid
 flowchart TD
-    S0["video_batcher.csv<br/>(local, gitignored seed)"] -->|"raudio download<br/>(httpx → iiifintern-ai.ra.se)"| S1["input/sv/{bildid}.mp4"]
-    S1 -->|"raudio detect-language<br/>(Whisper-large-v3 / MMS-LID)"| A["input/&lt;lang&gt;/*.mp4<br/>(sorted; corpus is sv-only)"]
-    A -->|"raudio transcribe<br/>(easytranscriber → KB-Whisper)"| C["output/&lt;lang&gt;/alignments/*.json"]
-    C -->|"raudio thumbnail (ffmpeg)"| D["thumbnails/{stem}.jpg"]
+    S0["video_batcher.csv<br/>(local, gitignored seed)"] -->|"ratch download<br/>(httpx → iiifintern-ai.ra.se)"| S1["input/sv/{bildid}.mp4"]
+    S1 -->|"ratch detect-language<br/>(Whisper-large-v3 / MMS-LID)"| A["input/&lt;lang&gt;/*.mp4<br/>(sorted; corpus is sv-only)"]
+    A -->|"ratch transcribe<br/>(easytranscriber → KB-Whisper)"| C["output/&lt;lang&gt;/alignments/*.json"]
+    C -->|"ratch thumbnail (ffmpeg)"| D["thumbnails/{stem}.jpg"]
     C --> E
     D --> E
-    E["raudio ingest<br/>JSON → chunks + documents · FTS + scalar indexes"] --> F
-    F["raudio feature text_embedding<br/>Qwen3-VL text → text_embedding · IVF_PQ"] --> G
-    G["raudio extract-chunk-frames<br/>ffmpeg → chunk_frames.lance (append-only)"] --> H
-    H["raudio feature frame_embedding<br/>Qwen3-VL image → frame_embedding (add_columns)"] --> I
-    I["raudio feature caption + caption_embedding<br/>Gemma 4 Swedish caption (:8003) → IVF_PQ"] --> J
-    J["raudio extract-speaker-turns<br/>(pyannote → speaker_turns.lance)"] --> K
-    K["raudio feature atlas / atlas-visual / atlas-caption<br/>EVōC → atlas_* (text/visual/caption)"] --> L
-    L["raudio feature topics<br/>topic_l*/doc_topic + topics.lance"] --> M
-    M["raudio compact<br/>compact fragments + rebuild indexes"] --> DB["(transcripts_v2.lance)<br/>self-contained dataset"]
+    E["ratch ingest<br/>JSON → chunks + documents · FTS + scalar indexes"] --> F
+    F["ratch feature text_embedding<br/>Qwen3-VL text → text_embedding · IVF_PQ"] --> G
+    G["ratch extract-chunk-frames<br/>ffmpeg → chunk_frames.lance (append-only)"] --> H
+    H["ratch feature frame_embedding<br/>Qwen3-VL image → frame_embedding (add_columns)"] --> I
+    I["ratch feature caption + caption_embedding<br/>Gemma 4 Swedish caption (:8003) → IVF_PQ"] --> J
+    J["ratch extract-speaker-turns<br/>(pyannote → speaker_turns.lance)"] --> K
+    K["ratch feature atlas / atlas-visual / atlas-caption<br/>EVōC → atlas_* (text/visual/caption)"] --> L
+    L["ratch feature topics<br/>topic_l*/doc_topic + topics.lance"] --> M
+    M["ratch compact<br/>compact fragments + rebuild indexes"] --> DB["(transcripts_v2.lance)<br/>self-contained dataset"]
 
     classDef done fill:#1a1a1e,stroke:#34d399,color:#e9e9ea;
     class S0,S1,A,C,D,E,F,G,H,I,J,K,L,M done;
@@ -246,7 +246,7 @@ flowchart TD
 > models: [`docs/PIPELINE.md`](docs/PIPELINE.md).
 
 The corpus seed is a local, gitignored `video_batcher.csv`
-(`referenskod;namn;extraid;bildid`, ~1576 rows, never committed); `rmedia download`
+(`referenskod;namn;extraid;bildid`, ~1576 rows, never committed); `ratch download`
 pulls each row's `bildid` as `https://iiifintern-ai.ra.se/api/audiovideo/{bildid}.mp4`
 into `input/sv/`, then `detect-language` (Whisper-large-v3) sorts the Swedish files
 into `input/sv/sv/` and the pipeline continues sv-only.
@@ -297,7 +297,7 @@ flowchart TD
 key, not chained. `prefilter` (`spec.prefilter`, default True) is applied only to
 the `chunks`-table legs (`fts` / vector / `hybrid`); the frame legs
 (`visual` / `scene`) filter **after** ranking, in `_frames_to_chunk_hits`. The
-cross-encoder rerank (`src/rmedia/vllm/reranker.py`) reads **only** the transcript
+cross-encoder rerank (`src/ratch/vllm/reranker.py`) reads **only** the transcript
 `text` column over the top `rerank_n` hits and is a no-op for image-only queries.
 
 Detailed embedding/serving flow: [`docs/EMBEDDINGS.md`](docs/EMBEDDINGS.md).
@@ -317,7 +317,7 @@ the frontend stops asking after the first 404 (frames not extracted yet) via the
 
 ### Speaker diarization (the "Speakers" tab)
 
-A separate, offline pipeline answers **"who spoke when"** for each video. `raudio
+A separate, offline pipeline answers **"who spoke when"** for each video. `ratch
 extract-speaker-turns` runs [`pyannote/speaker-diarization-community-1`](https://hf.co/pyannote/speaker-diarization-community-1)
 **in-process** (pyannote.audio is in the main venv — no isolated worker, no vLLM
 server; GPU-accelerated when available, ~90 s/video, crash-resumable at video
@@ -335,7 +335,7 @@ they distinguish speakers within one recording, never across the corpus.
 
 > ```mermaid
 > flowchart LR
->     V["source MP4"] -->|"raudio extract-speaker-turns<br/>(pyannote, in-process, GPU)"| ST["speaker_turns.lance<br/>(doc_id, turn_id, label, start, end)"]
+>     V["source MP4"] -->|"ratch extract-speaker-turns<br/>(pyannote, in-process, GPU)"| ST["speaker_turns.lance<br/>(doc_id, turn_id, label, start, end)"]
 >     ST -->|"GET /api/diarization/{doc_id}"| TAB["player → Speakers tab<br/>(diarization-timeline.svelte)"]
 > ```
 
@@ -344,7 +344,7 @@ they distinguish speakers within one recording, never across the corpus.
 ## 6. Where things live (navigation map)
 
 ```
-src/rmedia/                Python pipeline — the WRITE side + search/embedding library
+src/ratch/                Python pipeline — the WRITE side + search/embedding library
 ├── cli/                 Typer app: subcommands (the operator entry point)
 ├── __init__.py            library public API (re-exports model / ingest / retrieval)
 ├── model/                 DATA CONTRACTS
@@ -459,11 +459,11 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
   would share one mutable list across instances.
 - **Lazy *module* imports from CLI commands / the backend.** The heavy modules
   (`lance`, `torch`-backed ASR, the `vllm/` clients) are imported inside
-  the function body that needs them, so `rmedia --help` stays instant and the
+  the function body that needs them, so `ratch --help` stays instant and the
   optional `[multimodal]`/transcribe extras stay optional. Within those modules
   imports are normal top-level — the optionality comes from *the module not being
   imported at startup*, not from scattering imports inside methods. (Verified:
-  `import raudio` pulls no `httpx`/`torch`/`PIL`.)
+  `import ratch` pulls no `httpx`/`torch`/`PIL`.)
 - **`_Ctx` class as CLI global state.** `--db` / `--table` are stashed on a
   module-level class by the root callback rather than threaded through every
   signature. It's process-global; the idiomatic Typer alternative is `ctx.obj`.
@@ -507,7 +507,7 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
 The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
 2-D scatter for an in-browser "map of the corpus" view. It has three parts:
 
-- **The features** (`src/rmedia/features/columns.py`, `FEATURES` registry):
+- **The features** (`src/ratch/features/columns.py`, `FEATURES` registry):
   - `atlas` — the **text** space. Fits an [EVōC](https://github.com/TutteInstitute/evoc)
     layout over `text_embedding` and writes `atlas_x` / `atlas_y` / `atlas_cluster`
     onto `chunks` via `add_columns`.
@@ -523,7 +523,7 @@ The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
   - `topics` — names the EVōC regions: runs in an isolated env and writes the
     `topic_l*` / `doc_topic` columns onto `chunks` plus the single-row `topics.lance`
     (the nested hierarchy served by `/api/topics`).
-  - The three atlas features delegate the EVōC fit to `src/rmedia/features/projection.py`
+  - The three atlas features delegate the EVōC fit to `src/ratch/features/projection.py`
     (`project_atlas_columns`). EVōC is CPU-only (numba / scikit-learn, no torch) and
     ships in the `[atlas]` optional extra.
 - **The columns on `chunks`:** the three triplets above — `atlas_x/y/cluster`
@@ -555,7 +555,7 @@ The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
 **transformers.js + ONNX Runtime Web** running Whisper/KB-Whisper on **WebGPU**
 (WASM fallback), in a Web Worker. It supports realtime mic/tab capture and batch
 file transcription, exports txt/srt/json/wav, and builds to static HTML for
-Hugging Face Spaces. **It shares no code, types, or deps with raudio** and targets
+Hugging Face Spaces. **It shares no code, types, or deps with ratch** and targets
 a totally different runtime (browser, not server/GPU/vLLM).
 
 Treat it as a quarantined playground — it should not be held to the core's
@@ -581,7 +581,7 @@ uvx ruff check src backend tests        # lint  (config in pyproject.toml; lint-
 uvx ruff check --fix src backend tests  # autofix
 uvx ty check                            # type-check
 uv run pytest                           # tests (unit always; backend smoke if dataset present)
-uv run rmedia --help                    # CLI smoke
+uv run ratch --help                    # CLI smoke
 
 # Frontend (and demo) — from frontend/ (or demo/)
 bun install
@@ -601,7 +601,7 @@ bun run build                # static SPA into build/
 | Python lint | `uvx ruff check src backend tests` | 0 issues |
 | Python types | `uvx ty check` | 0 diagnostics |
 | Python tests | `uv run pytest` | all pass (backend smoke auto-skips without a local dataset) |
-| CLI | `uv run rmedia --help` | exit 0 |
+| CLI | `uv run ratch --help` | exit 0 |
 | Frontend types | `cd frontend && bun run check` | 0 errors / 0 warnings |
 | Frontend build | `cd frontend && bun run build` | succeeds |
 
@@ -627,15 +627,15 @@ the authoritative, commented description of how every process fits together.
 
 | I want to… | Look at |
 |---|---|
-| Change the table schema | `src/rmedia/model/schema.py` |
-| Change how transcripts become rows | `src/rmedia/ingest/ingest.py` (`flatten_chunks`, `_document_row`) |
-| Add/modify a CLI command | `src/rmedia/cli/` |
-| Add/modify a feature column (embed/summary/caption) | `src/rmedia/features/columns.py` (+ `features/engine.py`) |
+| Change the table schema | `src/ratch/model/schema.py` |
+| Change how transcripts become rows | `src/ratch/ingest/ingest.py` (`flatten_chunks`, `_document_row`) |
+| Add/modify a CLI command | `src/ratch/cli/` |
+| Add/modify a feature column (embed/summary/caption) | `src/ratch/features/columns.py` (+ `features/engine.py`) |
 | Change search behavior / add a mode | `backend/search/service.py` (`run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`) + `backend/search/spec.py` (`SearchMode`) |
-| Touch the Atlas projection / map endpoints | `src/rmedia/features/projection.py` (EVōC fit) + `backend/atlas/router.py` (`/api/atlas/*`) |
-| Touch speaker diarization (Speakers tab) | `src/rmedia/media/diarize.py` (pyannote → `speaker_turns`) + `backend/diarization/router.py` (`/api/diarization/{doc_id}`) + `frontend/src/lib/components/diarization-timeline.svelte` |
+| Touch the Atlas projection / map endpoints | `src/ratch/features/projection.py` (EVōC fit) + `backend/atlas/router.py` (`/api/atlas/*`) |
+| Touch speaker diarization (Speakers tab) | `src/ratch/media/diarize.py` (pyannote → `speaker_turns`) + `backend/diarization/router.py` (`/api/diarization/{doc_id}`) + `frontend/src/lib/components/diarization-timeline.svelte` |
 | Add an API endpoint | the relevant router under `backend/` (`search/`, `media/`, `atlas/`, `system/`) |
-| Change the embedding/rerank wire format | `src/rmedia/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
+| Change the embedding/rerank wire format | `src/ratch/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
 | Touch the search UI | `frontend/src/routes/+page.svelte` + `frontend/src/lib/components/` |
 | Change the API client / response shapes | `frontend/src/lib/api.ts` (Zod schemas) |
 | Change how processes are launched | `Makefile` |

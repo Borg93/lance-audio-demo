@@ -17,14 +17,14 @@ from pathlib import Path
 
 import lance
 
-from rmedia.clients.caption import (
+from ratch.clients.caption import (
     CAPTION_INSTRUCTION,
     CAPTION_MODEL,
     DEFAULT_CAPTION_URL,
     VLLMCaptionClient,
 )
 
-OUT_DIR = Path("/tmp/raudio_caption_eval")
+OUT_DIR = Path("/tmp/ratch_caption_eval")
 
 
 def main() -> None:
@@ -69,13 +69,13 @@ def main() -> None:
         pairs.append({**m, "caption": cap})
 
     html = (
-        "<!doctype html><meta charset='utf-8'><title>raudio caption eval</title>"
+        "<!doctype html><meta charset='utf-8'><title>ratch caption eval</title>"
         "<style>body{background:#111;color:#eee;font:14px system-ui;margin:24px}"
         "h1{font-size:18px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}"
         "figure{margin:0;background:#1c1c1c;border:1px solid #333;border-radius:8px;overflow:hidden}"
         "img{width:100%;display:block;background:#000}figcaption{padding:10px;line-height:1.4}"
         ".meta{color:#888;font-size:11px}</style>"
-        f"<h1>raudio — Gemma 4 Swedish captions ({len(pairs)} sampled frames of {total})</h1>"
+        f"<h1>ratch — Gemma 4 Swedish captions ({len(pairs)} sampled frames of {total})</h1>"
         f"<p class='meta'>model={CAPTION_MODEL} · prompt={CAPTION_INSTRUCTION}</p>"
         f"<div class='grid'>{''.join(rows_html)}</div>"
     )

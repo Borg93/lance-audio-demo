@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from rmedia.clients.schemas import (
+from ratch.clients.schemas import (
     ChatCompletionResponse,
     ChatMessage,
     EmbeddingResponse,
