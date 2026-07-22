@@ -170,7 +170,7 @@ def cmd_extract_speaker_turns(
     # One-time scalar BTREE index on doc_id — speeds the per-video lookup the
     # backend's GET /api/diarization/{doc_id} does at full-corpus scale. Built
     # once after the batch loop (not per-append), idempotent via replace=True,
-    # and only when the table actually has rows. Mirrors features/build_topics.py: the
+    # and only when the table actually has rows. Mirrors the topics service worker: the
     # index is an optimization, never required, so a failure just logs a skip.
     if turns_path.exists():
         turns_tbl = db.open_table(table_name)

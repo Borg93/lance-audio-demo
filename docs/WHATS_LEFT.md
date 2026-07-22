@@ -244,7 +244,7 @@ Today inference is **split across two worlds** that don't share a runtime:
   `@batch_udf` with `merge_insert` null-fill for scan-derived columns, and a
   two-pass compute→attach with a **JSONL sidecar checkpoint** for blob-derived
   columns (frame embeds/captions). Orchestration is ad-hoc shell + Makefile
-  targets, with separate one-off scripts (`src/ratch/features/build_topics.py`,
+  targets, with separate one-off scripts (`services/models/topics/worker.py`,
   `src/ratch/kg/*`, `scripts/caption_eval.py`). **This is exactly the hand-rolled
   concurrency + resume machinery Ray Data's `map_batches` + actor pool replaces.**
 - **Online** (the read side): the FastAPI backend calls the *same* vLLM servers
@@ -295,7 +295,7 @@ KubeRay CRDs):
   (RayJob) and Serve (RayService) definitions. This Kubernetes layer is the key
   piece that makes the actor model worth adopting at scale, vs. a hand-managed
   local Ray process.
-- **Stop having "separate scripts."** Fold `src/ratch/features/build_topics.py`,
+- **Stop having "separate scripts."** Fold `services/models/topics/worker.py`,
   `src/ratch/kg/build_kg.py`, the eval scripts, etc. into the same Ray-driven
   pipeline surface so they're **integrated with the rest of the codebase**
   (shared config, shared dataset handles, shared actors) rather than detached

@@ -132,4 +132,4 @@ include = ["src", "services", "tests"]
 # The project resolves transformers 5.x (via the ASR/torch stack); toponymy needs
 # transformers<5, and LightRAG is heavy — so these can't share the main env. They
 # are never imported by the typed package — exclude from type-checking.
-exclude = ["src/ratch/kg", "src/ratch/features/build_topics.py"]
+exclude = ["src/ratch/kg", "services/models"]

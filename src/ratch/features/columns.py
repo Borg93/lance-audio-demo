@@ -329,36 +329,25 @@ def _run_atlas_caption(
 def _run_topics(
     db_path: Path, opts: FeatureRunOptions, _progress: Callable[[int], None] | None
 ) -> int:
-    """Toponymy topic layers — runs in an ISOLATED uv env (build_topics.py, this package).
+    """Toponymy topic layers — delegated to the `topics` MODEL SERVICE.
 
-    Toponymy pins ``transformers<5``; rather than dragging that into the ratch
-    project we shell out to a PEP-723 script whose deps resolve in their own
-    sealed env (same isolation rationale as the vLLM servers). The worker reads
-    ``chunks.text``/``text_embedding``/``atlas_x``/``atlas_y`` and writes the
-    ``topic_l*`` columns + a ``<db>.topics.json`` artifact back. ``opts.url``, if
-    set, overrides the LLM (Gemma) endpoint; the embedder defaults to :8001.
+    ratch does not import toponymy; it calls the topics endpoint
+    (``ratch.endpoints.topics``). The service (``services/models/topics/``) owns
+    the transformers<5 env — isolated from ratch, over HTTP at merge (Ray Serve)
+    or in its sealed env locally. The service writes the ``topic_l*`` columns; we
+    then derive the nested hierarchy JSON here (pure ratch compute). ``opts.url``,
+    if set, overrides the LLM (Gemma) endpoint.
     """
-    import subprocess
+    from ratch.endpoints.topics import get_topics_client
 
-    script = Path(__file__).resolve().parent / "build_topics.py"
-    cmd = ["uv", "run", "--no-project", str(script), "--db", str(db_path)]
-    if opts.url:
-        cmd += ["--llm-url", opts.url]
-    # stderr inherits (live Toponymy/keyphrase progress bars); stdout carries the
-    # final row count.
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(f"topics worker failed (exit {proc.returncode})")
-    # The isolated worker wrote the topic_l*/doc_topic columns; derive the nested
-    # hierarchy from them and store it as JSONB in Lance (for the Tree treemap).
+    rows = get_topics_client().build(db_path, llm_url=opts.url)
+    # The service wrote the topic_l*/doc_topic columns; derive the nested
+    # hierarchy from them and store it as JSONB in Lance (for the Tree treemap) —
+    # pure ratch compute, no model dep.
     from .topic_tree import build_topic_tree
 
     build_topic_tree(db_path)
-    lines = (proc.stdout or "").strip().splitlines()
-    try:
-        return int(lines[-1]) if lines else 0
-    except ValueError:
-        return 0
+    return rows
 
 
 FEATURES: dict[str, Feature] = {

@@ -1,18 +1,9 @@
-# /// script
-# requires-python = ">=3.10,<3.13"
-# dependencies = [
-#   "toponymy",
-#   "openai>=1.40",
-#   "pylance>=4.0",
-#   "numpy<3",
-# ]
-# ///
 """Isolated Toponymy topic-modelling worker for ratch (`ratch feature topics`).
 
-Runs ENTIRELY in its own uv-managed env. Toponymy pins ``transformers<5``; that
-constraint lives only in *this* script's ephemeral env and never enters the
-ratch project (uv reads the PEP 723 block above with --no-project, builds a sealed env, caches
-it). The main repo declares no toponymy/transformers dependency at all.
+Runs in its OWN env (services/models/topics/pyproject.toml). Toponymy pins
+``transformers<5``; that constraint lives only in this service's env and never
+enters the ratch project — the whole point of a separate model service. ratch
+calls it through ``ratch.endpoints.topics`` (a thin client), never imports it.
 
 Pipeline (all reuse of existing artifacts — nothing re-embedded, nothing
 destroyed):
@@ -61,6 +52,20 @@ def _require(schema_names: list[str], db: Path) -> None:
             f"chunks.lance in {db} is missing {missing}. "
             "Run `ratch feature text_embedding` and `ratch feature atlas --space text` first."
         )
+
+
+def run(db_path: str, llm_url: str | None = None) -> int:
+    """Programmatic entry — the Ray Serve deployment (deployment.py) calls this;
+    it delegates to the CLI ``main()`` so the sealed-CLI path and the served path
+    run identical compute."""
+    argv = ["worker", "--db", db_path]
+    if llm_url:
+        argv += ["--llm-url", llm_url]
+    saved, sys.argv = sys.argv, argv
+    try:
+        return main()
+    finally:
+        sys.argv = saved
 
 
 def main() -> int:
