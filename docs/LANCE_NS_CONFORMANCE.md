@@ -29,14 +29,15 @@ justified inline; anything unmarked is a 1:1 correspondence.*
   their verified token subject plugs in; the FGA model is theirs.
 - **Helm chart/Tilt**: deployment artifacts belong to the merged repo.
 
-### Known coupling (dissolves at merge)
+### Layering — clean (no kernel→pipeline imports)
 
-- **`common/lancekit/lineage_emit.py` imports `rmedia.lineage`** (`build_run_event`,
-  facet builders). This is the one common→pipeline import — the lineage facet contract
-  is genuinely shared between the batch derivers (rmedia) and the annotator write path.
-  At merge lance-ns's catalog mover emits lineage, so this seam becomes a no-op; until
-  then the shared facet logic has one home in `rmedia.lineage` rather than being copied.
-  (The old "backend has zero rmedia imports" invariant retired with the monolith.)
+- **OpenLineage primitives are kernel-owned** — `common/lancekit/openlineage.py`
+  holds the shared facet contract (`WriteResult`, `facet_fields`, `build_run_event`,
+  spec constants, `run_id_for`), mirroring lance-ns `services/common/openlineage.py`.
+  Both consumers import DOWN from the kernel: `common.lancekit.lineage_emit` (annotator
+  write path) and `rmedia.lineage` (batch derivers, which adds only the `Stage`-aware
+  `column_map`/`measure_stage`/`emit_stage_lineage` and re-exports the primitives for
+  its callers). `services/` imports zero pipeline modules — verified by grep.
 
 ## Frontend: `frontend/` ↔ lance-ns `frontend/`
 

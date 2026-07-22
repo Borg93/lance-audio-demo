@@ -1,11 +1,11 @@
 """Emit a spec-2-0-2 OpenLineage RunEvent for an annotation write (pre-merge).
 
 At merge, lance-ns's mover emits lineage when the write routes through the catalog;
-until then we emit it ourselves from the write path, REUSING ``src/rmedia/lineage.py``
-(whose spec constants match lance-ns ``services/common/openlineage.py``) so a pre-merge
-event and a merged event describe the same run identically. Configurable sink
-(``MEDIA_LINEAGE_SINK=stdout|log|none``) — no external dependency; the catalog/NATS
-transport is the merge step.
+until then we emit it ourselves from the write path, using the kernel's OpenLineage
+primitives (``common.lancekit.openlineage``, whose spec constants match lance-ns
+``services/common/openlineage.py``) so a pre-merge event and a merged event describe
+the same run identically. Configurable sink (``MEDIA_LINEAGE_SINK=stdout|log|none``)
+— no external dependency; the catalog/NATS transport is the merge step.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sys
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from rmedia.lineage import WriteResult, build_run_event, facet_fields
+from common.lancekit.openlineage import WriteResult, build_run_event, facet_fields
 
 if TYPE_CHECKING:
     import lance

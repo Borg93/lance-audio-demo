@@ -20,6 +20,19 @@ from rmedia.lineage import (
 )
 
 
+def test_primitives_are_kernel_owned_and_reexported() -> None:
+    """The facet primitives live in common.lancekit.openlineage; rmedia.lineage
+    re-exports the SAME objects (identity), so the import direction is common←rmedia
+    and both call sites share one contract."""
+    from common.lancekit import openlineage as kernel
+    from rmedia import lineage as pipeline
+
+    assert pipeline.WriteResult is kernel.WriteResult
+    assert pipeline.build_run_event is kernel.build_run_event
+    assert pipeline.facet_fields is kernel.facet_fields
+    assert pipeline.SCHEMA_URL == kernel.SCHEMA_URL
+
+
 def _scan_stage() -> Stage:
     return Stage(
         name="text_embedding",

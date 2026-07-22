@@ -39,7 +39,7 @@
     "@lance/api": "workspace:*"
   },
   "devDependencies": {
-    "@lance-media/config": "workspace:*",
+    "@lance/config": "workspace:*",
     "@sveltejs/kit": "^2.27.0",
     "@sveltejs/vite-plugin-svelte": "^6.0.0",
     "@tailwindcss/vite": "^4.0.0",

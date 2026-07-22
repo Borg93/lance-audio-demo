@@ -21,7 +21,7 @@
         "svelte": "^5.36.0",
       },
       "devDependencies": {
-        "@lance-media/config": "workspace:*",
+        "@lance/config": "workspace:*",
         "@sveltejs/kit": "^2.27.0",
         "@sveltejs/vite-plugin-svelte": "^6.0.0",
         "@tailwindcss/vite": "^4.0.0",
@@ -71,7 +71,7 @@
         "valibot": "^1.4.2",
       },
       "devDependencies": {
-        "@lance-media/config": "workspace:*",
+        "@lance/config": "workspace:*",
         "@sveltejs/kit": "^2.27.0",
         "@sveltejs/vite-plugin-svelte": "^6.0.0",
         "@tailwindcss/vite": "^4.0.0",
@@ -109,7 +109,7 @@
       },
     },
     "packages/config": {
-      "name": "@lance-media/config",
+      "name": "@lance/config",
       "version": "0.0.0",
     },
     "packages/engine": {
@@ -242,11 +242,11 @@
 
     "@lance-media/annotator": ["@lance-media/annotator@workspace:apps/annotator"],
 
-    "@lance-media/config": ["@lance-media/config@workspace:packages/config"],
-
     "@lance-media/media": ["@lance-media/media@workspace:apps/media"],
 
     "@lance/api": ["@lance/api@workspace:packages/api"],
+
+    "@lance/config": ["@lance/config@workspace:packages/config"],
 
     "@lance/engine": ["@lance/engine@workspace:packages/engine"],
 
