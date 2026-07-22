@@ -1,4 +1,4 @@
-# ─── raudio dev helpers ────────────────────────────────────────────────
+# ─── rmedia dev helpers ────────────────────────────────────────────────
 # All paths are relative to the project root. Override on the CLI:
 #   make search Q='spring of hope'
 #   make demo AUDIO_ROOT=./examples
@@ -245,7 +245,7 @@ EMBED_MEM_FRAC  ?= 0.45
 RERANK_MEM_FRAC ?= 0.45
 
 # Caption model — a generative VLM (Gemma 4) you ALREADY run locally on :8003.
-# raudio is only a CLIENT of it: `rmedia feature caption` POSTs frames to this
+# rmedia is only a CLIENT of it: `rmedia feature caption` POSTs frames to this
 # URL. We do NOT start the server (no Make target spins one up) — point these at
 # wherever your Gemma serves. The client also honours MEDIA_CAPTION_URL/MODEL.
 CAPTION_URL      ?= http://127.0.0.1:8003
@@ -306,7 +306,7 @@ embed-server-docker:  ## Run vLLM embedding server in Docker (no driver pin).
 		# count for the 2B tower before trusting the image-embed path (INVESTIGATION.md).
 
 rerank-server-docker: ## Run vLLM reranker server in Docker (no driver pin).
-	# Reranker is text-only in raudio (cross-encoder over query/doc strings),
+	# Reranker is text-only in rmedia (cross-encoder over query/doc strings),
 	# so we disable image+video profiling — frees ~1 GB and skips the
 	# multimodal warmup that would otherwise size a deepstack buffer for
 	# inputs we never send.
@@ -379,13 +379,13 @@ caption-server:       ## Start a local caption VLM (port 8003) on GPU $(CAPTION_
 		--limit-mm-per-prompt '{"image": 1}'
 
 embed-chunks:         ## Embed chunks.text → text_embedding column + IVF_PQ index.
-	uv run --extra multimodal raudio --db $(DB) feature text_embedding --url $(EMBED_URL)
+	uv run --extra multimodal rmedia --db $(DB) feature text_embedding --url $(EMBED_URL)
 
 extract-chunk-frames: ## One JPEG per chunk.start into chunk_frames (Ray actor pool).
 	uv run rmedia --db $(DB) extract-chunk-frames --audio-root $(AUDIO_DIR)
 
 embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ index.
-	uv run --extra multimodal raudio --db $(DB) feature frame_embedding --url $(EMBED_URL)
+	uv run --extra multimodal rmedia --db $(DB) feature frame_embedding --url $(EMBED_URL)
 
 speaker-turns:        ## Diarize each video → speaker_turns.lance (who-spoke-when; needs pyannote + cached HF token).
 	uv run rmedia --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
@@ -397,14 +397,14 @@ build-speakers:       ## Duration-weighted centroid per (doc, label) → speaker
 	uv run rmedia --db $(DB) build-speakers
 
 cluster-speakers:     ## Seeded EVōC over speakers → speaker_cluster (cross-video identities; needs atlas extra).
-	uv run --extra atlas raudio --db $(DB) cluster-speakers --seed 42 --validate
+	uv run --extra atlas rmedia --db $(DB) cluster-speakers --seed 42 --validate
 
 caption-chunk-frames: ## Caption EXISTING frames → chunk_frames.caption (resumable; uses your Gemma at $(CAPTION_URL)).
-	uv run --extra multimodal raudio --db $(DB) feature caption \
+	uv run --extra multimodal rmedia --db $(DB) feature caption \
 		--url $(CAPTION_URL) --model $(CAPTION_MODEL) --checkpoint $(CAPTION_CKPT)
 
 embed-captions:       ## Embed chunk_frames.caption → caption_embedding + IVF_PQ index (needs embed-server).
-	uv run --extra multimodal raudio --db $(DB) feature caption_embedding --url $(EMBED_URL)
+	uv run --extra multimodal rmedia --db $(DB) feature caption_embedding --url $(EMBED_URL)
 
 # Caption pipeline: write the Swedish captions, then embed them for scene search.
 # Reuses existing frames — run `extract-chunk-frames` first if chunk_frames is empty.
@@ -415,11 +415,11 @@ captions: caption-chunk-frames embed-captions  ## Caption frames + embed caption
 # embedding exists: text ← embed-chunks, visual ← embed-chunk-frames,
 # caption ← embed-captions. EVōC is CPU-only (no GPU/embed-server needed).
 atlas:                ## Text EVōC map (atlas_x/y/cluster) from chunks.text_embedding.
-	uv run --extra atlas raudio --db $(DB) feature atlas
+	uv run --extra atlas rmedia --db $(DB) feature atlas
 atlas-visual:         ## Visual EVōC map (atlas_img_*) from frame_embedding.
-	uv run --extra atlas raudio --db $(DB) feature atlas --space visual
+	uv run --extra atlas rmedia --db $(DB) feature atlas --space visual
 atlas-caption:        ## Caption EVōC map (atlas_cap_*) from caption_embedding.
-	uv run --extra atlas raudio --db $(DB) feature atlas --space caption
+	uv run --extra atlas rmedia --db $(DB) feature atlas --space caption
 atlas-all: atlas atlas-visual atlas-caption  ## All three atlas projections.
 
 topics:               ## Build Swedish topic layers (Toponymy, isolated env; needs atlas map + Gemma :8003 + embed :8001).
@@ -560,7 +560,7 @@ demo: install reingest  ## Full end-to-end smoke: install + reingest + 3 queries
 	uv run rmedia --db $(DB) --table $(TABLE) search 'wisdom OR foolishness' -n 3
 
 # ─── REPL ───────────────────────────────────────────────────────────────────
-shell:                ## Drop into a Python REPL with raudio imported as `la`.
+shell:                ## Drop into a Python REPL with rmedia imported as `lm`.
 	uv run python -ic "import rmedia as lm; print('rmedia loaded as `lm`')"
 
 # ─── Cleanup ────────────────────────────────────────────────────────────────

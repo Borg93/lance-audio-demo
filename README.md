@@ -378,7 +378,6 @@ query against.)
 | `GET /api/chunk-frame/{doc_id}/{speech_id}/{chunk_id}?frame_idx=N` | Chunk frame (Blob V2 Inline; `frame_idx=0` is the representative frame) |
 | `GET /api/media/{doc_id}` | Stream the MP4 (Blob V2 External, HTTP Range supported) |
 | `GET /api/media-clip/{doc_id}?lo=…&hi=…` | Windowed excerpt re-encoded to H.264+MP3 (ffmpeg, disk-cached) — sound inside AAC-less webview hosts like VS Code |
-| `…/mcp/` (streamable HTTP) | MCP server for LLM agents — 5 data tools + 2 interactive MCP Apps (results table, clip player). See **[docs/MCP.md](docs/MCP.md)** |
 | `GET /api/atlas/status?space=text\|visual` | Which projection spaces are built + the space's projected row count |
 | `GET /api/atlas/points?space=text\|visual` | Compact coord/cluster/language/namn arrays + doc-id keys for the scatter map |
 | `GET /api/atlas/chunk/{doc_id}/{speech_id}/{chunk_id}` | Full hit for one chunk (lazy-fetched on hover/select) |

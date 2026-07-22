@@ -153,7 +153,7 @@ uv run rmedia --db transcripts_v2.lance merge-speaker-embeddings
 uv run rmedia --db transcripts_v2.lance build-speakers
 
 # 3. global identity clusters (CPU, needs the [atlas] extra for EVōC)
-uv run --extra atlas raudio --db transcripts_v2.lance cluster-speakers --seed 42 --validate
+uv run --extra atlas rmedia --db transcripts_v2.lance cluster-speakers --seed 42 --validate
 ```
 
 **Sharding/resume semantics** (`cli/speaker.py::cmd_embed_speaker_turns`,
@@ -345,7 +345,7 @@ The results **table** view shows a Speaker column
 Real run on the live `speakers.lance` (9,941 rows):
 
 ```bash
-uv run --extra atlas raudio --db transcripts_v2.lance cluster-speakers --seed 42 --validate
+uv run --extra atlas rmedia --db transcripts_v2.lance cluster-speakers --seed 42 --validate
 ```
 
 - **Identity layer 2/6** (fine→coarse) selected by the within-video

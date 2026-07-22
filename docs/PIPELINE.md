@@ -319,9 +319,9 @@ writes `output/sv/alignments/`; the **bare CLI** default for `--output-root` is
 
 ```bash
 # Makefile pipeline (per-language):
-raudio ingest output/sv/alignments/*.json
+rmedia ingest output/sv/alignments/*.json
 # bare CLI default (no --output-root):
-raudio ingest output/alignments/*.json
+rmedia ingest output/alignments/*.json
 ```
 
 ```mermaid
@@ -391,7 +391,7 @@ flowchart TD
 
 ```bash
 # default model + audio root (input/sv); resumable, one video at a time
-raudio --db transcripts_v2.lance extract-speaker-turns --audio-root ./input/sv
+rmedia --db transcripts_v2.lance extract-speaker-turns --audio-root ./input/sv
 #   or, equivalently, the Make target (honours LIMIT=N for a debug subset):
 make speaker-turns DB=transcripts_v2.lance
 ```

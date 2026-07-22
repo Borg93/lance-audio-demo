@@ -725,8 +725,7 @@ batch**: `export_chunks.py` dumps chunk text → JSONL, `build_kg.py` runs
 **LightRAG** (in an isolated `uv run --no-project --with lightrag-hku` venv,
 Gemma 4 31B for extraction + Qwen3-VL embeddings) into a GraphML, and
 `adapter.py` folds that into four `kg_*` Lance tables, served via a Cypher engine
-in the backend `graph/` surface + the MCP graph tool (deep-dives:
-[GRAPH.md](GRAPH.md) for the graph, [MCP.md](MCP.md) for the tool surface). None
+in the backend `graph/` surface (deep-dive: [GRAPH.md](GRAPH.md)). None
 of it is triggered by the main pipeline; it's full-rebuild only
 (`mode="overwrite"`).
 

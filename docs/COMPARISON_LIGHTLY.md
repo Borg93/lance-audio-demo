@@ -72,10 +72,9 @@
    alignment**. The `lightly` SSL library is likewise image/video-only (15+ SSL
    losses, but no text/audio/CLIP). Our multimodal surface is a real moat.
 
-4. **Knowledge graph + Atlas + MCP.** None of these exist on their side. The KG
-   (entities/relationships over chunks, [GRAPH.md](GRAPH.md)), the 2-D Atlas map,
-   and the MCP server ([MCP.md](MCP.md)) that exposes search to LLM agents are all
-   ours alone.
+4. **Knowledge graph + Atlas.** Neither exists on their side. The KG
+   (entities/relationships over chunks, [GRAPH.md](GRAPH.md)) and the 2-D Atlas map
+   are ours alone.
 
 5. **No single-writer bottleneck baked in.** Their own backend guide flags
    DuckDB's **single-writer model** as a live limitation of their

@@ -340,9 +340,9 @@ each capability-gated (`descriptor.capabilities`; declared in
 | **MCP** | ⛔ **deferred** | — | — | — | dropped from Phase 2 by decision (P2.9, `LANCE_MEDIA_MERGE.md:184`); `backend/mcp/` holds only stale `__pycache__`, no `/mcp` mount. Re-mount against the descriptor-driven services is a later goal. The surviving `/api/media-clip/{doc_id}` is a general webview-excerpt route, decoupled from MCP. |
 
 > **Doc staleness (merge-time cleanup, not a blocker):** `docs/VOICE.md`,
-> `docs/GRAPH.md`, `docs/MCP.md` still cite the pre-split `backend/{voice,graph,mcp}/`
-> paths; current code is under `backend/media_api/`. Refresh or supersede them
-> during the lift.
+> `docs/GRAPH.md` still cite pre-split `backend/{voice,graph}/` paths; current code
+> is under `services/viewer/`. (`docs/MCP.md` + the MCP mount were removed — the
+> feature is gone.) Refresh or supersede the rest during the lift.
 
 ---
 

@@ -304,7 +304,7 @@ on the Hub.
 ```bash
 make speaker-turns DB=$DB AUDIO_DIR=$AUDIO_DIR        # → speaker_turns.lance (all videos)
 make speaker-turns DB=$DB AUDIO_DIR=$AUDIO_DIR LIMIT=5  # debug: first 5 videos only
-#   = raudio --db $DB extract-speaker-turns --audio-root $AUDIO_DIR
+#   = rmedia --db $DB extract-speaker-turns --audio-root $AUDIO_DIR
 #     (--only-null by default skips already-diarized videos; --all rebuilds clean)
 ```
 
