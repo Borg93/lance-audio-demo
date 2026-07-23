@@ -48,8 +48,14 @@ ffmpeg frames factory remains). `src/ratch/modalities/av/` holds ONLY pure compu
 (frames/thumbnails/download/cluster). ty fully clean.
 
 **📋 Left (merge-time — needs the live Ray cluster to verify):**
-- Verify `RATCH_RUNNER_ISOLATION=1` on a real cluster (per-stage runtime_env pip
-  resolution + GPU actors) — the wiring is in, unverifiable on one box.
+- **Per-runner container images, not pip runtime_envs, in production** (Ray docs:
+  pip runtime_env = dev/experimentation; bake deps into images for prod; torch
+  stacks are specifically painful in pip runtime_envs — cu128 extra index, build-
+  order — and conflicting runtime_envs between communicating actors can hit
+  unpickling errors). Each `runners/<name>/pyproject.toml` → a
+  `.docker/<name>.dockerfile` image on KubeRay worker groups (or the runner as a
+  Serve deployment with its own image). `RATCH_RUNNER_ISOLATION=1` (pip
+  runtime_env) stays as the DEV bridge only.
 - `runners/{embed,rerank,caption,summarize}/` — the vLLM set joins the same shape
   (offline actor + online Serve deployment.py; one model, two drivers).
 - Retire the `[models]` extra + the `endpoints/` sealed-subprocess stand-in once
