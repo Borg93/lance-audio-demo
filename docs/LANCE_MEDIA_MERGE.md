@@ -19,7 +19,7 @@ Repos: `~/Desktop/lance-audio` (**the only repo this goal changes**), `~/Desktop
 - **Old-corpus full-video playback stays degraded**: `transcripts_v2.lance` media URIs point at the deleted local `input/` tree (bytes now live in the HCP `film-raudio` bucket). Only the restored sample docs (§5.1) play. Rebasing the old corpus's blob URIs to remote storage (`base_store_params`) or re-ingesting is a follow-up, not this goal.
 - No adoption of lance-ns infra (FGA/OIDC/outbox/Dapr-pubsub). We copy its *patterns* (blob seam, service layering, Range/ETag serving), not its stack.
 - No UI framework changes: Svelte 5 runes + bits-ui/shadcn-svelte + Tailwind, WebGPU renderers only. zod stays (valibot is a rask-merge-time concern). Frontend type-checking moves to **TypeScript 7 (the native `tsgo` compiler)** in Phase 3 wherever the toolchain supports it (`tsc` → `tsgo`; svelte-check may lag — fall back per-tool, not per-project; user-requested 2026-07-16).
-- KG-building scripts (`src/ratch/kg/`) and Toponymy topics keep their current out-of-band form.
+- KG-building scripts (`services/models/kg/`) and Toponymy topics keep their current out-of-band form.
 - `evals/voice_labels_*.json` (human voice labels keyed to transcripts_v2 speaker/turn ids) are **kept intact** and stay valid — the ported voice endpoint SHOULD reproduce the known ranking quality (genuine pair at ranks 1–2, AP ≈ 0.74).
 
 ## 3. Current state (condensed audit)

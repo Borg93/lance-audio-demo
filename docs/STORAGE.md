@@ -90,7 +90,7 @@ foreign-key relation — the backend resolves keys to stable row ids with SQL
 filters (`_rowid_for_filter`, `rowid_for_doc_id` in
 [`services/viewer/api/v1/endpoints/media.py`](../services/viewer/api/v1/endpoints/media.py)). (A knowledge-graph layer
 also writes sibling `kg_chunks`/`kg_entities`/`kg_mentions`/`kg_relationships`
-tables into the same directory from `src/ratch/kg/adapter.py`, read by
+tables into the same directory from `services/models/kg/adapter.py`, read by
 [`services/viewer/api/v1/endpoints/graph.py`](../services/viewer/api/v1/endpoints/graph.py); those are out of scope
 for this doc.)
 
