@@ -203,6 +203,7 @@ services-up-otel:     ## services-up under the OTel launcher (needs OTEL_EXPORTE
 	@test -n "$(OTEL_EXPORTER_OTLP_ENDPOINT)" || (echo "Set OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4317"; exit 2)
 	@for svc in viewer search annotator; do \
 	  (MEDIA_DB=$(DB) OTEL_SERVICE_NAME=lance-media-$$svc OTEL_METRICS_EXPORTER=otlp \
+	   OTEL_PYTHON_FASTAPI_EXCLUDED_URLS=/livez,/readyz \
 	   nohup uv run opentelemetry-instrument python -c "from $$svc.main import run; run()" > /tmp/lance-$$svc.log 2>&1 &) ; done
 	@sleep 6; for p in 8101 8102 8103; do curl -sf -o /dev/null http://127.0.0.1:$$p/livez && echo ":$$p up" || echo ":$$p DOWN"; done
 
