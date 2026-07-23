@@ -1,4 +1,4 @@
-"""Move a Lance dataset onto S3 (MinIO / RustFS / AWS) and verify reads over it.
+"""Move a Lance dataset onto S3 (RustFS / MinIO / AWS) and verify reads over it.
 
 The local companion to the backend's S3 wiring (RASK_LANDING §4): copy a
 ``<name>.lance`` dataset to an object store and prove pylance reads it back with
@@ -6,16 +6,16 @@ The local companion to the backend's S3 wiring (RASK_LANDING §4): copy a
 blobs ride a plain directory copy; external ``Blob.from_uri`` (file://) pointers
 do NOT (they need re-ingest/rebase, §4.4).
 
-    # start MinIO (or reuse one): docker run -p 9000:9000 -e MINIO_ROOT_USER=minioadmin \
-    #   -e MINIO_ROOT_PASSWORD=minioadmin minio/minio server /data
+    # start RustFS (or reuse lance-rustfs): docker run -p 9100:9000 \
+    #   -e RUSTFS_ACCESS_KEY=rustfsadmin -e RUSTFS_SECRET_KEY=rustfsadmin rustfs/rustfs
     uv run --with numpy python scripts/move_to_s3.py parity_new.lance \
-        --endpoint http://127.0.0.1:9000 --key minioadmin --secret minioadmin \
+        --endpoint http://127.0.0.1:9100 --key rustfsadmin --secret rustfsadmin \
         --bucket lance-media-test
 
 Then serve the backend from it (no code change — env only):
 
-    MEDIA_S3_ENDPOINT=http://127.0.0.1:9000 MEDIA_S3_ACCESS_KEY_ID=minioadmin \
-    MEDIA_S3_SECRET_ACCESS_KEY=minioadmin MEDIA_S3_DB_ROOT=s3://lance-media-test \
+    MEDIA_S3_ENDPOINT=http://127.0.0.1:9100 MEDIA_S3_ACCESS_KEY_ID=rustfsadmin \
+    MEDIA_S3_SECRET_ACCESS_KEY=rustfsadmin MEDIA_S3_DB_ROOT=s3://lance-media-test \
     MEDIA_DB=<name>.lance make services-up   # viewer :8101 / search :8102 / annotator :8103
 """
 
@@ -36,7 +36,7 @@ def storage_options(endpoint: str, key: str, secret: str, region: str) -> dict[s
         "secret_access_key": secret,
         "region": region,
         "allow_http": "true" if endpoint.startswith("http://") else "false",
-        "virtual_hosted_style_request": "false",  # path-style — MinIO/RustFS reject virtual-hosted
+        "virtual_hosted_style_request": "false",  # path-style — RustFS/MinIO reject virtual-hosted
     }
 
 

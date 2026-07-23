@@ -57,7 +57,7 @@ class S3Source:
     """A :class:`SourceAdapter` over an S3-compatible bucket prefix (``s3://`` URIs, sorted).
 
     ``fs`` is a configured ``pyarrow.fs.S3FileSystem`` — endpoint + creds live
-    there, so MinIO/RustFS/HCP/AWS are interchangeable behind the protocol.
+    there, so RustFS/MinIO/HCP/AWS are interchangeable behind the protocol.
     """
 
     def __init__(self, fs: pafs.S3FileSystem, bucket: str, prefix: str = "") -> None:

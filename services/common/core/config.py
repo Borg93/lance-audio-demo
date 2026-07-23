@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     search_cache_size: int = Field(default=256, ge=0, alias="MEDIA_SEARCH_CACHE_SIZE")
 
     # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
-    # serve datasets from MinIO / RustFS / AWS: the registry then lists + opens
+    # serve datasets from RustFS / MinIO / AWS: the registry then lists + opens
     # under MEDIA_S3_DB_ROOT (an s3:// URI) with these storage_options. All unset
     # (the default) = the local-filesystem db_root path, byte-identical to before.
     s3_endpoint: str | None = Field(default=None, alias="MEDIA_S3_ENDPOINT")

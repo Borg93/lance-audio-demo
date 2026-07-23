@@ -406,7 +406,7 @@ What it brings up (idempotent — skips any port already healthy):
 
 ---
 
-## Serving from S3 (MinIO / RustFS) — object-store backing
+## Serving from S3 (RustFS / any S3) — object-store backing
 
 The backend reads Lance from an S3-compatible store when the `MEDIA_S3_*` env is
 set; unset, it uses the local `db_root` (byte-identical). Three steps: make the
@@ -420,11 +420,11 @@ uv run ratch --db transcripts_v2.lance materialize-blobs   # → MATERIALIZE OK
 
 # 2. Move the dataset to the bucket + verify tabular/vector/blob reads over S3.
 uv run --with numpy python scripts/move_to_s3.py transcripts_v2.lance \
-    --endpoint http://127.0.0.1:9000 --key <key> --secret <secret> \
+    --endpoint http://127.0.0.1:9100 --key rustfsadmin --secret rustfsadmin \
     --bucket lance-media                                    # → S3 READ OK
 
 # 3. Serve the backend from S3 (env only — no code change).
-MEDIA_S3_ENDPOINT=http://127.0.0.1:9000 \
+MEDIA_S3_ENDPOINT=http://127.0.0.1:9100 \
 MEDIA_S3_ACCESS_KEY_ID=<key> MEDIA_S3_SECRET_ACCESS_KEY=<secret> \
 MEDIA_S3_DB_ROOT=s3://lance-media MEDIA_DB=transcripts_v2.lance \
     MEDIA_DB=transcripts_v2.lance make services-up   # viewer:8101 search:8102 annotator:8103

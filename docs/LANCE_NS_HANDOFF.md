@@ -123,7 +123,8 @@ file into the lance-ns session. Companion detail: `ANNOTATIONS_SCHEMA_CONTRACT.m
 
 ## Proven seams (evidence; commits named inline, un-tag/resync land with this goal's commit)
 
-- **S3 write plane** — annotations over MinIO: wire GET (version header), save-insert
+- **S3 write plane** — annotations over S3 (MinIO at proof time; the store of record
+  today is RustFS at `127.0.0.1:9100`): wire GET (version header), save-insert
   merge_insert commit, stale `base_version` → 409, `?version` time-travel, tag batch;
   `materialize-blobs` run (376 MB managed; 65 MB blob streams over S3). `d00211f`.
 - **Derivers model** — lance-ns fan-out §4 proven 2026-07-16: 166/166 tests, patch at

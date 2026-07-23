@@ -129,7 +129,7 @@ class TestSubmitPath:
         assert fake.polled == [submission_id_for(job)]  # the seam awaits the id it submitted
 
     def test_runtime_env_carries_repo_runner_env_and_filtered_vars(self, monkeypatch) -> None:
-        monkeypatch.setenv("MEDIA_S3_ENDPOINT", "http://minio:9000")
+        monkeypatch.setenv("MEDIA_S3_ENDPOINT", "http://rustfs:9100")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "shh")
         monkeypatch.setenv("UNRELATED_VAR", "nope")
         fake = FakeSubmitter()
@@ -138,7 +138,7 @@ class TestSubmitPath:
         runtime_env = fake.submitted[0]["runtime_env"]
         assert runtime_env["working_dir"] == str(REPO_ROOT)
         assert any("toponymy" in dep for dep in runtime_env["pip"])
-        assert runtime_env["env_vars"]["MEDIA_S3_ENDPOINT"] == "http://minio:9000"
+        assert runtime_env["env_vars"]["MEDIA_S3_ENDPOINT"] == "http://rustfs:9100"
         assert runtime_env["env_vars"]["AWS_SECRET_ACCESS_KEY"] == "shh"
         assert "UNRELATED_VAR" not in runtime_env["env_vars"]
         assert "PATH" not in runtime_env["env_vars"]
