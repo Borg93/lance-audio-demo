@@ -100,6 +100,17 @@ class Settings(BaseSettings):
         return v
 
     @property
+    def effective_lineage_sink(self) -> str:
+        """The sink the annotator's own emit uses: forced to ``none`` only when a
+        LIVE catalog sits behind the writes (``catalog_uri`` set) — that catalog
+        inline-emits a RunEvent for the same merge, so emitting here too would
+        double-count the run. The in-process catalog fallback emits nothing, so
+        our own sink stays active there."""
+        if self.write_backend == "catalog" and self.catalog_uri:
+            return "none"
+        return self.lineage_sink
+
+    @property
     def default_dataset_id(self) -> str:
         return self.db_path.stem
 
@@ -134,7 +145,6 @@ class Settings(BaseSettings):
         if self.s3_endpoint and self.s3_db_root:
             return self.s3_db_root
         return str(self.db_root)
-
 
     @field_validator("cors_origins", mode="before")
     @classmethod

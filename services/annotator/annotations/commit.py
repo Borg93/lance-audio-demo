@@ -26,13 +26,19 @@ if TYPE_CHECKING:
     from common.lancekit.writer import TableWriter
 
 
-def check_base_version(ds: lance.LanceDataset, base_version: int | None) -> None:
-    """Optimistic concurrency: 409 if the table advanced since the client loaded.
-    ``None`` skips the check (last-write-wins per id is then the contract)."""
-    if base_version is not None and base_version != int(ds.version):
+def check_base_version_value(current: int, base_version: int | None) -> None:
+    """Optimistic concurrency, source-agnostic: 409 if the table advanced past the
+    version the client loaded — ``current`` may be a direct ``ds.version`` or the
+    catalog's version primitive. ``None`` skips it (last-write-wins per id)."""
+    if base_version is not None and base_version != current:
         raise ConflictError(
-            f"annotations changed on the server (loaded v{base_version}, now v{int(ds.version)})"
+            f"annotations changed on the server (loaded v{base_version}, now v{current})"
         )
+
+
+def check_base_version(ds: lance.LanceDataset, base_version: int | None) -> None:
+    """Optimistic-concurrency check against a dataset's current version."""
+    check_base_version_value(int(ds.version), base_version)
 
 
 def delete_by_ids(writer: TableWriter, ids: Sequence[str]) -> None:
@@ -62,4 +68,3 @@ def finalize_commit(
         sink=sink,
     )
     return SaveResult(saved=touched, version=int(fresh.version))
-

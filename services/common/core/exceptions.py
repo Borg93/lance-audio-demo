@@ -57,6 +57,11 @@ class ConflictError(DomainError):
     title = "Conflict"
 
 
+class ForbiddenError(DomainError):
+    status_code = HTTPStatus.FORBIDDEN
+    title = "Forbidden"
+
+
 class ServiceUnavailableError(DomainError):
     status_code = HTTPStatus.SERVICE_UNAVAILABLE
     title = "Service Unavailable"

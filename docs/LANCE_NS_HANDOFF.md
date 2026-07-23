@@ -157,9 +157,33 @@ their own images on KubeRay worker groups (our TODO § Merge-time). Ray telemetr
 crosses the Jobs boundary there (TRACEPARENT + OTEL_* injected into runtime_env —
 their `ray_submit` does; our `jobs.py` gains the same two lines at merge).
 
-## First integration milestone (once the questions are answered)
+## First integration milestone — **PROVEN 2026-07-23**
 
-Point our catalog reader/writer at a **live lance-ns namespace** (drop the in-process
-Local transport) and run: annotation read → human write → batch deriver prediction →
-re-read, end-to-end through the catalog, with OpenLineage emitted by the mover. That
-proves the merge seam live; training, GreptimeDB, and the query engine sequence after.
+Ran live, end-to-end, from this repo: the lance-ns catalog booted from its checkout
+(read-only tree, `uvicorn catalog.main:app` against our RustFS at `127.0.0.1:9100`,
+auth/FGA off = their default) and the whole loop passed through OUR transports:
+
+- **Table created THROUGH the catalog**: `POST /v1/namespace/media/create` +
+  `POST /v1/table/media$annotations/create` (Arrow-IPC stream body) with the
+  25-column contract schema + identity + `created_at`/`updated_at` → 31 columns,
+  landed at `s3://lance-catalog-m1/…` v1; maintenance policy set at create
+  (`retention_days=30, retain_versions=100`); schema round-trips via `/query`.
+- **The loop**: read → human save (`merge_insert`) → **409 handshake** verified
+  against THEIR version primitive (`describe?load_detailed_metadata=true` →
+  `version`; `check_base_version_value` rejects the stale save) → model-prediction
+  write (`source="model:x@1"`, `status="prediction"`) → **replace-protects-humans**
+  (predictions deleted, human rows survive) → insert-only leg never clobbers a
+  human row → re-read. Evidence: `tests/test_catalog_live.py` (auto-skips without
+  `MEDIA_CATALOG_URL`) — 6/6 green against the live catalog.
+- **Wire fixes were ours alone**: merge bodies are Arrow-IPC **stream** (their Rust
+  reader rejects IPC *file* — fixed in `RestCatalogWriteTransport`); the version
+  primitive needed `load_detailed_metadata=true` (plain describe is location-only).
+- **OpenLineage**: with `LANCE_LINEAGE_EMIT_ENABLED=true` the catalog emitted
+  **6 spec-2-0-2 RunEvents for our writes** (captured at a local sink:
+  `job=lance-catalog/merge_insert.media$…`, output facets `version`+`schema`);
+  our own emit no-ops on the catalog path (`Settings.effective_lineage_sink` —
+  asserted in the test) so runs are never double-counted.
+
+Training, GreptimeDB, and the query engine sequence after; the annotator service's
+full catalog-mode save path (wiring `table_version()` into its wire GET) is the
+next increment on our side.

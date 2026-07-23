@@ -112,7 +112,7 @@ def save_annotations(
         ds,
         touched=touched,
         unit_key=f"{doc_id}/{speech_id}/{chunk_id}",
-        sink=state.settings.lineage_sink,
+        sink=state.settings.effective_lineage_sink,
     )
     if touched:
         logger.info(

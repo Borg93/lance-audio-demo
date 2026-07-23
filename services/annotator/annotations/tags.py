@@ -125,7 +125,7 @@ def apply_tags(
         ds,
         touched=touched,
         unit_key=f"tags:{len(body.adds)}+{len(body.removes)}",
-        sink=state.settings.lineage_sink,
+        sink=state.settings.effective_lineage_sink,
     )
     if touched:
         logger.info(

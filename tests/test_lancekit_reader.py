@@ -70,6 +70,7 @@ def _pair(dataset: lance.LanceDataset) -> tuple[LanceTableReader, CatalogTableRe
         {"filter": "status = 'prediction'"},
         {"columns": ["doc_id"], "filter": "score > 0.5"},
         {"limit": 5},
+        {"limit": 0},
         {"limit": 5, "offset": 3},
         {"with_row_id": True},
         {
@@ -101,8 +102,12 @@ def test_both_satisfy_tablereader_protocol(dataset: lance.LanceDataset) -> None:
     direct, catalog = _pair(dataset)
     assert isinstance(direct, TableReader)
     assert isinstance(catalog, TableReader)
-    # schema is reachable through the catalog path too (a limit-0 scan)
+    # schema is reachable through the catalog path too (a limit-0 scan) — and a
+    # limit-0 scan materializes ZERO rows on both paths (k=0 must not invert to
+    # an unbounded scan).
     assert catalog.schema.names == direct.schema.names
+    assert catalog.to_table(limit=0).num_rows == 0
+    assert direct.to_table(limit=0).num_rows == 0
 
 
 def test_open_reader_flag_selects_backend(

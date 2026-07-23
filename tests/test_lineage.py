@@ -98,7 +98,13 @@ class TestFacetFields:
                 "vec": pa.array([[0.0, 1.0]], type=pa.list_(pa.float32(), 2)),
                 "media": blob_array([b"x"]),
             },
-            schema=pa.schema([pa.field("id", pa.int64()), pa.field("vec", pa.list_(pa.float32(), 2)), blob_field("media")]),
+            schema=pa.schema(
+                [
+                    pa.field("id", pa.int64()),
+                    pa.field("vec", pa.list_(pa.float32(), 2)),
+                    blob_field("media"),
+                ]
+            ),
         )
         lance.write_dataset(table, uri, data_storage_version="2.2")
         fields = {f["name"]: f["type"] for f in facet_fields(lance.dataset(uri).schema)}
@@ -150,7 +156,9 @@ class TestMeasureAndEvent:
         assert "text_embedding" in out["facets"]["columnLineage"]["fields"]
 
     def test_run_id_is_deterministic(self) -> None:
-        assert run_id_for("extract_frames-chunk_frames-2") == run_id_for("extract_frames-chunk_frames-2")
+        assert run_id_for("extract_frames-chunk_frames-2") == run_id_for(
+            "extract_frames-chunk_frames-2"
+        )
         assert run_id_for("a") != run_id_for("b")
 
     def test_builder_override_is_used(self, tmp_path: Path) -> None:
@@ -193,3 +201,23 @@ def test_standalone_and_declared_shapes_are_consistent() -> None:
         result=r,
     )
     assert event["outputs"][0]["facets"]["columnLineage"]["fields"]["text_embedding"]["inputFields"]
+
+
+def test_lineage_emit_noops_only_behind_a_live_catalog(monkeypatch) -> None:
+    """With writes routed through a LIVE catalog (catalog_uri set) the annotator's
+    own OpenLineage emit is forced to ``none`` — that catalog inline-emits a
+    RunEvent for the same merge, and double emission would double-count the run.
+    The in-process catalog fallback emits nothing, so our sink stays active there;
+    Settings bind by their MEDIA_* aliases, so construct through the env."""
+    from common.core.config import Settings
+
+    monkeypatch.setenv("MEDIA_LINEAGE_SINK", "log")
+    monkeypatch.setenv("MEDIA_WRITE_BACKEND", "catalog")
+    monkeypatch.setenv("MEDIA_CATALOG_URI", "http://catalog:8080")
+    assert Settings().effective_lineage_sink == "none"
+
+    monkeypatch.delenv("MEDIA_CATALOG_URI")
+    assert Settings().effective_lineage_sink == "log"  # local fallback: we still emit
+
+    monkeypatch.setenv("MEDIA_WRITE_BACKEND", "direct")
+    assert Settings().effective_lineage_sink == "log"

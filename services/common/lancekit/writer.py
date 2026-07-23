@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import lance
 
+from common.lancekit.reader import translate_catalog_errors
+
 if TYPE_CHECKING:
     import pyarrow as pa
 
@@ -108,11 +110,25 @@ class LocalCatalogWriteTransport:
         self._ds.delete(predicate)
 
 
+def _arrow_stream_bytes(delta: pa.Table) -> bytes:
+    """Serialize the merge delta as an Arrow-IPC **stream** — the encoding the
+    catalog's write endpoints parse (an IPC *file* body fails their Rust reader
+    with "failed to fill whole buffer"). The read side returns IPC files — the
+    asymmetry is the catalog's contract, not ours."""
+    import pyarrow as pa_
+
+    sink = pa_.BufferOutputStream()
+    with pa_.ipc.new_stream(sink, delta.schema) as writer:
+        writer.write_table(delta)
+    return bytes(sink.getvalue())
+
+
 class RestCatalogWriteTransport:
     """Live REST catalog transport — ``POST /v1/table/{id}/merge_insert`` + ``/delete``
     via the lance-ns client's ``DataApi.merge_insert_into_table`` / ``delete_from_table``.
-    Host-agnostic (base URL from settings) + retry-friendly. WIRED but not exercised
-    in-repo (the parity test drives :class:`LocalCatalogWriteTransport`)."""
+    Host-agnostic (base URL from settings) + retry-friendly; catalog errors are
+    translated onto the DomainError hierarchy so denials/conflicts keep their
+    status through our services."""
 
     def __init__(
         self,
@@ -122,6 +138,7 @@ class RestCatalogWriteTransport:
         delimiter: str = "$",
         token: str | None = None,
         retries: int = 3,
+        timeout: float = 30.0,
     ) -> None:
         from lance_namespace_urllib3_client import ApiClient, Configuration  # optional dep
         from lance_namespace_urllib3_client.api.data_api import DataApi
@@ -133,44 +150,43 @@ class RestCatalogWriteTransport:
         self._api = DataApi(client)
         self._id_str = delimiter.join(table_id)
         self._delimiter = delimiter
+        self._timeout = timeout
 
     def merge_upsert(self, delta: pa.Table, on: str) -> None:
-        import pyarrow as pa_
-
-        sink = pa_.BufferOutputStream()
-        with pa_.ipc.new_file(sink, delta.schema) as writer:
-            writer.write_table(delta)
-        # merge flags are direct params; `body` is the Arrow-IPC delta.
-        self._api.merge_insert_into_table(
-            self._id_str,
-            on,
-            bytes(sink.getvalue()),
-            delimiter=self._delimiter,
-            when_matched_update_all=True,
-            when_not_matched_insert_all=True,
-        )
+        # merge flags are direct params; `body` is the Arrow-IPC STREAM delta.
+        with translate_catalog_errors():
+            self._api.merge_insert_into_table(
+                self._id_str,
+                on,
+                _arrow_stream_bytes(delta),
+                delimiter=self._delimiter,
+                when_matched_update_all=True,
+                when_not_matched_insert_all=True,
+                _request_timeout=self._timeout,
+            )
 
     def merge_insert_only(self, delta: pa.Table, on: str) -> None:
-        import pyarrow as pa_
-
-        sink = pa_.BufferOutputStream()
-        with pa_.ipc.new_file(sink, delta.schema) as writer:
-            writer.write_table(delta)
-        self._api.merge_insert_into_table(
-            self._id_str,
-            on,
-            bytes(sink.getvalue()),
-            delimiter=self._delimiter,
-            when_matched_update_all=False,
-            when_not_matched_insert_all=True,
-        )
+        with translate_catalog_errors():
+            self._api.merge_insert_into_table(
+                self._id_str,
+                on,
+                _arrow_stream_bytes(delta),
+                delimiter=self._delimiter,
+                when_matched_update_all=False,
+                when_not_matched_insert_all=True,
+                _request_timeout=self._timeout,
+            )
 
     def delete(self, predicate: str) -> None:
         from lance_namespace_urllib3_client import DeleteFromTableRequest
 
-        self._api.delete_from_table(
-            self._id_str, DeleteFromTableRequest(predicate=predicate), delimiter=self._delimiter
-        )
+        with translate_catalog_errors():
+            self._api.delete_from_table(
+                self._id_str,
+                DeleteFromTableRequest(predicate=predicate),
+                delimiter=self._delimiter,
+                _request_timeout=self._timeout,
+            )
 
 
 def open_writer(

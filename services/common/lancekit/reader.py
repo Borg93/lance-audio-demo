@@ -29,10 +29,20 @@ that, which is what the parity test exercises.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import lance
 import pyarrow as pa
+
+from common.core.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ServiceUnavailableError,
+    ValidationError,
+)
 
 if TYPE_CHECKING:
     from lance_namespace_urllib3_client import QueryTableRequest
@@ -109,6 +119,8 @@ class CatalogTransport(Protocol):
 
     def count(self, table_id: list[str], filter: str | None) -> int: ...
 
+    def table_version(self, table_id: list[str]) -> int: ...
+
 
 class CatalogTableReader:
     """Reads a table through the lance-ns catalog ``/query`` contract.
@@ -178,6 +190,9 @@ class CatalogTableReader:
     def count_rows(self, filter: str | None = None) -> int:
         return self._transport.count(self._id, filter)
 
+    def table_version(self) -> int:
+        return self._transport.table_version(self._id)
+
     @property
     def schema(self) -> pa.Schema:
         return self.to_table(limit=0).schema
@@ -202,7 +217,7 @@ class LocalCatalogTransport:
         table = self._ds.to_table(
             columns=columns,
             filter=request.filter,
-            limit=request.k if request.k and request.k < 1_000_000_000 else None,
+            limit=request.k if request.k is not None and request.k < 1_000_000_000 else None,
             offset=request.offset,
             with_row_id=bool(request.with_row_id),
         )
@@ -212,16 +227,41 @@ class LocalCatalogTransport:
         del table_id  # bound to a single ds; the id is implied
         return self._ds.count_rows(filter)
 
+    def table_version(self, table_id: list[str]) -> int:
+        del table_id
+        return int(self._ds.version)
+
+
+@contextmanager
+def translate_catalog_errors() -> Iterator[None]:
+    """Map the generated client's typed HTTP exceptions onto our DomainError
+    hierarchy, so a catalog 409/403/404/400/5xx renders as the SAME problem+json
+    the direct path produces instead of an opaque 500. The catalog's own problem
+    detail rides in the message."""
+    from lance_namespace_urllib3_client import exceptions as _api_exc  # optional dep
+
+    try:
+        yield
+    except _api_exc.ConflictException as exc:
+        raise ConflictError(f"catalog write conflict: {exc.body}") from exc
+    except (_api_exc.ForbiddenException, _api_exc.UnauthorizedException) as exc:
+        raise ForbiddenError(f"catalog denied the request: {exc.body}") from exc
+    except _api_exc.NotFoundException as exc:
+        raise NotFoundError(f"catalog table not found: {exc.body}") from exc
+    except (_api_exc.BadRequestException, _api_exc.UnprocessableEntityException) as exc:
+        raise ValidationError(f"catalog rejected the request: {exc.body}") from exc
+    except _api_exc.ApiException as exc:
+        raise ServiceUnavailableError(f"catalog unavailable: {exc.body or exc.reason}") from exc
+
 
 class RestCatalogTransport:
     """Live REST catalog transport — ``POST /v1/table/{id}/query`` over HTTP.
 
     Host-agnostic (base URL from settings, never hard-coded) + retry-friendly
     (urllib3 ``Retry`` via the generated ``Configuration``) so it drops into a Dapr
-    service-invocation or Ray-Serve-fronted catalog unchanged. WIRED but not yet
-    exercised against a live catalog in this repo — the parity test drives
-    :class:`LocalCatalogTransport`; the open item is whether the server accepts an
-    empty-vector scan (see module docstring).
+    service-invocation or Ray-Serve-fronted catalog unchanged. Exercised live
+    against the lance-ns catalog over RustFS by ``tests/test_catalog_live.py``
+    (empty-vector scan accepted; responses are Arrow-IPC files).
     """
 
     def __init__(
@@ -246,9 +286,10 @@ class RestCatalogTransport:
 
     def query(self, request: QueryTableRequest) -> bytes:
         id_str = self._delimiter.join(request.id or [])
-        raw = self._api.query_table(
-            id_str, request, delimiter=self._delimiter, _request_timeout=self._timeout
-        )
+        with translate_catalog_errors():
+            raw = self._api.query_table(
+                id_str, request, delimiter=self._delimiter, _request_timeout=self._timeout
+            )
         return bytes(raw)
 
     def count(self, table_id: list[str], filter: str | None) -> int:
@@ -256,11 +297,33 @@ class RestCatalogTransport:
 
         id_str = self._delimiter.join(table_id)
         request = CountTableRowsRequest(id=table_id, predicate=filter)
-        return int(
-            self._api.count_table_rows(
-                id_str, request, delimiter=self._delimiter, _request_timeout=self._timeout
+        with translate_catalog_errors():
+            return int(
+                self._api.count_table_rows(
+                    id_str, request, delimiter=self._delimiter, _request_timeout=self._timeout
+                )
             )
-        )
+
+    def table_version(self, table_id: list[str]) -> int:
+        # THEIR version primitive: a plain describe returns location-only (version
+        # absent); load_detailed_metadata=true loads the dataset server-side and
+        # returns the current version. The 409 handshake compares a client's
+        # base_version against exactly this number.
+        from lance_namespace_urllib3_client import DescribeTableRequest
+        from lance_namespace_urllib3_client.api.table_api import TableApi
+
+        api = TableApi(self._api.api_client)
+        with translate_catalog_errors():
+            response = api.describe_table(
+                self._delimiter.join(table_id),
+                DescribeTableRequest(id=table_id),
+                delimiter=self._delimiter,
+                load_detailed_metadata=True,
+                _request_timeout=self._timeout,
+            )
+        if response.version is None:
+            raise ServiceUnavailableError(f"catalog describe returned no version for {table_id}")
+        return int(response.version)
 
 
 def open_reader(
