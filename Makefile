@@ -1,12 +1,11 @@
 # ─── ratch dev helpers ────────────────────────────────────────────────
 # All paths are relative to the project root. Override on the CLI:
 #   make search Q='spring of hope'
-#   make demo AUDIO_ROOT=./examples
 
 DB       ?= ./transcripts_v2.lance
 LOG_DIR  ?= ./logs
 TABLE    ?= chunks
-SAMPLE   ?= examples/taleoftwocities_01_dickens_64kb_trimmed.json
+SAMPLE   ?= output/alignments/*.json   # produced by `make transcribe`
 
 # ─── Corpus defaults (override on CLI: make pipeline LANGUAGE=en) ───────────
 # `:=` instead of `?=` for LANGUAGE/AUDIO_DIR because GNU make's `?=` respects
@@ -30,10 +29,12 @@ GPU             ?= 2
 	embed-speaker-turns build-speakers cluster-speakers \
 	caption-chunk-frames embed-captions captions topics \
 	atlas atlas-visual atlas-caption atlas-all features-all stack-up stack-down \
-	compact maintain e2e-smoke backend services-up services-down frontend frontend-build frontend-dev labeler dev \
+	compact maintain e2e-smoke backend services-up services-down frontend frontend-build frontend-dev dev \
 	seed-annotations annotate \
 	hf-upload-db hf-upload-videos hf-upload-all hf-download-db hf-download-all \
-	reingest search query demo shell clean clean-db clean-run reset download
+	reingest search query shell clean clean-db clean-run reset download \
+	shards caption-server pipeline-plan pipeline-run pipeline-index features-all-ray \
+	hf-upload-alignments hf-upload-thumbnails seed-annotations
 
 help:                 ## Show this help (default).
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -44,7 +45,7 @@ check-deps:           ## Verify system prereqs (uv, ffmpeg) and print install hi
 	@command -v uv >/dev/null 2>&1 && echo "  ✓ uv       ($$(uv --version | head -1))" \
 		|| (echo "  ✗ uv        — install:  curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1)
 	@command -v ffmpeg >/dev/null 2>&1 && echo "  ✓ ffmpeg   ($$(ffmpeg -version | head -1 | awk '{print $$1, $$2, $$3}'))" \
-		|| echo "  ⚠  ffmpeg  — required for `make transcribe` and `make ingest-with-audio`.\n              Install:  sudo apt install ffmpeg   (Linux)\n                        brew install ffmpeg         (macOS / linuxbrew)"
+		|| echo "  ⚠  ffmpeg  — required for `make transcribe` and `make ingest-with-media`.\n              Install:  sudo apt install ffmpeg   (Linux)\n                        brew install ffmpeg         (macOS / linuxbrew)"
 	@command -v hf >/dev/null 2>&1 && echo "  ✓ hf CLI   ($$(hf --version 2>/dev/null | head -1))" \
 		|| echo "  ⚠  hf CLI  — only needed for pyannote VAD. `pip install huggingface_hub[cli]`\n              then `hf auth login`, or pass VAD=silero."
 	@nvidia-smi >/dev/null 2>&1 && echo "  ✓ NVIDIA GPU ($$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1))" \
@@ -58,11 +59,9 @@ bootstrap: check-deps install  ## One-shot: verify system + install all Python d
 	@echo "Next steps:"
 	@echo "  1. (optional) hf auth login                       # only if using pyannote VAD"
 	@echo "  2. make transcribe AUDIO_DIR=/path/to/media        # produces output/alignments/*.json"
-	@echo "  3. make reingest SAMPLE=output/alignments/*.json   # builds ./transcripts.lance"
+	@echo "  3. make reingest SAMPLE=output/alignments/*.json   # builds ./transcripts_v2.lance"
 	@echo "  4. make search Q='your query'                      # sanity check"
 	@echo ""
-	@echo "Or try the bundled sample:"
-	@echo "  make demo"
 
 # ─── Environment ────────────────────────────────────────────────────────────
 install:              ## Create a .venv and install all runtime deps via uv.
@@ -214,10 +213,6 @@ frontend: frontend-build  ## Build then serve the app via the Bun proxy (server.
 	cd $(FRONTEND_APP) && bun run server.ts \
 		--root ./build \
 		--port $(FRONTEND_PORT)
-
-LABELER_PORT    ?= 3999
-labeler:              ## Run the manual language relabeler on $(AUDIO_DIR) (port $(LABELER_PORT)).
-	cd tools/labeler && bun install --silent && bun run labeler.ts --root ../../$(AUDIO_DIR) --port $(LABELER_PORT)
 
 # ─── Multimodal embeddings (Phase 1+2 of the multimodal plan) ───────────────
 # Long-running vLLM HTTP servers serve Qwen3-VL-Embedding-2B + Reranker-2B.
@@ -548,21 +543,6 @@ search:               ## FTS query. Usage: make search Q='best of times'
 	uv run ratch --db $(DB) --table $(TABLE) search '$(Q)'
 
 query: search         ## Alias for `make search`.
-
-# ─── One-shot demo ──────────────────────────────────────────────────────────
-# Wipes the DB, ingests the sample, then runs three representative queries so
-# you can eyeball the pipeline end-to-end. This is the `make` command that
-# exercises everything else.
-demo: install reingest  ## Full end-to-end smoke: install + reingest + 3 queries.
-	@echo ""
-	@echo "── query 1 ── 'best of times' ──────────────────────────────────"
-	uv run ratch --db $(DB) --table $(TABLE) search 'best of times'
-	@echo ""
-	@echo "── query 2 ── exact phrase '\"spring of hope\"' ─────────────────"
-	uv run ratch --db $(DB) --table $(TABLE) search '"spring of hope"'
-	@echo ""
-	@echo "── query 3 ── boolean 'wisdom OR foolishness' ──────────────────"
-	uv run ratch --db $(DB) --table $(TABLE) search 'wisdom OR foolishness' -n 3
 
 # ─── REPL ───────────────────────────────────────────────────────────────────
 shell:                ## Drop into a Python REPL with ratch imported as `lm`.

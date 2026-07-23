@@ -9,22 +9,22 @@
 > [EMBEDDINGS.md](EMBEDDINGS.md) — different model, different dimension,
 > different table. Open backlog: [TODO.md](TODO.md).
 
-Source of truth: [`src/ratch/media/voiceprint.py`](../src/ratch/media/voiceprint.py)
+Source of truth: [`runners/voiceprint/voiceprint.py`](../runners/voiceprint/voiceprint.py)
 (the encoder + slicing/batching/centroid logic),
 [`src/ratch/cli/speaker.py`](../src/ratch/cli/speaker.py) (`embed-speaker-turns`,
 `merge-speaker-embeddings`, `build-speakers`, `cluster-speakers`),
 [`src/ratch/model/schema.py`](../src/ratch/model/schema.py) (`VOICE_EMBED_DIM`,
 `SPEAKER_EMBEDDINGS_SCHEMA`, `SPEAKERS_SCHEMA`),
-[`backend/voice/service.py`](../backend/voice/service.py) +
-[`backend/voice/router.py`](../backend/voice/router.py) +
-[`backend/voice/encoder.py`](../backend/voice/encoder.py) (the `/api/voice/*`
-endpoints), [`backend/schemas/voice.py`](../backend/schemas/voice.py) (response
+[`services/viewer/services/voice_service.py`](../services/viewer/services/voice_service.py) +
+[`services/viewer/api/v1/endpoints/voice.py`](../services/viewer/api/v1/endpoints/voice.py) +
+[`services/viewer/services/wespeaker.py`](../services/viewer/services/wespeaker.py) (the `/api/voice/*`
+endpoints), [`services/common/schemas/voice.py`](../services/common/schemas/voice.py) (response
 models), the frontend voice store
-[`frontend/src/lib/voice-search.svelte.ts`](../frontend/src/lib/voice-search.svelte.ts)
+[`frontend/apps/media/src/lib/voice-search.svelte.ts`](../frontend/apps/media/src/lib/voice-search.svelte.ts)
 (+ `hit-card.svelte`, `diarization-timeline.svelte`, `search-bar.svelte`,
 `search-settings.svelte`), the human-labeled eval
 [`evals/voice_labels_T0001889_c225.json`](../evals/voice_labels_T0001889_c225.json),
-and [`tests/test_backend_voice.py`](../tests/test_backend_voice.py) (the API
+and [`tests/test_media_api_voice.py`](../tests/test_media_api_voice.py) (the API
 contract over synthetic voiceprints).
 
 > Row counts in this doc refer to the live DB, `transcripts_v2.lance`
@@ -53,7 +53,7 @@ transcript chunk. Three reasons, all load-bearing:
 
 Hits are still **chunks** at the UI boundary: the kNN ranks *turns*, then each
 matched turn joins back to its max-overlap `chunks` row
-(`backend/voice/service.py::_chunk_for_turn`) so the result list reuses the
+(`services/viewer/services/voice_service.py::_chunk_for_turn`) so the result list reuses the
 uniform search Hit shape (text, alignments, thumbnail, playback). This mirrors
 the `chunk_frames → chunks` join visual search does — rank in the fine-grained
 table, present in the coarse one.
@@ -128,7 +128,7 @@ flowchart TD
 
 Both follow the `speaker_turns` rationale ([GUIDE.md §4](GUIDE.md)): separate
 append-only tables, never `merge_insert` into the wide `chunks` schema. The
-backend opens them **optionally** (`backend/state.py`) — every `/api/voice`
+backend opens them **optionally** (`services/common/state.py`) — every `/api/voice`
 route degrades to a structured 503 ("not built yet — run `ratch …`") when a
 table is absent, never a 500.
 
@@ -192,7 +192,7 @@ batch at once and the spike kills whoever allocates last.
 - **The real fix (future):** cap the *embedded span* of a turn at ~30 s — the
   encoder was trained on 5 s chunks, so minutes of extra audio add memory and
   cost, not signal. The upload path already does exactly this
-  (`_UPLOAD_EMBED_CAP_S = 30.0` in `backend/voice/service.py`); the batch path
+  (`_UPLOAD_EMBED_CAP_S = 30.0` in `services/viewer/services/voice_service.py`); the batch path
   should mirror it. Until then the worst-case batch size is unbounded by turn
   length.
 
@@ -227,8 +227,8 @@ column. Two non-obvious design points (`cli/speaker.py`):
 
 ## 5. The API (`/api/voice`)
 
-Thin router ([`backend/voice/router.py`](../backend/voice/router.py)) over a
-Lance-handle service ([`backend/voice/service.py`](../backend/voice/service.py));
+Thin router ([`services/viewer/api/v1/endpoints/voice.py`](../services/viewer/api/v1/endpoints/voice.py)) over a
+Lance-handle service ([`services/viewer/services/voice_service.py`](../services/viewer/services/voice_service.py));
 `doc_id` is whitelisted (16-char hex) before any service code inlines it into a
 filter literal.
 
@@ -256,7 +256,7 @@ per hit).
 **The shared post-anchor path** (`rank_similar_turns`): cosine kNN over
 `speaker_embeddings.embedding` with the same recall knobs as text search
 (`minimum_nprobes=20`, adaptive `maximum_nprobes`, `refine_factor=3` from
-`backend/search/constants.py`); `exclude_same_doc=true` (the default) applies a
+`services/search/services/constants.py`); `exclude_same_doc=true` (the default) applies a
 prefiltered `doc_id != …`; each matched turn joins to its max-overlap chunk;
 turns whose span overlaps **no** chunk (diarized speech the ASR produced
 nothing for) are dropped — so fewer than `n` hits can come back. Hits keep the
@@ -285,7 +285,7 @@ from a user clip.
   is trained on 5 s chunks; longer audio adds CPU cost, not signal.
 - The encoder runs **in-process on the CPU by design** (the upload path must
   never contend for the GPUs), lazily loaded on first use behind a lock
-  (`backend/voice/encoder.py::ensure_voice_encoder`, ~30 s first load → the
+  (`services/viewer/services/wespeaker.py::ensure_voice_encoder`, ~30 s first load → the
   attach button visibly spins) and passed as a thunk so it only loads if the
   snippet survives the size/decode/duration guards.
 
@@ -389,14 +389,14 @@ page, an atlas voice space) is tracked in [TODO.md](TODO.md).
 
 | I want to… | Look at |
 |---|---|
-| Change the voice encoder / batching / centroid math | [`media/voiceprint.py`](../src/ratch/media/voiceprint.py) (`VoiceEncoder`, `embed_turn_slices`, `duration_weighted_centroid`) |
+| Change the voice encoder / batching / centroid math | [`runners/voiceprint/voiceprint.py`](../runners/voiceprint/voiceprint.py) (`VoiceEncoder`, `embed_turn_slices`, `duration_weighted_centroid`) |
 | Change the voice vector width / table schemas | `VOICE_EMBED_DIM`, `SPEAKER_EMBEDDINGS_SCHEMA`, `SPEAKERS_SCHEMA` in [`model/schema.py`](../src/ratch/model/schema.py) |
 | Run / resume the offline passes | `embed-speaker-turns`, `merge-speaker-embeddings`, `build-speakers`, `cluster-speakers` in [`cli/speaker.py`](../src/ratch/cli/speaker.py) |
-| Change the identity-layer selection / validation pair | `select_identity_layer`, `same_doc_merge_rate`, `VALIDATION_CONFIRMED_PAIR` in [`media/cluster.py`](../src/ratch/media/cluster.py) |
-| Change anchor resolution / the kNN / the chunk join | [`backend/voice/service.py`](../backend/voice/service.py) (`similar_voices`, `rank_similar_turns`, `_chunk_for_turn`) |
-| Change the upload caps / decode path | `_MAX_UPLOAD_BYTES`, `_UPLOAD_EMBED_CAP_S`, `_decode_upload_wav` in [`backend/voice/service.py`](../backend/voice/service.py) + [`backend/voice/encoder.py`](../backend/voice/encoder.py) |
-| Change the response shapes | [`backend/schemas/voice.py`](../backend/schemas/voice.py) + the Zod mirrors in [`frontend/src/lib/api.ts`](../frontend/src/lib/api.ts) |
-| Change the badge thresholds | `voiceBandOf` in [`frontend/src/lib/api.ts`](../frontend/src/lib/api.ts) (and re-read the n=1 caveat in §6 first) |
-| Touch the voice UI entry points / chip / toggle | [`voice-search.svelte.ts`](../frontend/src/lib/voice-search.svelte.ts) + `hit-card.svelte`, `diarization-timeline.svelte`, `search-bar.svelte`, `search-settings.svelte`, `+page.svelte` |
+| Change the identity-layer selection / validation pair | `select_identity_layer`, `same_doc_merge_rate`, `VALIDATION_CONFIRMED_PAIR` in [`modalities/av/cluster.py`](../src/ratch/modalities/av/cluster.py) |
+| Change anchor resolution / the kNN / the chunk join | [`services/viewer/services/voice_service.py`](../services/viewer/services/voice_service.py) (`similar_voices`, `rank_similar_turns`, `_chunk_for_turn`) |
+| Change the upload caps / decode path | `_MAX_UPLOAD_BYTES`, `_UPLOAD_EMBED_CAP_S`, `_decode_upload_wav` in [`services/viewer/services/voice_service.py`](../services/viewer/services/voice_service.py) + [`services/viewer/services/wespeaker.py`](../services/viewer/services/wespeaker.py) |
+| Change the response shapes | [`services/common/schemas/voice.py`](../services/common/schemas/voice.py) + the valibot mirrors in [`frontend/apps/media/src/lib/api.ts`](../frontend/apps/media/src/lib/api.ts) |
+| Change the badge thresholds | `voiceBandOf` in [`frontend/apps/media/src/lib/api.ts`](../frontend/apps/media/src/lib/api.ts) (and re-read the n=1 caveat in §6 first) |
+| Touch the voice UI entry points / chip / toggle | [`voice-search.svelte.ts`](../frontend/apps/media/src/lib/voice-search.svelte.ts) + `hit-card.svelte`, `diarization-timeline.svelte`, `search-bar.svelte`, `search-settings.svelte`, `+page.svelte` |
 | Re-score a new encoder candidate | [`evals/voice_labels_T0001889_c225.json`](../evals/voice_labels_T0001889_c225.json) (+ [`evals/README.md`](../evals/README.md)) |
-| Test the API contract without an encoder | [`tests/test_backend_voice.py`](../tests/test_backend_voice.py) (planted one-hot voiceprints → exact cosine geometry) |
+| Test the API contract without an encoder | [`tests/test_media_api_voice.py`](../tests/test_media_api_voice.py) (planted one-hot voiceprints → exact cosine geometry) |

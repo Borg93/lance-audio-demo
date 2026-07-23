@@ -9,13 +9,13 @@
 > own deep-dive in **[INVESTIGATION.md](INVESTIGATION.md)** (Part B) — read that
 > before you touch image resolution or vLLM warmup.
 
-Source of truth: [`src/ratch/vllm/embedding.py`](../src/ratch/vllm/embedding.py),
-[`src/ratch/vllm/reranker.py`](../src/ratch/vllm/reranker.py),
-[`src/ratch/vllm/image.py`](../src/ratch/vllm/image.py),
+Source of truth: [`src/ratch/clients/embedding.py`](../src/ratch/clients/embedding.py),
+[`src/ratch/clients/reranker.py`](../src/ratch/clients/reranker.py),
+[`src/ratch/clients/image.py`](../src/ratch/clients/image.py),
 [`Makefile`](../Makefile) (the `embed-server` / `rerank-server` / `*-docker`
 targets), [`src/ratch/cli/features.py`](../src/ratch/cli/features.py) +
 [`src/ratch/features/`](../src/ratch/features/) (the `feature text_embedding` /
-`feature frame_embedding` commands), [`backend/search/service.py`](../backend/search/service.py)
+`feature frame_embedding` commands), [`services/search/services/service.py`](../services/search/services/service.py)
 (`run_search`), and the chat template
 [`src/ratch/retrieval/qwen3_vl_reranker.jinja`](../src/ratch/retrieval/qwen3_vl_reranker.jinja).
 
@@ -38,7 +38,7 @@ servers. The embedder produces vectors; the reranker produces relevance scores.
 | GPU (Makefile) | `EMBED_GPU ?= $(VLLM_GPU)` (= 0) | `RERANK_GPU ?= $(VLLM_GPU)` (= 0) |
 
 The Python defaults live in the client constructors (`VLLMEmbeddingClient` in
-`vllm/embedding.py`, `VLLMReranker` in `vllm/reranker.py`) and the module
+`clients/embedding.py`, `VLLMReranker` in `clients/reranker.py`) and the module
 constants `EMBED_MODEL`, `RERANK_MODEL`, `DEFAULT_EMBED_URL`,
 `DEFAULT_RERANK_URL`. The vector width is `EMBED_DIM = 2048` in
 [`model/schema.py`](../src/ratch/model/schema.py) — the single source of truth.
@@ -47,10 +47,10 @@ constants `EMBED_MODEL`, `RERANK_MODEL`, `DEFAULT_EMBED_URL`,
 2048-d vector. You *could* slice to a shorter prefix to halve storage + index
 cost, but `ratch` keeps the full width for maximum retrieval fidelity. The only
 transform is L2-normalization (the vLLM pooler returns un-normalized vectors), in
-`vllm/image.py::l2_normalize`:
+`clients/image.py::l2_normalize`:
 
 ```python
-# vllm/image.py — l2_normalize()
+# clients/image.py — l2_normalize()
 norms = np.linalg.norm(arr, axis=1, keepdims=True)
 norms = np.where(norms == 0, 1.0, norms)
 return (arr / norms).astype(np.float32)     # unit vectors, full 2048-d
@@ -203,9 +203,9 @@ query/doc strings are ever sent to the reranker.
 
 ## 4. The shared seam: one client, two callers
 
-`vllm/embedding.py` exposes `VLLMEmbeddingClient` (`embed_text`, `embed_image`),
+`clients/embedding.py` exposes `VLLMEmbeddingClient` (`embed_text`, `embed_image`),
 behind the structural `EmbeddingClient` `Protocol` that the feature engine and
-backend depend on (tests inject an offline fake). `vllm/reranker.py` exposes
+backend depend on (tests inject an offline fake). `clients/reranker.py` exposes
 `VLLMReranker` (`rerank`) plus the `QwenVLReranker` LanceDB adapter. The two
 callers drive them differently.
 
@@ -221,7 +221,7 @@ flowchart TD
 
     subgraph online["ONLINE — FastAPI serving path"]
         RS["run_search()<br/>embed_text([vec_text])  → 1 vector<br/>embed_image([bytes]) → 1 vector<br/>rerank(q, docs)"]
-        BND["error boundary:<br/>embed httpx errors → HTTP 503<br/>(in backend/search/service.py)"]
+        BND["error boundary:<br/>embed httpx errors → HTTP 503<br/>(in services/search/services/service.py)"]
         RS --> BND
     end
 
@@ -240,12 +240,12 @@ into one GPU pass. The feature CLI layers an outer batch on top
 **Online (`run_search`).** The backend issues **one query at a time**
 (`client.embed_text([vec_text])[0]`, `client.embed_image([image_bytes])[0]`). The
 clients connect lazily — `ensure_embedder` / `ensure_reranker` in
-[`backend/clients.py`](../backend/clients.py) only construct a client on first
+[`services/search/services/clients.py`](../services/search/services/clients.py) only construct a client on first
 use, so an FTS-only deployment never needs vLLM up. There are **two error
 boundaries**, both mapping failures to a structured **503** ("embedding/rerank
 service unavailable") so the frontend shows a meaningful message instead of a
-500: the lazy constructors in `backend/clients.py`, and the per-request embed call
-inside `run_search` (`backend/search/service.py`), which catches
+500: the lazy constructors in `services/search/services/clients.py`, and the per-request embed call
+inside `run_search` (`services/search/services/service.py`), which catches
 `httpx.ConnectError` / `httpx.HTTPError` from `embed_text` / `embed_image`.
 
 > The POST handler offloads `run_search` to `run_in_threadpool(...)` because the
@@ -303,7 +303,7 @@ flowchart LR
     POST --> J --> H --> SC["relevance_score ∈ [0,1] per doc"]
 ```
 
-In Python (`vllm/reranker.py`), `rerank()` wraps the query and each document in
+In Python (`clients/reranker.py`), `rerank()` wraps the query and each document in
 the model-card scaffolding before posting:
 
 ```python
@@ -352,7 +352,7 @@ reads the `text` column, calls `client.rerank(query, docs)`, appends the scores 
 
 ---
 
-## 6. How search uses embeddings (`backend/search/service.py::run_search`)
+## 6. How search uses embeddings (`services/search/services/service.py::run_search`)
 
 > The concrete row-count and index facts in §6–§7 (145,175 rows,
 > `frame_embedding_idx`, etc.) refer to `transcripts_v2.lance` — which is both the
@@ -360,7 +360,7 @@ reads the `text` column, calls `client.rerank(query, docs)`, appends the scores 
 
 `/api/search` accepts a `mode`; `run_search` routes each one differently. Only
 `fts` needs no GPU; every other mode calls `get_embedder()` first (and 503s if the
-embed server is down). A `SearchSpec` ([`backend/search/spec.py`](../backend/search/spec.py))
+embed server is down). A `SearchSpec` ([`services/search/services/spec.py`](../services/search/services/spec.py))
 normalizes the request: `q` (FTS text), `q_vec` (optional separate vector-leg
 text, falls back to `q`), `n` (results, default **20**, clamped 1..200), `mode`,
 `rerank` + `rerank_n` (cross-encoder head size, default 20, clamped 1..200),
@@ -471,7 +471,7 @@ server sized its deepstack buffer for at warmup**, or the engine aborts with
 
 ```mermaid
 flowchart TD
-    C["vllm/image.py client<br/>_IMAGE_SIDE = 392<br/>392 px square crop"]
+    C["clients/image.py client<br/>_IMAGE_SIDE = 392<br/>392 px square crop"]
     C --> CT["(392 / 28)² = 196 vision tokens"]
     S["embed server<br/>min==max==153664 px = 392²<br/>(--mm-processor-kwargs)"]
     S --> ST["(392 / 28)² = 196 vision tokens"]
@@ -480,7 +480,7 @@ flowchart TD
     X -->|"yes → OK"| OK["no overflow"]
 ```
 
-The mechanics (from the comment block above `_IMAGE_SIDE` in `vllm/image.py`):
+The mechanics (from the comment block above `_IMAGE_SIDE` in `clients/image.py`):
 
 - Qwen3-VL uses a 14 px patch with a 2× spatial merge → an effective **28 px**
   tile, so an `S×S` image yields `(S/28)²` vision tokens.
@@ -491,7 +491,7 @@ The mechanics (from the comment block above `_IMAGE_SIDE` in `vllm/image.py`):
   ceiling** by pinning every image to one resolution. The embed server pins
   `min_pixels == max_pixels == 153664` (= 392²) → **196** tokens.
 
-**Client and server now agree.** `_IMAGE_SIDE = 392` in `vllm/image.py`, matching
+**Client and server now agree.** `_IMAGE_SIDE = 392` in `clients/image.py`, matching
 the server's `153664`-px pin → both produce 196 tokens. (An earlier `_IMAGE_SIDE
 = 448` produced 256 tokens and overflowed the server's buffer — the historical
 recurring crash documented in [INVESTIGATION.md](INVESTIGATION.md) Part B.) The
@@ -566,15 +566,15 @@ rebuilding the indexes after the bulk writes.
 
 | I want to… | Look at |
 |---|---|
-| Change the embed/rerank wire format | [`vllm/embedding.py`](../src/ratch/vllm/embedding.py) / [`vllm/reranker.py`](../src/ratch/vllm/reranker.py) **and** [`qwen3_vl_reranker.jinja`](../src/ratch/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
-| Change the embedding dim / normalization | `EMBED_DIM` in [`model/schema.py`](../src/ratch/model/schema.py); `l2_normalize()` in [`vllm/image.py`](../src/ratch/vllm/image.py) |
-| Change embed image resolution | `_IMAGE_SIDE`, `_square_crop()` in [`vllm/image.py`](../src/ratch/vllm/image.py) + the Makefile pixel pin + [INVESTIGATION.md](INVESTIGATION.md) |
-| Change caption image resolution | `frame_to_data_url` / `_CAPTION_MAX_SIDE` in [`vllm/image.py`](../src/ratch/vllm/image.py) (full frame, no square crop) |
-| Change the caption model / prompt / language | `MEDIA_CAPTION_*` env or `feature caption --model/--instruction/--url`; defaults in [`vllm/caption.py`](../src/ratch/vllm/caption.py) |
+| Change the embed/rerank wire format | [`clients/embedding.py`](../src/ratch/clients/embedding.py) / [`clients/reranker.py`](../src/ratch/clients/reranker.py) **and** [`qwen3_vl_reranker.jinja`](../src/ratch/retrieval/qwen3_vl_reranker.jinja) (keep in sync!) |
+| Change the embedding dim / normalization | `EMBED_DIM` in [`model/schema.py`](../src/ratch/model/schema.py); `l2_normalize()` in [`clients/image.py`](../src/ratch/clients/image.py) |
+| Change embed image resolution | `_IMAGE_SIDE`, `_square_crop()` in [`clients/image.py`](../src/ratch/clients/image.py) + the Makefile pixel pin + [INVESTIGATION.md](INVESTIGATION.md) |
+| Change caption image resolution | `frame_to_data_url` / `_CAPTION_MAX_SIDE` in [`clients/image.py`](../src/ratch/clients/image.py) (full frame, no square crop) |
+| Change the caption model / prompt / language | `MEDIA_CAPTION_*` env or `feature caption --model/--instruction/--url`; defaults in [`clients/caption.py`](../src/ratch/clients/caption.py) |
 | Launch / configure the vLLM servers | [`Makefile`](../Makefile) — `embed-server*`, `rerank-server*` targets (the caption VLM is run externally; ratch is only its client) |
 | Change which GPU the servers use | `VLLM_GPU` (both default here) — or `EMBED_GPU` / `RERANK_GPU` to split them — in the Makefile |
-| Change search fusion / add a mode | [`backend/search/service.py`](../backend/search/service.py) — `run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`; modes in [`backend/search/spec.py`](../backend/search/spec.py) |
-| Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/ratch/vllm/) satisfying `EmbeddingClient`, wire it via `backend/clients.py` / `features/columns.py` |
+| Change search fusion / add a mode | [`services/search/services/service.py`](../services/search/services/service.py) — `run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`; modes in [`services/search/services/spec.py`](../services/search/services/spec.py) |
+| Add a non-vLLM client backend (e.g. HF) | add a client class in [`vllm/`](../src/ratch/clients/) satisfying `EmbeddingClient`, wire it via `services/search/services/clients.py` / `features/columns.py` |
 | Add a new derived column | one entry in `FEATURES` in [`features/columns.py`](../src/ratch/features/columns.py) |
 | Run the offline embed passes | `ratch feature text_embedding` / `frame_embedding` / `caption` / `caption_embedding` ([`cli/features.py`](../src/ratch/cli/features.py)) |
 | Understand the open blockers | [TODO.md](TODO.md) and [INVESTIGATION.md](INVESTIGATION.md) |

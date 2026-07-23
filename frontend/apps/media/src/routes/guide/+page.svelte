@@ -5,7 +5,7 @@
    * the Atlas map works. Self-contained: no props, no fetching. Scroll-reveal
    * via a tiny IntersectionObserver action; the pipeline + lanes use CSS
    * animations so the "several searches at once, then merge" flow reads as
-   * motion. Content verified against backend/search/service.py.
+   * motion. Content verified against services/search/services/service.py.
    */
   // `Map as MapIcon` (same aliasing as routes/+page.svelte): the bare icon name
   // would shadow the global Map constructor used by rrfRows' rankOf below.
@@ -322,7 +322,7 @@
     },
   ];
 
-  // Data-flow: the journey of a query end-to-end (from backend/search/service.py).
+  // Data-flow: the journey of a query end-to-end (from services/search/services/service.py).
   const JOURNEY = [
     {
       label: 'You ask',

@@ -2,8 +2,8 @@
 
 > How we capture *what was actually trained on*, its *params*, and the *data snapshot* —
 > and how that propagates to the user and is viewed. Grounded in this repo's OpenLineage
-> emission (`src/ratch/lineage.py`, `backend/lancekit/lineage_emit.py`), the `annotations`
-> schema (`annotate.py` `_EMPTY_SCHEMA`), and the AL loop (`docs/ACTIVE_LABELING.md`).
+> emission (`src/ratch/lineage.py`, `services/common/lancekit/lineage_emit.py`), the `annotations`
+> schema (`services/annotator/annotations/schema.py` `EMPTY_SCHEMA`), and the AL loop (`docs/ACTIVE_LABELING.md`).
 > Cross-checked against OpenLineage-for-ML + GreptimeDB conventions.
 
 ## Thesis: three complementary systems, cross-linked by shared keys
@@ -119,8 +119,9 @@ input dataset version → time-travel to the rows it trained on.**
 ## Ours (pre-merge) vs the merge
 
 **OURS — buildable in this repo now:**
-1. **Provenance COLUMNS** on `_EMPTY_SCHEMA` (Phase 0 "add while empty", mirror in
-   `seed_annotations.py`): `trained_in_version` (int), `created_at`/`updated_at` (ts),
+1. **Provenance COLUMNS** on `EMPTY_SCHEMA` (`services/annotator/annotations/schema.py` —
+   add while the table is still empty; `seed_annotations.py` imports it, so one edit
+   propagates): `trained_in_version` (int), `created_at`/`updated_at` (ts),
    `margin` (f32) + `logits` (list<f32>), `encoder_embedding` (list<f32>/blob ref).
 2. **Lineage facet SHAPE** — extend `lineage.py`/`build_run_event`: measure-on-input + input
    `DatasetVersionDatasetFacet`, `ratch_trainingConfig` + `ratch_selection` run facets, the
@@ -133,7 +134,7 @@ input dataset version → time-travel to the rows it trained on.**
 
 **MERGE — lance-ns / Ray / infra (NOT built here):** the retrain COMPUTE (lance-ray + vLLM Ray
 Data fine-tune jobs); model ARTIFACTS in HF Hub + registry; the retrain TRIGGER (count/drift/
-class-imbalance from Lance version deltas); the frozen-holdout EVAL GATE (Phase 7); the governed
+class-imbalance from Lance version deltas); the frozen-holdout EVAL GATE; the governed
 write + real lineage TRANSPORT (catalog-routed `merge_insert` → OpenLineage over Dapr/NATS +
 OpenFGA + gold QC; swap our `build_run_event` for lance-ns's via `emit_stage_lineage(builder=)`);
 the GreptimeDB deploy + Grafana + OTel Collector/Alloy.
@@ -141,7 +142,7 @@ the GreptimeDB deploy + Grafana + OTel Collector/Alloy.
 ## Open questions (decisions before predictions land at scale)
 
 - **Canonical identity key** — `doc_id/speech_id/chunk_id/frame_idx` vs engine `page_id/dataset_id`
-  (roadmap blocker #1). Provenance rows key on it.
+  (`docs/LANCE_NS_HANDOFF.md` question 1). Provenance rows key on it.
 - **Do we fine-tune now, or is the near-term loop predict+relabel+re-predict with an external
   model** (training deferred)? Decides whether *we* emit `ratch_trainingConfig` or only at merge.
 - **`trained_in_version` write timing** — stamp on gated COMPLETE (only if promoted), so a

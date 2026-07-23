@@ -39,7 +39,7 @@ seam): the read plane forms it, the write plane consumes it.
 
 The `annotations` schema stays MODE-BLIND (records `source` + `status` + `confidence`,
 never "manual"/"bulk"). Every labeling action is a `LabelOp` over four axes
-(`frontend/apps/media/src/lib/labeling/`):
+(`frontend/packages/labeling/src/`):
 
 | Axis | Values | Formed by |
 |---|---|---|
@@ -63,12 +63,15 @@ The **three modes are regions** in (Producer × Execution):
 - **AI-as-Judge** is batch, not interactive — it *looks at data* (scores/verifies existing
   predictions), never at a person's screen; it feeds confidence/uncertainty.
 
-**Scaffold status:** `labeling/types.ts` (Selection/Producer/Op/Execution/LabelOp) +
+**Where this lives:** `labeling/types.ts` (Selection/Producer/Op/Execution/LabelOp) +
 `labeling/producers.ts` (typed registry: human, sam-click, insid3, grounding-dino, htr,
-vlm-judge, embed-propagate) DONE; the controller's `apply(op)` routes the **manual** path
-for real (manual = human·verdict·interactive·one — proving the annotator isn't coupled to
-the review flow) and returns typed `queued`/`unsupported` for batch + interactive-assist
-producers (their predict/decode transport + batch-deriver enqueue are the follow-ups).
+vlm-judge, embed-propagate); the controller's `apply(op)` routes the **manual** path
+locally (manual = human·verdict·interactive·one — the annotator isn't coupled to the
+review flow) and submits every **batch** producer through `labeling/jobs.ts` — ONE
+submit path (`POST /api/jobs/apply`, served by
+`services/annotator/api/v1/endpoints/jobs.py`; exemplars ride the same seam for the
+propagate producers). Interactive assist (click-to-segment) is the narrow exception and
+hits `services/annotator/api/v1/endpoints/assist.py`.
 
 ## Auto-labeling = a silver deriver per model family
 
@@ -116,7 +119,8 @@ training path.
 
 ## Schema (status: partly DONE)
 
-**Done** (`annotations` table + `annotate.py` `_EMPTY_SCHEMA` + `seed_annotations.py`):
+**Done** (`annotations` table + `services/annotator/annotations/schema.py`
+`EMPTY_SCHEMA`, imported by `seed_annotations.py`):
 `confidence`, `uncertainty`, `source`, `model_version` added and round-tripping; the
 review-queue query is proven (`status='prediction' ORDER BY uncertainty DESC`).
 
@@ -127,7 +131,7 @@ replay).
 
 ## Open questions (user decisions)
 
-1. **Identity key** — backend keys `doc_id/speech_id/chunk_id/frame_idx`; ra-anno's
+1. **Identity key** — our services key `doc_id/speech_id/chunk_id/frame_idx`; ra-anno's
    engine schema keys `page_id/dataset_id`. Pick one canonical key before predictions
    land at scale.
 2. **Auto-accept policy** — QA-sampling auto-accept (high-confidence → accepted, small

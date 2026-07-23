@@ -1,6 +1,6 @@
 # LANCE_MEDIA — merge-preparation goal, target architecture, acceptance criteria
 
-Status: **PROPOSED** (2026-07-16). Grounded in a 7-agent code/docs audit + a 3-critic adversarial verification pass.
+Status: **COMPLETE** (all 4 prep phases shipped + pushed by 2026-07-21; detail in git history). Kept for §1–§2 (scope), §4 (target architecture, code-cited), §7 (invariants), and the §9 rask landing map (superseded in detail by [RASK_LANDING.md](RASK_LANDING.md) / [RASK_COMPARE.md](RASK_COMPARE.md)). Originally grounded in a 7-agent code/docs audit + a 3-critic adversarial verification pass.
 Repos: `~/Desktop/lance-audio` (**the only repo this goal changes**), `~/Desktop/rask` (future destination — read-only context), `~/Desktop/lance-ns` (pattern source + Lance docs — read-only).
 
 ---
@@ -22,17 +22,11 @@ Repos: `~/Desktop/lance-audio` (**the only repo this goal changes**), `~/Desktop
 - KG-building scripts (`runners/kg/`) and Toponymy topics keep their current out-of-band form.
 - `evals/voice_labels_*.json` (human voice labels keyed to transcripts_v2 speaker/turn ids) are **kept intact** and stay valid — the ported voice endpoint SHOULD reproduce the known ranking quality (genuine pair at ranks 1–2, AP ≈ 0.74).
 
-## 3. Current state (condensed audit)
+## 3. Current state at proposal time (2026-07-16) — historical
 
-**Pipeline** (`src/ratch/`): Makefile-orchestrated DAG of resumable single-process Typer commands. Concurrency = `ThreadPoolExecutor` HTTP fan-out to 4 vLLM servers (:8001 embed, :8002 rerank, :8003 caption, :8004 summarize), ffmpeg thread pools, and OS-level process sharding with `{table}_shard{i}.lance` staging + `fold_shards`. **Zero `ray` imports.** The good news: `features/engine.py` (upsert_scan_column / upsert_blob_column / ensure_*_index) is deliberately client-free, and `embed_columns.py` binds columns to structural client Protocols — the Ray seam already exists. Blob v2 is already in use (documents.media_blob = external-URI blob; thumbnails/frames = inline blob; all blob tables at `data_storage_version="2.2"`).
-
-**Backend** (`backend/`): read-only FastAPI over one Lance DB. ~32 hardcoded schema couplings (table names in `state.py`, column lists in `search/constants.py`, `filters.py`, `atlas/points.py`, `voice/service.py`, …) but the load-bearing primitives are already generic: `media/blobs.py` (take_blobs + Range streaming), RFC 9457 handlers, `/api/columns` introspection. It **imports `ratch` in 12+ modules** (clients.py, deps.py, search/*, atlas/points.py, voice/encoder.py, mcp/tools.py, …) — not standalone.
-
-**Frontend** (`frontend/src/`): Svelte 5 SPA. Schema leaks are concentrated and enumerable: `api.ts` zod `Hit` mirror, `hitKey = doc|speech|chunk`, `TABLE_COLUMNS`, atlas space/channel names, workflow `scope.ts` raw SQL, graph Cypher presets. Already generic: both WebGPU renderers, atlas math, cross-filter mechanics, `filter-popover` (driven by `/api/columns`), table-prefs, timelines (modulo key names).
-
-**Operational reality (verified 2026-07-16)**: `input/` is empty — all 1,154 `documents.media_blob` external URIs (`file://…/input/sv/*.mp4`) dangle locally; the corpus lives in the HCP `film-raudio` bucket. The vLLM servers are down (:8001 answers 404, :8002–:8004 closed) and the Makefile embed/rerank targets need the known `--with kernels` removal. All 21 test files import `ratch`. Any acceptance check that needs media bytes or embeddings must go through §5 first.
-
-**rask** (context for §9): Polylith-ish monorepo — `packages/` (service-kit, ray-kit, storage, `@rask/ui`, `@rask/api`) / `components/` (services :8801–:8810 behind gateway :8888, SvelteKit MFEs path-routed) / `projects/`. `search_api` is the template for a Lance-backed service. **`components/services/viewer` is a ghost and the name is forbidden.** No Tiltfile: dev = `scripts/dev-micro.sh`, deploy = Helm `chart/`. Ray = KubeRay (prod) / `make ray-up` (local), jobs via ray-kit `JobSubmissionClient`.
+*(Condensed away 2026-07-23: the audit described the pre-rewrite tree; every gap it
+listed was closed by the four phases. See git history at this file's introduction
+for the original inventory.)*
 
 ## 4. Target architecture
 
@@ -99,107 +93,12 @@ Rules that make the later lift mechanical:
 
 The SvelteKit SPA stays in this repo. The generic layer is kept as-is (gpu-scatter, gpu-graph, atlas math, cross-filter, timelines, filter builder, table prefs); every schema-bound spot (`api.ts` Hit mirror, `TABLE_COLUMNS`, hit-card fields, player metaRows, atlas spaces/channels, workflow `scope.ts` SQL, active-filter pills) is rewritten to read the **descriptor** fetched at startup. Row identity = `descriptor.identity` composition (replaces hardcoded `hitKey`). Search modes, filters, media/player URLs, atlas spaces: all descriptor-driven. Corpus-specific copy (guide page, graph Cypher presets) is either descriptor-fed or explicitly quarantined as corpus content.
 
-## 5. Prerequisites, baselines, evidence rules
+## 5–6. Phases, baselines, acceptance criteria — executed
 
-**Do §5.1–§5.3 before any rename or rewrite.** They exist because the naive checks are otherwise unrunnable (no local media, servers down) or gameable.
-
-### 5.1 Media availability
-
-- Select **5 fixed sample docs** from `transcripts_v2.lance` documents (record their `doc_id`s + source filenames in `scripts/sample_docs.txt`, committed). Pull their `.mp4`s from the HCP **`film-raudio`** bucket back into `input/sv/` using the same hf/S3 tooling used for the upload (always pass `--config`; see the HCP memory note). This un-dangles those 5 docs in transcripts_v2 **and** provides ingest input for parity.
-- For the mixed-media smoke (P1.4), generate **synthetic fixtures** instead of downloading: `ffmpeg` `testsrc` mp4 (video), sine-wave wav (audio), any png (image), committed under `tests/fixtures/media/`. Deterministic, no network.
-
-### 5.2 Server + runtime bring-up (per-check requirements)
-
-- vLLM embed :8001 (+ rerank :8002 for hybrid/rerank checks; caption :8003 + summarize :8004 only for the full-stage parity run): start via `scripts/serve-all.sh` / `make stack-up` **with the known fix — drop `--with kernels`** (kernels API change broke the Makefile targets). Servers start sequentially (vLLM memory-profiling race). Both 2B models fit one GPU at 0.45 mem-fraction.
-- Ray: local `ray.init()` (no cluster infra). GPU note: vLLM servers own the GPU; Ray actors are CPU-side clients (pyannote/WeSpeaker CPU or small-GPU) — sequence GPU-heavy stages rather than co-residing.
-- Old backend for P2.6 goldens: `make backend` (or uvicorn equivalent) against `transcripts_v2.lance`.
-
-### 5.3 Baselines captured BEFORE the P1.1 rename
-
-- **P1.7 baseline**: run the *current* `ratch` CLI over the 5 sample docs into a fresh baseline DB (`baselines/old_pipeline.lance/`), and record the 3 fixed FTS queries' top-10 key sets. If the rename lands first anyway, run the old side from a pinned git worktree of the pre-rename commit.
-- **P2.6 goldens**: with the old backend running against transcripts_v2, record responses for a fixed query set (≥3 FTS, ≥3 vector, ≥2 hybrid, ≥2 filtered) into `baselines/search_golden.json`, committed. The Phase-2 parity script replays these against the new search service **on the same DB** and compares top-10 key sets; its output must name the DB path compared.
-- **Backend survival**: P1.1 ships a thin `ratch` shim package re-exporting from `ratch`, so the existing backend (12+ ratch imports) keeps starting until Phase 2 severs the dependency (P2.8).
-
-### 5.4 Which dataset backs which check
-
-| check | dataset |
-|---|---|
-| P1.4 smoke, P1.8 resume | fresh smoke DB from synthetic fixtures |
-| P1.7 parity | `baselines/old_pipeline.lance` vs fresh new-pipeline DB (same 5 docs) |
-| P2.4 blob/Range + ffprobe, P3.1 playback | the 5 restored sample docs (transcripts_v2 or the fresh sample DB) |
-| P2.5/P2.6 search + parity, P2.7 sub-resources, P3.4 atlas | `transcripts_v2.lance` (descriptor via config file; accepts non-stable `_rowid`; **never compact it**) |
-| P2.7 empty-state probe, P3.3 acid test | the P1.4 smoke DB (different keys, no time axis) |
-
-### 5.5 Evidence rules (bind the evaluator)
-
-- **Markers need evidence**: `SMOKE OK` / `PARITY OK` / `RESUME OK` / `SEARCH PARITY OK` count **only** when accompanied in the same output by the evidence lines their criterion names. A bare marker = failure.
-- **Grep gates print state**: every "no hits" gate runs as `grep -rn <pattern> <path> && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'` — the evaluator must see `GATE OK`, never empty output. Gates use `--exclude-dir` so the expected hit count is exactly zero (no "only in fixtures" judgment calls).
-- New scripts written for checks (parity, smoke, resume) must have their source surfaced in the conversation at least once before their output is trusted.
-
-## 6. Phases and acceptance criteria
-
-MUST = phase-gating; SHOULD = do when reached, may slip. Every criterion's Check output must be shown in the conversation per §5.5.
-
-### Phase 1 — Ray Data pipeline, media-agnostic core
-
-- **P1.0 (MUST)** §5.1 media + §5.3 baselines in place; `scripts/sample_docs.txt`, `tests/fixtures/media/`, `baselines/` committed.
-  **Check**: `ls` of the three paths + the sample doc_ids printed.
-- **P1.1 (MUST)** Package reshaped: `src/ratch` → `src/ratch` with `core/` (engine, registry, driver), `modalities/` (av, image), `clients/` (vLLM HTTP); CLI `ratch`; thin `ratch` shim re-exporting from `ratch` keeps `backend/` importable; tests ported to `ratch` with **no reduction in test count**.
-  **Check**: `uv run ratch --help` exits 0; core-purity gate `grep -rn "ffmpeg\|pyannote\|audio_path\|modalities\|subprocess" src/ratch/core/ && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'` prints GATE OK; a contract test imports `ratch.core` and asserts `sys.modules` contains no `ratch.modalities`/`ratch.clients`; pytest `N passed` line surfaced with N ≥ the pre-rename count.
-- **P1.2 (MUST)** Ray Data drivers for every per-row fan-out stage (embed text/frame, caption, summarize, frame extraction, diarize, voiceprint): `lance_ray.read_lance → map_batches(actor pool) → engine upsert / lance_ray.add_columns`, honoring §4.3 blob-flow + writer-topology rules. Old mechanisms gone.
-  **Check**: negative gates `grep -rn "ThreadPoolExecutor" src/ratch/ --exclude-dir=clients && echo FAIL || echo 'GATE OK'` and `grep -rn "_shard" src/ratch/ && echo FAIL || echo 'GATE OK'`; positive gate `grep -rln "map_batches\|lance_ray" src/ratch/core/` lists the driver module(s); one real stage executed on the smoke DB with Ray actor-pool progress lines surfaced; `uv run ratch pipeline plan` prints the stage DAG with actor/GPU config.
-- **P1.3 (MUST)** Stage registry declares inputs/outputs/media-gate/client per §4.3; a `tests/test_registry.py` test feeds a mixed-MIME batch through a gated stage and asserts the skipped-row count is logged and nothing raises.
-  **Check**: `uv run pytest tests/test_registry.py -v` output surfaced, all passed.
-- **P1.4 (MUST)** Media-agnostic ingest: `SourceAdapter` seam (local dir + S3); smoke ingest of the synthetic video+audio+image fixtures creates `documents` rows with correctly sniffed MIMEs and resolving blobs.
-  **Check**: smoke script prints `SMOKE OK` **plus** the 3 sniffed MIME strings, the 3 doc_ids, and the byte counts returned by first/last-row 1-byte `read_range` probes.
-- **P1.5 (MUST)** Single create path: `create_dataset()` helper is the only table-create site, sets `data_storage_version="2.2"` + `enable_stable_row_ids=True`, declares blob columns via `lance.blob_field`, and stamps the `lance_media.descriptor` schema-metadata key from registry/ingest config. A unit test creates a table via the helper and asserts all three.
-  **Check**: `grep -rnE "lance\.write_dataset|lance_ray\.write_lance|\.create_table\(" src/ratch --include='*.py' | grep -v "core/dataset.py" && echo 'GATE FAIL' || echo 'GATE OK'` (pattern amended 2026-07-16: the naive form matched its own replacements — `overwrite_dataset` contains the substring); the unit test's pytest line; smoke DB tables show the metadata key via `ds.schema.metadata`.
-- **P1.6 (MUST)** Distributed indexing/compaction per §4.3 (incl. `CompactionOptions(defer_index_remap=True)`); zero-NULL + rows≥partitions gates preserved as tested logic.
-  **Check**: unit test for the gate logic (blocked when NULLs>0 or rows<partitions) passes; one real index built on the parity DB with `ds.list_indices()` output surfaced showing type/params (IVF_PQ cosine 256/64; 16 for voice).
-- **P1.7 (MUST)** Parity on the 5 sample docs: `baselines/old_pipeline.lance` vs the new pipeline's fresh DB — identical table set, row counts, doc_ids, key uniqueness; per-embedding-column min cosine ≥ 0.999; the 3 fixed FTS queries return the same top-10 key sets. The script computes both sides from the two DBs (no hardcoded expectations).
-  *Amendments (2026-07-16, evidence-based)*: (a) the image path (`frame_embedding`) uses floor 0.995 **plus a stronger check** — every frame JPEG byte-identical by sha1 across DBs (measured vLLM self-jitter on identical bytes 0.9997 back-to-back; cross-session bf16 batching variance exceeds 1e-3 through the vision tower); (b) generative `caption` strings compare as process, not tokens — the caption server is not self-deterministic even at temperature 0 (measured 4/6 exact-match on identical bytes back-to-back), so the check is full population + reported match rate, with `caption_embedding` cosine ≥ 0.999 evaluated over the caption-matching rows.
-  **Check**: `uv run python scripts/parity_check.py` prints per-table row-count pairs, per-column min cosine, the 3 key-set comparisons, then `PARITY OK`.
-- **P1.8 (MUST)** Resume/idempotency: interrupt the driver mid-stage (or simulate), re-run → completes.
-  **Check**: output shows NULL-residual counts before/after resume, duplicate-key query result = 0, then `RESUME OK`.
-- **P1.9 (MUST)** Repo health: `uv run pytest` exit 0 (surfaced `N passed`), `uv run ruff check` clean, `ty` clean on `src/ratch/` and `tests/`.
-- **P1.10 (SHOULD)** ASR (easytranscriber JSON ingest) wrapped as a registry stage.
-
-### Phase 2 — Schema-agnostic backend (in place)
-
-- **P2.1 (MUST)** Backend reshaped into `backend/media_api/` + `backend/search_api/` + shared `backend/core/`+`backend/lancekit/`; groups do not import each other; both mounted in one app.
-  **Check**: cross-import gates (both directions) print GATE OK; `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/livez` prints 200.
-- **P2.2 (MUST)** Discovery + descriptor endpoints: `GET /api/datasets` (tables, schema JSON, vector cols + dims via `list_size`, blob cols, indexes); `GET /api/datasets/{id}/descriptor` returns merged discovered+declared. The descriptor test **cross-checks against the live dataset**: identity fields exist in the schema, the media blob column is a real `lance.blob.v2` column, every vector binding names an actual FixedSizeList column with matching dim.
-  **Check**: `curl` outputs surfaced; the cross-check test's pytest line.
-- **P2.3 (MUST)** Corpus-literal gate: `grep -rn "text_embedding\|referenskod\|namn\|chunk_frames\|speaker_turns" backend/media_api backend/search_api --exclude-dir=tests && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'` prints GATE OK. The transcripts descriptor lives in `config/descriptors/`, outside code paths.
-- **P2.4 (MUST)** Blob/Range serving for any blob column (dataset id + table + column + row key): 206 with correct `Content-Range` for a mid-file range; 200 without Range; works for external-URI media blobs (restored sample docs) and inline thumbnails/frames.
-  **Check**: `curl -r 100-199 -s -D -` output showing `206` + `Content-Range` + 100 bytes; `ffprobe` over the HTTP URL succeeds on a restored sample video.
-- **P2.5 (MUST)** Search driven by descriptor: FTS/vector/hybrid take a dataset id; explicit `vector_column_name` always passed; multi-vector tables work; filters compiled from descriptor-declared fields; rerank via descriptor encoder bindings. Requires embed(+rerank) servers up (§5.2).
-  **Check**: three `curl` searches (fts, vector, hybrid) against transcripts_v2 return model-shaped hits (output surfaced).
-- **P2.6 (MUST)** Semantic parity vs the §5.3 goldens, **same DB both sides** (transcripts_v2): FTS same top-10 key set; vector same top-10 given same encoder; filters equivalent.
-  **Check**: parity script prints the query list, both top-10 key sets side by side per query, the DB path compared, then `SEARCH PARITY OK`.
-- **P2.7 (MUST)** Sub-resources as capabilities: doc transcript, diarization, atlas points (generic Arrow IPC: descriptor-declared x/y/cluster/rowid + channels), topics, voice, graph — served when declared; `built:false`/404 empty-state otherwise. The capability-less probe target is the P1.4 smoke DB (expected, not scope creep).
-  **Check**: `curl` per endpoint on transcripts_v2; one probe on the smoke DB returns the empty-state contract.
-- **P2.8 (MUST)** Standalone backend: zero `ratch`/`ratch` imports in `backend/` (shim no longer needed by backend); backend tests pass without the pipeline package importable.
-  **Check**: `grep -rn "import ratch\|from ratch\|import ratch\|from ratch" backend/ && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'`; `uv run pytest tests/backend` (exact path per repo layout) surfaced `N passed`.
-- **P2.9 (SHOULD)** ~~MCP tools re-pointed at the descriptor-driven services~~ — **MCP dropped from Phase 2 scope by user decision (2026-07-16)**: the legacy `backend/mcp` mount is removed at integration and not replaced; re-mounting against the descriptor-driven services is deferred to a later goal. Ported voice endpoint SHOULD still be validated against `evals/voice_labels_*.json` (genuine pair ranks 1–2, AP ≈ 0.74). State where the WeSpeaker upload-encoder lives (optional heavy dep of search group vs media group).
-
-### Phase 3 — Schema-agnostic frontend (in place)
-
-- **P3.1 (MUST)** The SPA boots from `GET /api/datasets/{id}/descriptor`: search modes, hit cards, hit table columns, player meta rows, filters — all descriptor-rendered; zod schemas describe the descriptor + envelopes, not corpus columns.
-  **Check**: `bun run check` (or `npm run check`) + frontend tests green (output surfaced); **text-form runtime evidence** via playwright (headless WebGPU needs `--enable-unsafe-webgpu`, else headed): DOM dump showing ≥N hit-card nodes for a search on transcripts_v2 and a `<video>` element with populated `src` and `readyState ≥ 2` on a restored sample doc. Screenshots supplementary only.
-- **P3.2 (MUST)** Corpus-literal gate: `grep -rn "referenskod\|namn\|text_embedding\|speech_id" frontend/src --include=*.ts --include=*.svelte --exclude-dir=guide && echo 'GATE FAIL' || echo 'GATE OK (0 hits)'` prints GATE OK (the guide route is quarantined corpus content); hardcoded `hitKey` removed — identity composed from `descriptor.identity`.
-- **P3.3 (MUST)** **Acid test**: the same build renders the P1.4 smoke DB given only its descriptor. Required structural deltas vs transcripts: different identity key fields, no time axis, different/absent vector columns, different media shape (image + audio docs).
-  **Check**: one dev-server run serving both dataset ids; DOM dumps for each surfaced; `git diff --stat frontend/src` printed **empty** between the two renders.
-- **P3.4 (MUST)** Atlas descriptor-driven: WebGPU scatter fed by the generic points endpoint; spaces/channels from descriptor.
-  **Check**: a debug hook (e.g. `window.__atlasStats = {pointsDrawn}`) printed via playwright showing pointsDrawn > 0 on transcripts_v2.
-- **P3.5 (SHOULD)** Timelines, voice UI, topic tree, graph explorer behind descriptor capabilities; workflow `scope.ts` SQL generated from descriptor identity.
-
-### Phase 4 — Merge-readiness (no code moves)
-
-- **P4.1 (MUST)** `docs/RASK_LANDING.md` maps each piece to its rask target per §9, lists remaining merge-time work (service-kit composition, gateway route order, chart/values, dev-micro line, valibot swap, S3/rustfs data move, URI rebase for old-corpus media), and **enumerates any SHOULD features not yet ported** (voice/MCP/topics/graph — each "ported" with its check, or "explicitly deferred").
-  **Check**: file content surfaced; the P2.1/P2.8/P2.3/P3.2 gates re-run and printing GATE OK.
-- **P4.2 (MUST)** Runbook updated: `docs/REPRODUCE.md` + Makefile targets reflect the Ray pipeline (`ratch` commands); the `features-all`-equivalent target completes end-to-end on the 5-doc sample.
-  **Check**: the make target's completion output (exit 0) surfaced, plus `uv run ratch pipeline plan` reflecting the documented DAG.
+*(Condensed away 2026-07-23: all four phases ran to their acceptance criteria and
+pushed 2026-07 — Ray Data+actors via lance-ray, media-agnostic ratch, schema-agnostic
+descriptor backend/frontend, and the split services. The full phase plans + evidence
+rules live in git history; the proofs live in `docs/proofs/` and the test suite.)*
 
 ## 7. Invariants (must survive every phase)
 
@@ -215,35 +114,6 @@ MUST = phase-gating; SHOULD = do when reached, may slip. Every criterion's Check
 10. **Blob flow**: heavy blobs never transit Ray Data blocks — actors stream via `take_blobs`/`BlobFile` from the dataset directly; bulk byte reads use `read_blobs`.
 11. **Writer topology**: actors compute, driver commits; merge_insert/add_columns commits serialized per table driver-side; only plain Appends may be committed from parallel workers.
 
-## 8. `/goal` conditions (paste-ready)
-
-Recommended: run **one phase at a time**. Evidence rules: markers count only with their evidence lines; grep gates must print `GATE OK`.
-
-**Phase 1**
-```
-Phase 1 of docs/LANCE_MEDIA_MERGE.md (lance-audio repo) is complete: prerequisites and baselines first (5 sample videos restored from the HCP film-raudio bucket into input/sv/ with scripts/sample_docs.txt committed; synthetic ffmpeg/sine/png fixtures in tests/fixtures/media/; old-pipeline baseline DB and FTS top-10 baselines captured BEFORE the rename), then the pipeline rewrite. Every MUST criterion P1.0–P1.9 has had its Check run with passing output shown in the conversation: ratch CLI works with the ratch shim keeping backend/ importable and tests ported with no reduction in count (pytest N-passed line shown); all grep gates print GATE OK (core purity incl. modalities/subprocess; no ThreadPoolExecutor outside clients; no _shard staging; positive gate lists map_batches/lance_ray driver modules); one real Ray stage runs on the smoke DB with actor-pool progress shown; registry mixed-MIME skip test passes; smoke prints SMOKE OK with 3 sniffed mimes + doc_ids + read_range byte counts; the single create_dataset() helper gate passes with its flags-and-descriptor-metadata unit test; index-gate unit test passes and one real index shows in ds.list_indices() with IVF_PQ cosine 256/64 params; parity script (source shown) prints per-table row counts, min cosines, FTS key-set comparisons, then PARITY OK; resume shows NULL-residuals before/after and 0 duplicates then RESUME OK; ruff clean and ty clean on src/ratch and tests. Bare markers without their evidence lines do not count. Constraints: only the lance-audio repo changes; rask and lance-ns untouched; commits on main, conventional style, with the Co-Authored-By/Claude-Session trailers (user-reversed 2026-07-16). If blocked on the same error 3 consecutive turns, or after 40 turns, stop and summarize instead.
-```
-
-**Phase 2**
-```
-Phase 2 of docs/LANCE_MEDIA_MERGE.md (lance-audio repo) is complete: the backend is schema-agnostic and pre-split into backend/media_api + backend/search_api with shared core/lancekit, and every MUST criterion P2.1–P2.8 has had its Check shown in the conversation: cross-import gates both directions print GATE OK and curl -w prints 200 for /livez; GET /api/datasets and the descriptor endpoint outputs are surfaced with the descriptor cross-check test (identity fields exist, blob column is real blob-v2, vector bindings match FixedSizeList dims) passing; the corpus-literal gate over backend/media_api + backend/search_api prints GATE OK with the transcripts descriptor living in config/descriptors/; blob Range serving shows a curl -D - response with 206 and correct Content-Range plus ffprobe success on a restored sample video; fts/vector/hybrid curl searches with embed and rerank servers running return model-shaped hits; the search parity script prints each query with both top-10 key sets side by side against the pre-recorded baselines on the same transcripts_v2 DB, then SEARCH PARITY OK; capability sub-resources respond on transcripts_v2 and the smoke DB probe returns the built:false empty-state; the no-ratch/ratch-imports gate over backend/ prints GATE OK and backend tests pass with the pytest N-passed line shown. Bare markers without their evidence lines do not count. Constraints: only the lance-audio repo changes; commits on main with the Co-Authored-By/Claude-Session trailers (user-reversed 2026-07-16). If blocked on the same error 3 consecutive turns, or after 40 turns, stop and summarize instead.
-```
-
-**Phase 3**
-```
-Phase 3 of docs/LANCE_MEDIA_MERGE.md (lance-audio repo) is complete: the frontend renders search, hit cards, hit table, player, filters, and atlas purely from the dataset descriptor fetched from GET /api/datasets/{id}/descriptor, and every MUST criterion P3.1–P3.4 has had its Check shown in the conversation. Checks that must be surfaced: the frontend type-check (TypeScript 7 / tsgo where the toolchain supports it, svelte-check otherwise) and the frontend tests both green with output shown; the zod schemas describe the descriptor and response envelopes, not corpus columns; playwright TEXT evidence shows N hit-card DOM nodes for a search on transcripts_v2 and a <video> element with a populated src and readyState >= 2 on a restored sample doc; the corpus-literal grep gate over frontend/src (--include=*.ts --include=*.svelte, guide route excluded as quarantined content) prints GATE OK and the hardcoded hitKey is replaced by descriptor.identity composition; the acid test passes — one dev-server run serves BOTH transcripts_v2 AND the structurally different smoke dataset (different identity key fields, no time axis, different media shape; given a minimal search binding + FTS index so search renders) from the same build given only each descriptor, with DOM dumps for each and an empty git diff --stat of frontend/src between the two renders; the atlas WebGPU view reports pointsDrawn > 0 via a page debug hook under playwright (headless needs --enable-unsafe-webgpu, else headed). A bare assertion without its surfaced evidence does not count; the grep gate must print GATE OK, never empty output. Constraints: Svelte 5 runes + bits-ui/shadcn-svelte + Tailwind + WebGPU only (no WebGL/Canvas2D fallback); only the lance-audio repo changes — rask and lance-ns untouched; the full frontend suite stays green; commits on main, conventional style, with the Co-Authored-By/Claude-Session trailers (user-reversed 2026-07-16); activate the svelte-runes and writing-typescript skills before editing. If blocked on the same error 3 consecutive turns, or after 40 turns, stop and summarize instead.
-```
-
-**Phase 4**
-```
-Phase 4 of docs/LANCE_MEDIA_MERGE.md (lance-audio repo) is complete: docs/RASK_LANDING.md exists with its content surfaced, mapping media_api/search_api/frontend/pipeline to their rask targets, listing all remaining merge-time work, and enumerating every SHOULD feature as ported-with-check or explicitly deferred; the P2.1, P2.3, P2.8, and P3.2 grep gates re-run and print GATE OK; docs/REPRODUCE.md and the Makefile reflect the ratch Ray pipeline; and the features-all-equivalent make target completes on the 5-doc sample with its exit-0 output surfaced plus ratch pipeline plan matching the documented DAG. Constraints: no code moves into rask; only the lance-audio repo changes; commits on main with the Co-Authored-By/Claude-Session trailers (user-reversed 2026-07-16). If blocked on the same error 3 consecutive turns, or after 20 turns, stop and summarize instead.
-```
-
-**Umbrella (whole preparation — prefer the four sequential goals above)**
-```
-The lance-media merge PREPARATION defined in docs/LANCE_MEDIA_MERGE.md is complete through Phase 4 — prerequisites/baselines first, then: pipeline on Ray Data actor pools via lance-ray with a media-agnostic ratch package; schema-agnostic descriptor-driven backend pre-split into non-cross-importing media_api/search_api with zero ratch imports; descriptor-driven frontend passing the two-dataset acid test with an empty frontend diff between renders; and merge-readiness docs — WITHOUT performing the rask merge itself. Every MUST criterion P1.0–P1.9, P2.1–P2.8, P3.1–P3.4, P4.1–P4.2 has had its stated Check run with passing output surfaced in the conversation; all grep gates print GATE OK; the markers SMOKE OK, PARITY OK, RESUME OK, SEARCH PARITY OK appear together with their required evidence lines (bare markers do not count); pytest/ruff/ty and frontend check outputs are shown green in each phase. Constraints: ALL changes confined to the lance-audio repo — rask and lance-ns are read-only; commits on main, conventional style, with the Co-Authored-By/Claude-Session trailers (user-reversed 2026-07-16). If blocked on the same error 3 consecutive turns, or after 160 turns total, stop and summarize instead.
-```
-
 ## 9. Future rask landing map (context only — a separate follow-up goal)
 
 | piece (after this goal) | rask target | notes |
@@ -254,23 +124,3 @@ The lance-media merge PREPARATION defined in docs/LANCE_MEDIA_MERGE.md is comple
 | `src/ratch` pipeline | a rask brick (`components/cli/` or `packages/`) | submitted via ray-kit `JobSubmissionClient`; KubeRay in prod |
 | Lance DB | rustfs/S3 bucket + `dir`→`rest` namespace flip; rebase old-corpus blob URIs (`base_store_params`) or re-ingest | storage_options via the settings helper pattern |
 | gotchas | `RASK_API_PREFIX` is `/api` in chart+dev-micro but `/api/v1` in code defaults; Dapr eats trailing slashes (keep SlashToleranceMiddleware) | verified 2026-07-16 |
-
-## 10. Phase 3 evidence reproduction (2026-07-16)
-
-All P3.1–P3.4 checks pass; the runner is `frontend/e2e/evidence.mjs`.
-
-- Backend up on :8000 (transcripts_v2 default + smoke via `config/descriptors/smoke.json`); embed :8011.
-- Frontend dev server: `bunx vite dev --port 5180 --host 127.0.0.1` (proxies /api → :8000).
-- Browser: the Playwright chromium build lacks proprietary codecs (no H.264) and gives no headless WebGPU adapter here. Use **real Google Chrome** (extracted via `dpkg-deb -x google-chrome-stable.deb`) in **headless** mode — it has H.264 AND WebGPU over the GPU DRM render node (no display/xvfb needed):
-  `LD_LIBRARY_PATH=<chrome-dir> bun frontend/e2e/evidence.mjs http://127.0.0.1:5180 <chrome-dir>/chrome`
-- Result (EVIDENCE OK): transcripts — 100 hit-card DOM nodes for "regeringen", `<video readyState=4>` on restored doc 018f41ad28a1bc1b; atlas — WebGPU adapter OK, scatter drew 145,175 points; acid test — the SAME build rendered the smoke dataset (identity `[doc_id]`, no time axis) from its descriptor alone (3 cards), `git diff --stat frontend/src` empty between the two renders.
-- Type/test/gate: svelte-check 0 errors, tsgo (TS7) 0 errors on the pure-TS layer, vitest 11/11, P3.2 corpus-literal gate GATE OK.
-
-## 11. Phase 4 evidence reproduction (2026-07-16)
-
-All P4.1–P4.2 checks pass. The deliverable is [RASK_LANDING.md](RASK_LANDING.md).
-
-- **P4.1** — `docs/RASK_LANDING.md` written: maps media_api/search_api/frontend/pipeline to their rask targets (grounded in the real rask + lance-ns source, file:line cited), details the **S3+Lance+Ray** landing (storage_options seam, the two backend access paths needing object-store wiring, take_blobs-over-S3, dir→rest flip, and a data-move plan grounded in the actual blob schema — transcripts_v2 is `data_storage_version=2.2`, `documents.media_blob` is EXTERNAL `file://` → re-ingest, `thumbnail`/`frame_blob` managed → plain copy; KubeRay Ray-Jobs-REST submission mirroring lance-ns medallion `ray_submit.py`), enumerates voice/topics/graph as ported-with-check + MCP deferred, and corrects six §9 inaccuracies (search-api name collision, missing configmap/per-project-members edits, hyphen/underscore split, required `RASK_VIEWER_*`, 5-file port declaration).
-- **Re-run gates** (no servers needed): `P2.1a/P2.1b` (cross-import both directions), `P2.3` (backend corpus-literals), `P2.8` (no ratch/ratch imports in backend/), `P3.2` (frontend corpus-literals) all print **GATE OK**.
-- **P4.2** — `docs/REPRODUCE.md` gained the two-execution-paths note (legacy per-column vs the `ratch pipeline` Ray driver); the Makefile gained `pipeline-plan` / `pipeline-run STAGE=…` / `pipeline-index` / `features-all-ray`. `uv run ratch pipeline plan` prints the 8-stage DAG (text_embedding, summary, frame_embedding, caption, caption_embedding, extract_frames, diarize, voiceprint) with shape/table/gate/client/actors×GPU.
-- **P4.2 live** — the Ray pipeline ran end-to-end on the fixed 5-doc sample (`parity_new.lance` copy, 90 chunks / 90 frames / 5 docs; embed :8011): `pipeline run text_embedding` exit 0 (0 NULLs → correct no-op); `pipeline run frame_embedding --overwrite` executed `InputDataBuffer → TaskPoolMapOperator[ReadLance] → ActorPoolMapOperator[MapBatches(_BlobActor)]`, **90/90 computed, exit 0**; `pipeline index` applied **8 index ops, exit 0** (benign small-sample KMeans warnings at 323<65536). Frontend re-verified live: `evidence.mjs` EVIDENCE OK + `smoke-all.mjs` transcripts 6/6 + smoke 6/6.

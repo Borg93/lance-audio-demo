@@ -81,7 +81,7 @@ two viewers, chosen by `document.mime` + capabilities.
                     ┌────────────▼───────┐ ┌──────────▼─────────┐ ┌────────▼───────────┐
                     │ 1. VIEWER service  │ │ 2. SEARCH service  │ │ 3. ANNOTATOR svc   │
                     │ pages + image bytes│ │ FTS/vector/hybrid  │ │ annotation CRUD    │
-                    │ + annotation READ  │ │ (our search_api)   │ │ local-first + save │
+                    │ + annotation READ  │ │ (services/search)  │ │ local-first + save │
                     │ (Arrow IPC stream) │ │ over Lance         │ │ → merge_insert(id) │
                     └────────────┬───────┘ └──────────┬─────────┘ └────────┬───────────┘
                                  └──────────── read/write ─────────────────┘
@@ -122,7 +122,11 @@ profiling shows PixiJS instancing can't hold the point count you need (millions)
 ## 4a. The audio viewer — peaks.js (the AV analogue of the page viewer)
 
 Audio needs its own region-aware viewer exactly as documents need the page/bbox
-viewer. **Recommendation: peaks.js** (BBC R&D) over wavesurfer.js, because:
+viewer. **Decision taken (shipped): wavesurfer.js** — its regions plugin drives the
+shipped audio annotator (`frontend/apps/annotator`), and the temporal facet landed
+exactly as sketched below. peaks.js was the original recommendation and was
+rejected in implementation (wavesurfer's plugin set + decode path fit the shipped
+corpus). The original rationale, kept for the record:
 
 - It is **annotation-first** — labeled time **segments** + **points** are the core
   primitives (BBC built it for spoken-word *archive* annotation), which is our exact
@@ -157,53 +161,6 @@ waveform on the same Arrow engine — unifies everything but is more to build; d
 So HTR/OCR is not a special pipeline — it's `bronze image → htr stage → annotations
 (silver) → viewer/annotator services`, the identical machinery as audio→chunks.
 
-## 5a. Increment 1 — DONE (engine vendored, toolchain unified)
-
-Landed in this repo (`frontend/`), all gates green:
-- **ra-anno's engine folded in** — `src/lib/engine/` (25 files, 5,117 lines): the
-  PixiJS plugins (Image/ArrowData/Interaction), the tool suite
-  (rect/polygon/point/line/pencil/lasso/brush + magnetic/scissors edge-snap), the
-  editors, and `AnnotationStore`. Deps added: `pixi.js`, `flatbush`,
-  `@techstark/opencv-js@5.0.0-release.1`.
-- **Vendored at upstream strictness** — the engine's 120 diffs were all from our two
-  extra flags (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) that
-  ra-anno wasn't written for. Rather than rewrite 5k lines of upstream geometry code
-  (permanent merge friction), it's checked via `tsconfig.engine.json` at `strict`
-  minus those two; our own code keeps them. `bun run check:engine` → 0.
-- **Toolchain: oxlint + oxfmt** replace eslint + prettier (9 deps + 3 configs
-  removed). oxlint runs `typescript`+`oxc` as errors (unicorn deferred — it wanted a
-  repo-wide refactor), vendored engine ignored. `check:ts` repointed to the correct
-  `tsconfig.tsgo.json` (tsgo can't read `.svelte`).
-- **Bun** confirmed (adapter-bun); ra-anno's Deno mention dropped.
-
-Deferred to increment 2: wire `PixiCanvas.svelte` + an annotation route, connect it
-to a real Lance `annotations` table, and add peaks.js for the audio lane.
-
-## 5b. Merged vs NOT merged — the honest reality of increment 1
-
-**Merged (committed):** ONLY `frontend/src/lib/engine/` (25 files) — the rendering
-+ annotation *core*: PixiJS Image/ArrowData/Interaction plugins, the tool suite,
-the editors, `AnnotationStore` (local-first WAL), `schema.ts` (the annotation
-model), interaction (incl. **lasso multi-select** — `selectedSet`). Plus deps
-(pixi.js, flatbush, opencv-js, elkjs) + the oxc toolchain.
-
-**⚠️ It is INERT.** Nothing imports `$lib/engine` — no canvas, no route, no UI, no
-data. So ra-anno is *code-present, not functional*. What's **NOT merged** (still
-only in the ra-anno clone) is everything that makes it run:
-
-| Not moved | What it is |
-|---|---|
-| `PixiCanvas.svelte` | the thin mount wrapper (Application + plugin wiring) |
-| app stores | `annotations.svelte.ts` / tools / undo / transport (what components bind to) |
-| components | `AnnotationSidebar`, `Toolbar`, `magic/`, `ui/` (most `ui/` = shadcn we already have) |
-| routes | the annotation-editor page(s) |
-| API endpoints | `annotations` / `images` / `pages` / `thumbnails` / `datasets` — the Arrow-IPC server + image serving (currently mock; Flight SQL not built even upstream) |
-| hooks/server | 2 files |
-
-**Increment 2 = wire it:** mount `PixiCanvas` in a route, bring the sidebar/toolbar
-+ app stores, stand up the annotator API endpoints against a real Lance
-`annotations` table. Only then does annotation actually work here.
-
 ## 5c. Annotation across modalities — can we, and what's needed
 
 The engine's model (`schema.ts`) is genuinely document-grade: `shape_type` ∈
@@ -211,13 +168,13 @@ The engine's model (`schema.ts`) is genuinely document-grade: `shape_type` ∈
 plus `text/label/status(prediction→reviewed→accepted)/group_id(link lines→region)/
 difficult/mask/metadata`. But it is **spatial-image ONLY** — zero time/video.
 
-| Capability | Now? | What it needs |
+| Capability | Now? | Notes |
 |---|---|---|
-| **Bulk selection** | **✅ already in the engine** (LassoTool → `selectedSet` → `highlightSet`, `batchUpdateLocal`) | just wire the sidebar bulk-edit UI |
-| **Annotate on audio** | ❌ | a **WaveformCanvas** (peaks.js) + a `segment` time-range shape (`t_start/t_end`). Store + annotator service already generalize (region+label); only the VIEWER is new |
-| **Draw on video (spatial, on a frame)** | ⚠️ partial | a **VideoCanvas** = `<video>` + the PixiJS overlay synced to `currentTime`; add a temporal key to a shape (`frame_idx` or `t`). The DRAWING engine works as-is on the frame texture |
-| **Frames that draw on video** | ⚠️ partial | our `extract_frames` silver stage already yields frames; drawing on them is just the image path — pinning a shape to a video *time* + overlaying it back is the new part |
-| **Track/interpolate across frames (CVAT-style)** | ❌ | keyframe interpolation between annotated frames using per-object tracks (`group_id` exists as the track key) — a bigger, separate feature |
+| **Bulk selection** | ✅ shipped | LassoTool → `selectedSet` → `highlightSet`, `batchUpdateLocal` + the sidebar bulk edit |
+| **Annotate on audio** | ✅ shipped | wavesurfer.js regions + the `t_start/t_end` temporal facet; same store + annotator service (region+label) |
+| **Draw on video (spatial, on a frame)** | ✅ shipped | `<video>` + the PixiJS overlay synced to `currentTime`; shapes pin to the playhead (`t_start`) — E2E-proven |
+| **Frames that draw on video** | ✅ shipped | the frame path IS the image path; shapes overlay back at their time |
+| **Track/interpolate across frames (CVAT-style)** | ❌ future | keyframe interpolation between annotated frames using per-object tracks (`group_id` exists as the track key) — the one genuinely open item |
 
 **The unifying idea:** keep ONE `annotations` table + ONE annotator service. Extend
 the model with an optional **temporal facet** (`t_start/t_end` for segments, `t`/
@@ -254,16 +211,13 @@ So the segmentation is: **one uniform annotation model + one annotator service; 
 frontend segments by a per-modality VIEWER component.** That's the only axis that
 forks — and it forks in the view layer, exactly where it should.
 
-## 6. Open decisions (call these before building)
+## 6. Decisions taken
 
-1. **Flight SQL server vs `@lancedb/lancedb` TS SDK vs our FastAPI** for the
-   viewer/annotator Arrow path. Flight SQL gives a warm NVMe cache shared with the
-   batch writers (coherency); FastAPI keeps one backend language. Likely: FastAPI
-   for search, a Flight-SQL-or-Arrow sidecar for the hot annotation/image path.
-2. **Deno vs Bun** — ra-anno's docs say Deno, its lockfile says Bun; lance-media is
-   Bun (adapter-bun). Standardize on **Bun**.
-3. **One repo, one frontend** — merge ra-anno's `src/lib/engine` in as the viewer
-   core; the AV player stays for audio/video corpora; descriptor selects.
-4. **Annotation spatial-alignment schema** — adopt ra-anno's `annotations` columns
-   as the descriptor's spatial-alignment capability (the analogue of our temporal
-   `alignments`), so the backend/frontend stay descriptor-driven.
+1. **FastAPI, not Flight SQL** — the three FastAPI services serve the Arrow path
+   (annotations ride Arrow IPC over HTTP); a Flight/cache sidecar remains a
+   merge-time option for the hot image path, not built here.
+2. **Bun** — standardized (turborepo + adapter-bun).
+3. **One repo, one frontend** — ra-anno's engine model folded in as
+   `frontend/packages/engine`; the AV player stays; the descriptor selects.
+4. **Spatial-alignment schema** — ra-anno's `annotations` columns adopted as the
+   contract (see `ANNOTATIONS_SCHEMA_CONTRACT.md`), temporal facet included.

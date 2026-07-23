@@ -98,7 +98,7 @@
   let voiceLabel = $state<string | null>(null);
   /** Voice paging mirror of `spec.n` (voice ignores the text-search spec). */
   let voiceN = $state(PAGE_STEP);
-  // Mirrors the backend's hard cap on `n` (backend/voice/service.py _MAX_N):
+  // Mirrors the backend's hard cap on `n` (services/viewer/services/voice_service.py _MAX_N):
   // requests are clamped server-side, so paging past it can never grow the set.
   const VOICE_MAX_N = 100;
   // Raw (pre-dedupe) hit count of the last voice response. Voice exhaustion is

@@ -15,8 +15,8 @@ modules that matter here are:
 
 | Module | Subcommand | What it does |
 |---|---|---|
-| [`src/ratch/asr/transcribe.py`](../src/ratch/asr/transcribe.py) | `ratch transcribe` | Runs the 4-stage `easytranscriber` pipeline → alignment JSONs |
-| [`src/ratch/asr/detect_language.py`](../src/ratch/asr/detect_language.py) | `ratch detect-language` | Pre-step: classify each file's language, sort into `<lang>/` |
+| [`runners/asr/transcribe.py`](../runners/asr/transcribe.py) | `ratch transcribe` | Runs the 4-stage `easytranscriber` pipeline → alignment JSONs |
+| [`runners/asr/detect_language.py`](../runners/asr/detect_language.py) | `ratch detect-language` | Pre-step: classify each file's language, sort into `<lang>/` |
 | [`src/ratch/model/datamodel.py`](../src/ratch/model/datamodel.py) | — | The Pydantic v2 models that *describe* the JSON output |
 
 ---
@@ -24,10 +24,10 @@ modules that matter here are:
 ## 1. The 4-stage pipeline at a glance
 
 `easytranscriber.pipelines.pipeline(...)` runs four models in sequence. Each
-stage writes its interatchte output to its own directory under
+stage writes its intermediate output to its own directory under
 `--output-root` (default `output/`), so a crash mid-run is resumable and you
 can inspect any stage. `ratch transcribe` wires all four together with one call
-in [`run_transcribe`](../src/ratch/asr/transcribe.py).
+in [`run_transcribe`](../runners/asr/transcribe.py).
 
 ```mermaid
 flowchart TD
@@ -66,7 +66,7 @@ only used to *time* it. This is the same split popularized by WhisperX, which
 All values below are the **actual defaults** in
 [`src/ratch/cli/`](../src/ratch/cli/) (`cmd_transcribe`) and the
 `DEFAULT_EMISSIONS_MODEL` map in
-[`src/ratch/asr/transcribe.py`](../src/ratch/asr/transcribe.py) — not invented.
+[`runners/asr/transcribe.py`](../runners/asr/transcribe.py) — not invented.
 
 | Stage | Flag | Default | Notes |
 |---|---|---|---|
@@ -85,7 +85,7 @@ When `--emissions-model` is omitted (the default), `run_transcribe` resolves it
 from `DEFAULT_EMISSIONS_MODEL` keyed on `--language`:
 
 ```python
-# src/ratch/asr/transcribe.py
+# runners/asr/transcribe.py
 DEFAULT_EMISSIONS_MODEL = {
     "sv": "KBLab/wav2vec2-large-voxrex-swedish",
     "en": "facebook/wav2vec2-base-960h",
@@ -109,14 +109,14 @@ torchaudio==2.11.0+cu128   # from the explicit pytorch-cu128 index
 ```
 
 The comment is load-bearing: *"driver 570.x supports up to CUDA 12.8, and cu130
-wheels fail to initialize (driver too old)."* `easytranscriber`, `easyaligner`,
-and `torch` are **core dependencies** (installed by a plain `uv sync`), but
-heavy — so `transcribe.py` imports them **lazily** inside `run_transcribe` and
-raises a clear hint to re-run `uv sync` if they are somehow missing. That keeps
-`ratch --help` fast and lets the FTS-only / search-only paths run without
-touching the GPU. (The *optional* extras are `multimodal`, the client-side
-embedding/reranker stack, and `atlas` (evoc / scikit-learn, for `ratch feature
-atlas`) — both unrelated to ASR.)
+wheels fail to initialize (driver too old)."* `easytranscriber` and `torch` are
+**NOT core dependencies** — they live in the `[models]` optional extra (and in
+`runners/asr/pyproject.toml`, the runner's own env): a plain `uv sync` installs
+no model stack, `import ratch` loads none (test-enforced), and the model-running
+Make targets pass `--extra models`. `runners/asr/transcribe.py` still imports
+them lazily inside `run_transcribe` with a clear re-sync hint. (The other
+extras are `multimodal`, the client-side embedding/reranker stack, and `atlas`
+(evoc / scikit-learn) — both unrelated to ASR.)
 
 ---
 
@@ -144,7 +144,7 @@ flowchart TD
     MAP --> MV["move file → audio-dir/&lt;lang&gt;/<br/>(unless --no-move / --dry-run)"]
 ```
 
-Grounded details from [`detect_language.py`](../src/ratch/asr/detect_language.py):
+Grounded details from [`detect_language.py`](../runners/asr/detect_language.py):
 
 - **Two backends, picked by `--model`.** `_mms_probe` loads
   `Wav2Vec2ForSequenceClassification` and softmaxes over its 256 language
@@ -378,7 +378,7 @@ CUDA device is present.
 
 | Module | Subcommand | Make target | What it does |
 |---|---|---|---|
-| [`src/ratch/media/diarize.py`](../src/ratch/media/diarize.py) | `ratch extract-speaker-turns` | `make speaker-turns` | pyannote diarization per video → `speaker_turns.lance` |
+| [`runners/diarize/diarize.py`](../runners/diarize/diarize.py) | `ratch extract-speaker-turns` | `make speaker-turns` | pyannote diarization per video → `speaker_turns.lance` |
 
 ```mermaid
 flowchart TD
@@ -396,7 +396,7 @@ ratch --db transcripts_v2.lance extract-speaker-turns --audio-root ./input/sv
 make speaker-turns DB=transcripts_v2.lance
 ```
 
-Grounded details from [`diarize.py`](../src/ratch/media/diarize.py) /
+Grounded details from [`diarize.py`](../runners/diarize/diarize.py) /
 [`cli/speaker.py`](../src/ratch/cli/speaker.py):
 
 - **In-process, no server.** A `Diarizer` loads
@@ -427,11 +427,11 @@ Grounded details from [`diarize.py`](../src/ratch/media/diarize.py) /
 The read side serves this via `GET /api/diarization/{doc_id}` into the player's
 **Speakers** tab — see [GUIDE.md §5](GUIDE.md#5-end-to-end-information-flow).
 The route reads `speaker_turns.lance` **on demand per request**
-(`backend/diarization/router.py`), so a freshly-built or rebuilt table is served
+(`services/viewer/api/v1/endpoints/diarization.py`), so a freshly-built or rebuilt table is served
 immediately — **no backend restart needed** (the [REPRODUCE.md](REPRODUCE.md) runbook concurs).
 
 > This is **diarization only** (segment the audio by speaker turn). The separate
-> cross-video *voice search* / speaker-embedding axis (matching the *same* person
-> across recordings) is **not shipped** — de-risking found it only ~0.74 AUC
-> cross-video (AMBER); see [TODO.md](TODO.md). The anonymous per-video labels
-> here deliberately make no cross-video identity claim.
+> cross-video *voice search* / speaker-embedding axis **shipped** on top of it —
+> WeSpeaker turn voiceprints, `GET /api/voice/similar`, identity clusters
+> (see [VOICE.md](VOICE.md)); clusters remain unnamed
+> ([TODO.md](TODO.md) § Bigger bets).

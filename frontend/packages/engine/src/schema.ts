@@ -3,7 +3,7 @@
 // NOTE: the parallel ANNOTATION_COLUMNS / PAGE_COLUMNS lists were removed 2026-07-21 —
 // they were dead (no consumer) and already drifted (missing t_start/t_end, ra-anno's
 // page_id identity). The SINGLE schema source of truth is the backend's EMPTY_SCHEMA
-// (backend/media_api/annotations/schema.py); the engine is schema-driven at runtime —
+// (services/annotator/annotations/schema.py); the engine is schema-driven at runtime —
 // ArrowDataPlugin reads columns by name from whatever table the wire delivers.
 
 export type AnnotationStatus = "prediction" | "draft" | "reviewed" | "accepted" | "rejected";

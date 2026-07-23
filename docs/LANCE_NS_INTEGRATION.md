@@ -268,12 +268,14 @@ single OpenLineage line.
 - Merged as derivers, our stages inherit spec-true OpenLineage **for free**;
   we must supply an honest `column_map` per stage (our `Stage` declarations
   already carry `read_columns`/`key_columns`/`output_columns`, which map 1:1).
-- **Standalone ratch today emits NOTHING** — running the pipeline outside
-  lance-ns (make targets, local Ray) produces no lineage events. Deliberate:
-  emission is the harness's job, and duplicating an emitter in ratch would
-  drift from their pinned spec constants. If pre-merge lineage is ever needed,
-  the right shape is a thin optional emitter that imports THEIR
-  `common/openlineage.py` helpers, not a reimplementation.
+- **The thin pre-merge emitter now exists** — `src/ratch/lineage.py` (the
+  `Stage`-aware layer, `emit_stage_lineage` + a `LineageSink`) over kernel-owned
+  facet primitives in `services/common/lancekit/openlineage.py`, which mirror
+  lance-ns's pinned spec constants so a pre-merge event and a merged event
+  describe the same run identically. Emission stays the harness's job: merged,
+  we pass THEIR `build_run_event` as the builder; standalone runs use the kernel
+  mirror. Opt-in and not yet wired into the driver — see `docs/OPENLINEAGE.md`
+  for the wiring plan.
 - **Creds** — workload identity (KubeRay projected SA) + short-TTL table-scoped
   creds via `POST /v1/table/{id}/credentials`. **No durable secret on compute** —
   which resolves the S3-wiring open question from `RASK_LANDING.md §4` in the
@@ -321,7 +323,7 @@ by layer (reference model: **Firn/firnflow** — LanceDB + object storage + a ti
 
 | Cache | Owner | Why | Status |
 |---|---|---|---|
-| **Result cache** — query → hits, keyed `(dataset, table-version, query-hash)`, invalidate-by-version | **us (the viewer)** | It memoizes *our* read patterns (search/atlas/graph); a viewer has high repeat locality (re-run, page back/forth). View-layer concern. | **built** — `backend/search_api/result_cache.py`, opt-in `MEDIA_SEARCH_CACHE_SIZE` (0=off), mirrors the atlas `points_cache` |
+| **Result cache** — query → hits, keyed `(dataset, table-version, query-hash)`, invalidate-by-version | **us (the viewer)** | It memoizes *our* read patterns (search/atlas/graph); a viewer has high repeat locality (re-run, page back/forth). View-layer concern. | **built** — `services/search/services/result_cache.py`, opt-in `MEDIA_SEARCH_CACHE_SIZE` (0=off), mirrors the atlas `points_cache` |
 | **Object-byte cache** — S3 fragment/index bytes on NVMe, survives restarts | **the query engine / lance-ns** | Storage-tier concern; makes *cold* queries fast. Wrong layer to hand-roll in Python. | **deferred** — belongs in a Rust serving layer via `foyer` (Firn's L4), or Lance's own object-store cache |
 | Reader metadata cache (page/index/dictionary LRU) | **Lance, already** | Keeps a live reader fast; not results, not persistent | free |
 
@@ -374,7 +376,7 @@ Merge sequence (all *after* the lance-ns→rask fold-in, none in this repo now):
 4. **Re-point the app at the catalog** — swap direct `lance.dataset` opens for
    `/query` + `/blobs` + `/describe`; land it as `apps/media` (or a rask MFE)
    reusing `packages/ui`; descriptor discovery via `/describe` + the metadata key.
-   **PROTOTYPED (in-repo):** `backend/lancekit/reader.py` puts direct-Lance and the
+   **PROTOTYPED (in-repo):** `services/common/lancekit/reader.py` puts direct-Lance and the
    catalog `/query` client behind ONE duck-typed `TableReader`, selected by
    `MEDIA_READ_BACKEND=direct|catalog` (+ `MEDIA_CATALOG_URI`). The scan path
    (`to_table`/`count_rows`) reads through the lance-ns `QueryTableRequest` client

@@ -175,7 +175,7 @@
   let audioInput = $state<HTMLInputElement | null>(null);
   /** Inline error for a rejected clip (too large) — never sent to the API. */
   let audioError = $state<string | null>(null);
-  /** Mirrors the backend cap (`backend/voice/service.py` _MAX_UPLOAD_BYTES);
+  /** Mirrors the backend cap (`services/viewer/services/voice_service.py` _MAX_UPLOAD_BYTES);
    *  bigger files would 400 server-side, so they're refused client-side. */
   const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 

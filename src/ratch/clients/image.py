@@ -25,10 +25,10 @@ from ..model.schema import EMBED_DIM
 # (The previous 448 x 448 = 200704 px overran it — the recurring crash.)
 # Center-crop sacrifices aspect ratio — fine for whole-image similarity.
 #
-# Documented fix per docs/INVESTIGATION.md (Part B). UNVERIFIED end-to-end:
-# embed-chunk-frames has never completed on GPU. Validate with
-# `make embed-server-docker && make embed-chunk-frames`. If you change this side
-# length, change the Makefile min/max_pixels pin to match (side² == pin).
+# Documented fix per docs/INVESTIGATION.md (Part B); verified end-to-end — the
+# full frame-embedding backfill (145k frames) completed under this pin. If you
+# change this side length, change the Makefile min/max_pixels pin to match
+# (side² == pin) and re-run the INVESTIGATION.md validation gate.
 _IMAGE_SIDE = 392
 
 # Re-encode quality for the embedding payload. Trades wire size against fidelity

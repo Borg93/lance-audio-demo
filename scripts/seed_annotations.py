@@ -2,7 +2,7 @@
 
 Writes ``<db>/annotations.lance`` with a few sample shapes on a real frame. The
 contract columns come STRAIGHT from the backend's ``EMPTY_SCHEMA`` (the single source
-of truth — ``backend/media_api/annotations/schema.py``); this script only prepends the
+of truth — ``services/annotator/annotations/schema.py``); this script only prepends the
 demo descriptor's identity columns. A test asserts the seeded dataset matches the
 composition, so drift fails loudly.
 
@@ -12,12 +12,9 @@ composition, so drift fails loudly.
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import lance
 import pyarrow as pa
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root → `backend` importable
 
 from annotator.annotations.schema import EMPTY_SCHEMA
 

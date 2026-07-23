@@ -15,7 +15,7 @@
 import * as v from "valibot";
 
 // ─────────────────────────────────────────────────────────────────────
-// Descriptor envelope (mirrors backend/lancekit/descriptor.py)
+// Descriptor envelope (mirrors services/common/lancekit/descriptor.py)
 // ─────────────────────────────────────────────────────────────────────
 
 const int = () => v.pipe(v.number(), v.integer());

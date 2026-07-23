@@ -11,7 +11,12 @@ file into the lance-ns session. Companion detail: `ANNOTATIONS_SCHEMA_CONTRACT.m
 1. **Annotations as a governed catalog table** — does lance-ns host `annotations` as a
    catalog table, and does its canonical schema match our 25 contract columns + identity
    (`ANNOTATIONS_SCHEMA_CONTRACT.md` §Columns TODAY)? Who owns the schema of record at
-   merge?
+   merge? **Settle while the table is still empty:** the canonical identity key must go
+   arity-generic off `descriptor.identity.key_fields` (everything merges/keys on it —
+   derivers, saves, exports), and any agreed additions from question 2 plus
+   `created_at`/`updated_at` and the temporal fields (`t_start`/`t_end`/`frame_idx`)
+   land BEFORE the first predictions do — retrofitting keys under data is the one
+   ordering mistake this handoff exists to prevent.
 2. **The 4 training/model columns** — `trained_in_version` (int64 = Lance version),
    `margin` (f32), `logits` (list/blob), `encoder_embedding` (list/blob): defined there,
    with what type/semantics? We only READ them and deliberately did NOT guess them into
@@ -24,7 +29,7 @@ file into the lance-ns session. Companion detail: `ANNOTATIONS_SCHEMA_CONTRACT.m
    `/v1/table/{id}/query|merge_insert|delete|blobs` that our reader/writer client
    (behind `MEDIA_READ/WRITE_BACKEND`, Local-transport parity-tested) targets unchanged?
    Note: predicates are **strings on this wire** — our shared renderer
-   (`backend/lancekit/predicate.py`) is the single quoting implementation.
+   (`services/common/lancekit/predicate.py`) is the single quoting implementation.
 5. **OpenLineage** — does the catalog mover emit spec-2-0-2 RunEvents on `merge_insert`
    (our `lineage_emit` then no-ops), carrying the input `DatasetVersionDatasetFacet` +
    the training-run params facets (`ratch_trainingConfig`/`ratch_selection`)?
@@ -57,8 +62,8 @@ file into the lance-ns session. Companion detail: `ANNOTATIONS_SCHEMA_CONTRACT.m
   `materialize-blobs` run (376 MB managed; 65 MB blob streams over S3). `d00211f`.
 - **Derivers model** — lance-ns fan-out §4 proven 2026-07-16: 166/166 tests, patch at
   `docs/proofs/lance-ns-media-derivers.patch`.
-- **3-service import boundaries** — `annotations/` + `assist` + `search_api` import
-  zero viewer modules (kernel = `backend/lancekit` + `core`/`state`/`deps`); the
+- **3-service import boundaries** — the annotator + search services import zero viewer
+  modules (shared kernel = `services/common` — lancekit + core/schemas/deps); the
   annotator-service lift touches no viewer code. `4283800`.
 - **Write-plane UX** — save/tags/un-tag/compare-versions/saved-views browser-proven
   (E2E 51 checks across annotator/temporal/read-plane suites); the 409 optimistic-

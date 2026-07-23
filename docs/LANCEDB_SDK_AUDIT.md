@@ -13,16 +13,6 @@ one per adoption candidate, each grounded in file:line evidence.*
 | **Search plane** | **lancedb** `connect` → `open_table`, `MatchQuery`/`PhraseQuery`, rerankers, `create_index(config=FTS()/IvfPq())` | `lancekit/registry.py`, `search_api/*`, `ratch` ingest/engine | The query-builder surface (FTS/hybrid/rerank) is exactly what the SDK is for |
 | **Catalog seam** | **lance_namespace** REST client (`QueryTableRequest`, `merge_insert_into_table`, `DeleteFromTableRequest`) | `lancekit/{reader,writer}` catalog transports | The lance-ns merge contract — predicates are *strings on this wire* (constrains everything below) |
 
-## Adopted now (this commit)
-
-- **lancedb 0.33.0 → 0.34.0** (user-directed). 615 backend tests + full E2E green.
-- **Unified index API** — all 4 legacy call sites migrated, deprecation warnings gone:
-  `create_fts_index(kwargs…)` → `create_index(col, config=FTS(…))` in
-  `ratch/core/engine.py::ensure_fts_index`, `ratch/ingest/ingest.py` (ingest +
-  `reindex_fts`), `tests/test_search_api_service.py`; legacy
-  `create_index(metric=…, vector_column_name=…)` → `create_index(col,
-  config=IvfPq(…))` in `ensure_vector_index` (metric now `Literal["l2","cosine","dot"]`).
-
 ## Probe verdicts
 
 ### 1. `read_consistency_interval` / `checkout_latest` / `Session` — **SKIP** (with one local fix)
@@ -40,7 +30,7 @@ something for the interval to refresh.
 **Real residual pain (ours, not the SDK's):** the registry caches the *descriptor*
 (schema/row_count/version frozen at first `get()`) forever — `DatasetHandle.refresh_descriptor`
 exists with **zero callers**, and `search_api/target.py:116` acknowledges the stale race
-in a comment. → **P1 backlog: wire `refresh_descriptor`** when a per-request open
+in a comment. → **Settled (shipped):** drift-sync landed as `DatasetHandle.sync_table_info` when a per-request open
 observes a newer table version than the cached `TableInfo`. `Session` (shared
 index/metadata cache across opens) is the one SDK feature with genuine upside for the
 open-per-request pattern — adopt only if per-request open cost ever shows in profiles.
@@ -67,7 +57,7 @@ default `doc_key_pattern ^[A-Za-z0-9_-]{1,64}$` admits no quotes):
 - `ratch/modalities/av/cluster.py:73` interpolates a filesystem path into a `LIKE`
   filter with **no escaping** (never fires today — callers pass fixed names).
 
-→ **P1 backlog: one shared pure-string predicate helper in `backend/lancekit`**
+→ **Settled (shipped):** the shared pure-string predicate helper lives in `services/common/lancekit/predicate.py`
 (`quote_literal` / `eq` / `isin` / `and_`) used by all 7 sites — works identically for
 pylance `filter=`, `ds.delete`, and the catalog REST predicate; make `validate_doc_key`
 validation-only (return the RAW key; escape only at SQL-render time); fix the
@@ -96,40 +86,22 @@ real blob item is **data-side and already built**: run `ratch materialize-blobs`
   table the app writes (`WHATS_LEFT.md` §2 says so). `/versions` materializes the full
   manifest list before capping — slows linearly with save count. **Constraint:** the
   compare-versions audit feature is served *from* retained old versions, so GC needs a
-  retention window ≥ the audit horizon. → **P2 backlog:** extend the `ratch compact`
+  retention window ≥ the audit horizon. → **Settled (shipped):** extended via the `ratch maintain`
   CLI / a `maintain` make target; at merge this belongs to lance-ns (catalog owns table
   maintenance), so keep it a thin scheduled call, not app machinery.
 - **Version tags: adopt WITH GC** (pylance `ds.tags` — no lancedb migration needed).
   Named review milestones ("batch-1-reviewed") are exempt from cleanup — the durable
-  audit spine once interatchte saves get pruned. Explicitly distinct from
+  audit spine once intermediate saves get pruned. Explicitly distinct from
   `annotations/tags.py` **row** tags (labels ON chunks) — different concept, zero overlap.
 - **Branches: skip (speculative).** No workflow wants isolated writable forks; branches
   would break the linear-version assumptions in the optimistic-concurrency handshake
   (`base_version` vs one `ds.version`), the `X-Annotations-Version` header, and the
   compare-versions diff.
 
-## Backlog summary (order of value)
+## Backlog summary
 
-1. **[P1] Shared predicate helper in lancekit — DONE** (`lancekit/predicate.py`:
-   `quote_literal/eq/ne/isin/and_`; ten sites migrated — the sweep found three more than
-   the probe's seven — `validate_doc_key` validation-only, `cluster.py` LIKE fixed).
-   Migration note: for quote-containing keys under a *permissive* descriptor pattern,
-   stored identity/tag-id bytes change from escaped to raw (the correct bytes); the
-   default pattern admits no quotes, so shipped datasets are byte-identical.
-2. **[P1] Descriptor drift-sync — DONE** (`DatasetHandle.sync_table_info`, replacing the
-   dead `refresh_descriptor`): per-table re-introspection on observed version drift at
-   both open seams (`table_dataset`, `resolve_target`); copy-on-write, best-effort,
-   stampede-guarded.
-3. **[P2] Annotations version GC — DONE** (`ratch maintain` / `make maintain`:
-   `cleanup_old_versions` with `--older-than-days` retention, tagged versions + latest
-   always survive via `error_if_tagged_old_versions=False`) + **version tags — DONE**
-   (`ratch tag NAME [--version N] [--delete|--list]` — review milestones exempt from
-   pruning; a pruned version is a clean 404 through `/versions` checkout).
-4. **[P2] `ratch materialize-blobs` — DONE 2026-07-21** (parity_new: media_blob 376 MB +
-   thumbnails now managed; re-synced to MinIO; 65 MB blob streamed over S3 + full
-   annotations write plane verified against the S3-backed backend).
-5. **[P3] `describe_indices()` migration — DONE 2026-07-21** (`introspect.py`: type from
-   the type_url tail — BTree/Bitmap/Inverted unchanged, vector indexes now the generic
-   `Vector` instead of `IVF_PQ`; columns from `field_names`; display-only downstream,
-   frontend validates an opaque string).
-6. **[watch] `Session` shared cache** — only if per-request open cost profiles hot.
+Items 1–5 of the original backlog (predicate helper, drift-sync, version GC +
+tags, materialize-blobs, describe_indices migration) all shipped — detail in git
+history. The one live item:
+
+- **[watch] `Session` shared cache** — only if per-request open cost profiles hot.

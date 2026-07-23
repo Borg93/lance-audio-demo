@@ -6,90 +6,43 @@ it lives in the shipped code + git history and in [REPRODUCE.md](REPRODUCE.md) /
 This file replaces the old root `TODO.md` (a closed-item changelog) and `todo2.md`
 (the curation roadmap) — both consolidated here; their full detail is in git history.
 
-> Status: ✅ done · ⏳ in progress · 📋 planned · 🟡 parked/optional.
-> The product is shipped — there are **no active blockers**. Everything below is
-> deliberate backlog, ordered roughly by value-per-effort.
+> Status: ⏳ in progress · 📋 planned · 🟡 parked/optional.
+> The product is shipped and **merge-ready** — there are no active blockers and
+> nothing in flight. Everything below is deliberate backlog, ordered roughly by
+> value-per-effort.
 
 ---
 
-## In flight
+## Merge-time (deferred to the lance-ns merge by design — needs the live cluster)
 
-### ⏳ runners/ = every model's home; ratch drives them (USER-DECIDED architecture)
-*Full plan: [RATCH_MODEL_FREE.md](RATCH_MODEL_FREE.md). Pick up here.*
+The runners/ architecture is complete here ([RATCH_MODEL_FREE.md](RATCH_MODEL_FREE.md));
+these are its cluster-side halves. The merge itself is driven by
+[LANCE_NS_HANDOFF.md](LANCE_NS_HANDOFF.md) (the 8 questions + first integration
+milestone) with [RASK_COMPARE.md](RASK_COMPARE.md) covering the rask side.
 
-**The decided model (2026-07-21):** `runners/<name>/` owns EVERY conflicting-env /
-heavy model — **offline AND online**. A runner is the model's home: its env
-(`pyproject.toml`) + its **actor code**. How it's driven is orthogonal:
+- 📋 **Per-runner container images, not pip runtime_envs, in production** (Ray docs:
+  pip runtime_env = dev/experimentation; torch cu128 stacks are specifically painful).
+  Each `runners/<name>/pyproject.toml` → a `.docker/<name>.dockerfile` image on KubeRay
+  worker groups. `RATCH_RUNNER_ISOLATION=1` (pip runtime_env, cu128 index read from the
+  runner's `[[tool.uv.index]]`) stays as the DEV bridge only.
+- 📋 `runners/{embed,rerank,caption,summarize}/` — the vLLM set joins the runner shape
+  (offline actor + online Serve `deployment.py`), replacing the `client=` HTTP stages.
+- 📋 Retire the `[models]` extra once runners run isolated on the cluster; `kg` gains a
+  `worker.py` argv entrypoint when its scripts fold into one job (topics/kg stay
+  job-only permanently — corpus-global fits can't be `map_batches` stages).
+- 📋 The viewer's voice-upload encoder (`services/viewer/services/wespeaker.py`) is the
+  LAST in-process model — becomes a runners/ Serve deployment the viewer/annotator call.
+- 📋 asr-as-deriver writes the transcript column directly (folds away the
+  easytranscriber-JSON ingest hop).
 
-- **offline batch** — ratch's Ray Data stages IMPORT the runner's actor class and
-  run it via `map_batches(RunnerActor, runtime_env=<that runner's env>)`. Ray's
-  per-stage `runtime_env` resolves the conflicting deps ON THE WORKERS; ratch's
-  driver env never carries a model. (This replaces the pre-merge sealed-subprocess
-  path in `ratch/endpoints/` — subprocess-per-batch must never sit in an actor loop.)
-- **online** — the same runner exposes `deployment.py` (Ray Serve) for query-time /
-  interactive use (embed, rerank, assist).
+---
 
-**The clarity rule:** ratch's `Stage` declares its runner EXPLICITLY (a `runner=`
-binding generalizing today's `client=`), so reading `features/stages.py` tells you
-exactly which stages are runner-backed and which are pure compute. ratch = pure
-orchestration; runners = the models.
+## Diarization — remaining surface
 
-**Done (EXECUTED 2026-07-21, completed 2026-07-23):** ratch core model-free
-(`import ratch` loads no model AND no ray — pinned by `tests/test_core_contract.py`;
-model stack = `[models]` extra for local single-node runs). ALL five models live
-in `runners/` with their own `pyproject.toml` envs. **The jobs seam is in**
-(`ratch/core/jobs.py` mirrors lance-ns `ray_submit.submit_stage_job`:
-deterministic uuid5 submission id, runner env + `MEDIA_*`/`AWS_*` in the job's
-`runtime_env`, `kind` metadata, re-attach/delete-resubmit semantics,
-`RATCH_RAY_ENABLED` in-process fallback — unit-tested vs a fake client) and the
-old sealed-subprocess `ratch/endpoints/` clients are DELETED; `subprocess` is
-gone from `src/ratch/{features,core}` and `runners/` (the ffmpeg WAV transcode
-moved to `modalities/av/wav.py` where the other pure-compute ffmpeg helpers
-live). **Actors resolve by convention** — `Stage.runner` →
-`runners.<name>.actor.compute_factory` + `OUTPUT_SCHEMA`
-(`resolve_runner_actor`); the ray_av bindings dict is gone; a new model = 1
-runner dir + 1 Stage entry, zero driver edits (proof test drives the append path
-with a fake runner on local Ray). Corpus-global runners refuse legibly
-(`runners/topics/actor.py` raises its own explanation; kg is job-only, pointed
-at the jobs seam). Docs: [RATCH_MODEL_FREE.md](RATCH_MODEL_FREE.md) (shipped
-architecture), [RASK_COMPARE.md](RASK_COMPARE.md) (what rask keeps/alters at
-merge), jobs-seam rows in [LANCE_NS_CONFORMANCE.md](LANCE_NS_CONFORMANCE.md).
-
-**📋 Left (merge-time — needs the live Ray cluster to verify):**
-- **Per-runner container images, not pip runtime_envs, in production** (Ray docs:
-  pip runtime_env = dev/experimentation; bake deps into images for prod; torch
-  stacks are specifically painful in pip runtime_envs — cu128 extra index, build-
-  order — and conflicting runtime_envs between communicating actors can hit
-  unpickling errors). Each `runners/<name>/pyproject.toml` → a
-  `.docker/<name>.dockerfile` image on KubeRay worker groups (or the runner as a
-  Serve deployment with its own image). `RATCH_RUNNER_ISOLATION=1` (pip
-  runtime_env) stays as the DEV bridge only.
-- `runners/{embed,rerank,caption,summarize}/` — the vLLM set joins the same shape
-  (offline actor + online Serve deployment.py; one model, two drivers).
-- Retire the `[models]` extra once runners run isolated on the cluster (the
-  `endpoints/` sealed-subprocess stand-in is already deleted — replaced by the
-  `ratch/core/jobs.py` Ray Jobs seam). `topics`/`kg` stay job-only permanently:
-  corpus-global fits can't be `map_batches` stages (see RATCH_MODEL_FREE.md);
-  kg gains a `worker.py` argv entrypoint when its scripts fold into one job.
-- The viewer's voice-upload encoder (`services/viewer/services/wespeaker.py`) is
-  the LAST in-process model (online, lazy imports, `--extra models` pre-merge) —
-  becomes a runners/ Serve deployment the annotator/viewer call at merge.
-
-### ⏳ Diarization — full-corpus coverage
-- The `make speaker-turns` batch is backfilling `speaker_turns.lance` (resumable,
-  ~2–4 min/video on a shared GPU → ~1–2 days for all ~1,576). Shipped + live for
-  done videos (Speakers tab).
-- ✅ **Sharded diarization is shipped** — `ratch extract-speaker-turns --num-shards N
-  --shard-index i` writes each disjoint slice to `speaker_turns_shard{i}.lance`, folded
-  back with `ratch merge-speaker-turns` (no concurrent-write race). NOTE: the
-  `make speaker-turns` target itself does not pass shard flags; sharding is a manual
-  N-process launch (one per GPU).
 - 📋 **On-demand diarization** — diarize a video the first time it's opened + cache,
-  instead of (or alongside) the full batch. `POST /api/diarization/{doc}` running pyannote.
-- 🟡 **"Diarized only" filter/badge** in the hit list (`GET /api/diarization` list route + a toggle).
-- 🟡 Declare `pyannote` as a first-class dep (currently transitive via easytranscriber).
-
----
+  instead of (or alongside) the batch. `POST /api/diarization/{doc}` running pyannote.
+- 🟡 **"Diarized only" filter/badge** in the hit list (`GET /api/diarization` list route
+  + a toggle).
 
 ## Curation / exploration roadmap (FiftyOne-inspired)
 
@@ -104,31 +57,21 @@ floods the page" redundancy (adjacent 30 s clips are near-identical).
    stored embeddings; zero new data/GPU).
 4. 📋 **Stats / histograms** (M, med-high) — faceted, count-annotated filter panel
    (`chunks_ds` scan + `/api/columns` + LayerChart).
-5. 📋 **Tags + saved views** (M, med) — first curation loop; introduces mutable state
-   (new SQLite store).
-
----
 
 ## Bigger bets
 
-- 📋 **Voice / speaker search — remaining surface.** The search itself **shipped**
-  (2026-06-10, see [VOICE.md](VOICE.md)): pyannote WeSpeaker 256-d turn voiceprints
-  (590k turns / 9,941 speakers), `/api/voice/{similar,status,identity}`, hit-card /
-  timeline / upload UX, and seeded-EVoC identity clusters. The old plan on this line
-  (ECAPA / AMBER verdict / AS-norm / 2048-d encoder) is obsolete — diarization-clean
-  turn labels + the WeSpeaker encoder resolved it (AUC 1.000 on the human labels).
-  What genuinely remains:
+- 📋 **Voice / speaker search — remaining surface** (the search itself shipped, see
+  [VOICE.md](VOICE.md)):
   - 📋 **Speaker naming** — `speakers.speaker_name` is still all-NULL; a write route +
     UI to name an identity cluster, then show names on hits/timeline.
   - 📋 **Speakers browse page** — list/browse the identity clusters
     (`GET /api/voice/identity` exists; the frontend doesn't consume
     `speaker_cluster` beyond the hit field yet).
   - 🟡 **Atlas `--space voice`** — EVōC projection over `speakers.embedding`.
-  - (The frame/caption embedding-space redo is a *separate* track — unrelated to voice.)
 - 📋 **Video-level text + summary** — `documents.full_text` (concat chunk text per `doc_id`)
   + `documents.doc_summary` (map-reduce LLM). Enables full-video FTS + summaries.
-- 📋 **Studio desktop merge** — fold ranymizer + ratch + multimodal-webgpu-demo into a
-  Tauri "Studio" shell (full plan: [STUDIO_MERGE.md](STUDIO_MERGE.md)).
+- 🟡 **Studio desktop shell** — parked: a Tauri desktop merge was once planned; see git
+  history if it revives.
 
 ---
 
@@ -141,11 +84,3 @@ Revisit only if a profiler or real concurrency makes them bite.
 - **vLLM perf:** async per-query embed client; confirm `--enable-prefix-caching`;
   `/metrics` bottleneck check; FP8 / `--async-scheduling` (stretch).
 - **Housekeeping:** prune old dataset versions (disk).
-
-## Code-quality (deferred)
-
-- `DomainError` hierarchy + exception handlers (vs inline `HTTPException`).
-- CORS `allow_origins` → settings-driven (currently `*`, fine behind the local proxy).
-- `_Ctx` global state → Typer `ctx.obj`.
-- `print()` → `logging` in library modules (`media/thumbnails.py`, `media/download.py`, `asr/detect_language.py`).
-- Minor typing/dedup (untyped `frames._extract_one` args; reranker prefix/suffix ↔ jinja cross-ref).

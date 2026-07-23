@@ -1,4 +1,4 @@
-# lance-audio-demo
+# lance-media
 
 Searchable archive viewer for Swedish press-conference video transcripts.
 Single Lance database, FastAPI backend, SvelteKit frontend, optional
@@ -10,7 +10,7 @@ cross-encoder reranker.
 > single self-contained [Lance](https://lancedb.com) dataset, then serves
 > search + playback through a typed HTTP API.
 
-> 📐 **New to the codebase?** Read **[GUIDE.md](GUIDE.md)** — architecture, data
+> 📐 **New to the codebase?** Read **[docs/GUIDE.md](docs/GUIDE.md)** — architecture, data
 > flow, design rationale, and the developer workflow. Running task list:
 > **[TODO.md](docs/TODO.md)**. Forward-looking architecture bets:
 > **[WHATS_LEFT.md](docs/WHATS_LEFT.md)**.
@@ -28,9 +28,8 @@ input/sv/*.mp4                 ← source videos
         │
    ingest-full                 → <DB>/chunks                     (FTS + metadata)
                                  <DB>/documents                  (media + thumbnail blobs)
-        │   (<DB> = $(DB), Makefile default ./transcripts.lance — but the LIVE,
-        │    served dataset on this machine is transcripts_v2.lance; the default
-        │    ./transcripts.lance is an EMPTY manifest with no tables)
+        │   (<DB> = $(DB), Makefile default ./transcripts_v2.lance — the live,
+        │    served dataset)
         │
    embed-chunks                → chunks.text_embedding           (Qwen3-VL → 2048-d)
    extract-chunk-frames        → <DB>/chunk_frames               (separate table, append-only)
@@ -40,7 +39,8 @@ input/sv/*.mp4                 ← source videos
                                    ↳ frame_mime, frame_width, frame_height
    embed-chunk-frames          → chunk_frames.frame_embedding    (Qwen3-VL on each frame,
                                                                   via dataset.add_columns)
-        │   chunks ALSO carries (so it has TWO vector columns):
+        │   chunks ALSO carries (so it has THREE vector columns —
+        │   text_embedding / frame_embedding / caption_embedding):
         │     ↳ text_embedding (2048) + frame_embedding (2048, chunk-level image
         │       vector, frame_idx=0, for the image atlas)
         │     ↳ atlas_x/atlas_y/atlas_cluster        (text-space EVōC projection)
@@ -49,8 +49,7 @@ input/sv/*.mp4                 ← source videos
    make captions               → chunk_frames.caption            (Gemma 4 Swedish captions,
    (caption + caption_embedding)                                  via your VLM on :8003)
                                  chunk_frames.caption_embedding   (Qwen3-VL → 2048-d, scene search)
-                                   ↳ powers mode=scene (caption-vector) + mode=scene_fts (caption BM25)
-                                   ↳ NOT built on the live DB yet → scene/scene_fts return EMPTY
+                                   ↳ powers mode=scene (caption-vector) + mode=scene_fts (caption BM25) — LIVE
         │
    make services-up            → viewer:8101 search:8102 annotator:8103 (/api/*)
    make frontend               → viewer zone + per-domain proxy on :5274
@@ -67,7 +66,8 @@ adds the `frame_embedding` column via `dataset.add_columns(...)` — no JOIN, no
 
 ### Search modes
 
-The API exposes seven modes (`backend/search/spec.py:SearchMode`):
+The API exposes the modes below (`services/search/services/spec.py` — the set is
+type-driven off the descriptor: any declared vector column is independently searchable):
 
 | `mode` | what it matches | requires |
 |---|---|---|
@@ -107,7 +107,7 @@ On image-only `visual` search there is no query text, so rerank is a no-op.
 ## Repo layout
 
 ```
-lance-audio-demo/
+lance-media/
 ├── services/                  Per-domain FastAPI microservices (lance-ns services/ shape)
 │   ├── common/                shared kernel: lancekit, core (RFC 9457 handlers), schemas, state, deps
 │   ├── viewer/                read plane :8101 — media/blobs, transcripts, atlas, graph, topics, voice
@@ -116,26 +116,27 @@ lance-audio-demo/
 ├── frontend/                  turborepo: apps/{media,annotator} + packages/@lance/{engine,labeling,ui,api}
 │   ├── apps/media/            viewer zone (SvelteKit) + server.ts (per-domain /api + /annotate proxy)
 │   └── apps/annotator/        annotator zone (kit.paths.base=/annotate)
-├── src/ratch/                Python ingestion + search core (Ray/vLLM pipeline)
-│   ├── cli/                   typer CLI: ingest, feature, extract-chunk-frames, compact, serve, …
-│   ├── model/                 PyArrow schemas (schema.py) + Pydantic DTOs (datamodel.py)
-│   ├── asr/                   in-process Whisper/wav2vec2 (transcribe.py, detect_language.py)
-│   ├── ingest/                JSON → Lance writer (ingest.py, audio.py)
-│   ├── media/                 ffmpeg frames (frames.py), download.py, thumbnails.py
-│   ├── vllm/                  HTTP clients to remote vLLM servers: embedding.py, reranker.py,
+├── src/ratch/                 model-free Ray Data orchestration over Lance
+│   ├── cli/                   typer CLI: ingest, feature, pipeline, compact, serve, …
+│   ├── clients/               HTTP clients to remote vLLM servers: embedding.py, reranker.py,
 │   │                          caption.py, summarize.py, image.py, base.py (transport)
-│   ├── features/              data-evolution engine.py + columns.py (FEATURES registry)
-│   │                          + projection.py (EVōC atlas fit for the 'atlas'/'atlas_visual' features)
+│   ├── core/                  dataset/driver/engine/registry/runners/jobs (the Ray seams)
+│   ├── features/              data-evolution engine + columns.py (FEATURES registry)
+│   │                          + projection.py (EVōC atlas) + ray_av.py + stages.py
+│   ├── ingest/                JSON → Lance writer (ingest.py, audio.py)
+│   ├── modalities/av/         pure compute: ffmpeg frames/thumbnails/wav, download, cluster
+│   ├── model/                 PyArrow schemas (schema.py) + Pydantic DTOs (datamodel.py)
 │   └── retrieval/             FTS + query helpers (search.py) + qwen3_vl_reranker.jinja
+├── runners/                   every model's home (own env per runner): asr, diarize,
+│                              voiceprint, topics, kg — actors/workers ratch drives
 ├── Makefile                   end-to-end developer commands
-├── pyproject.toml             uv-managed Python deps (+ [multimodal] and [atlas] extras)
-└── transcripts.lance/         Lance dataset (gitignored — local only; the populated
-                               one on this machine is transcripts_v2.lance)
+├── pyproject.toml             uv-managed Python deps (+ [multimodal]/[atlas]/[models] extras)
+└── transcripts_v2.lance/      Lance dataset (gitignored — local only)
 ```
 
-Import paths follow the package layout: `ratch.vllm.embedding`,
-`ratch.vllm.reranker`, `backend.search.service`. The embedding and reranker
-clients live under `ratch.vllm`, not `ratch.retrieval`.
+Import paths follow the package layout: `ratch.clients.embedding`,
+`ratch.clients.reranker`, `search.services.service` (services install as
+`common`/`viewer`/`search`/`annotator`). Model code imports as `runners.<name>.*`.
 
 ---
 
@@ -161,15 +162,12 @@ make pipeline      # transcribe + thumbnail + ingest-full
 make ingest-full
 ```
 
-This populates the dataset at `$(DB)` (Makefile `DB ?= ./transcripts.lance`)
+This populates the dataset at `$(DB)` (Makefile `DB ?= ./transcripts_v2.lance`)
 with two tables: `documents` (one row per video, with thumbnail + media URI) and
 `chunks` (one row per transcript chunk).
 
-> **Heads-up on this machine:** the live, served dataset is
-> `transcripts_v2.lance` (chunks 145,175 rows; documents 1,154; chunk_frames
-> 145,175). The Makefile default `./transcripts.lance` is an **empty manifest
-> with no tables** — point `DB=transcripts_v2.lance` (or `make services-up
-> DB=transcripts_v2.lance`) at the populated one.
+> The live dataset on this machine is `transcripts_v2.lance` (chunks 145,175
+> rows; documents 1,154; chunk_frames 145,175) — also the Makefile default.
 
 ### 2. Run the viewer
 
@@ -259,8 +257,8 @@ needed**. Optional hygiene at corpus scale: a scalar BTREE index on
 `speaker_turns.doc_id` speeds per-video lookup, and `ratch compact --table
 speaker_turns` consolidates the per-video append fragments.
 
-**`ratch serve` has no auto-reload — RESTART the backend after building** so it
-opens `speaker_turns.lance` and serves `GET /api/diarization/{doc_id}`. The
+The viewer opens `speaker_turns.lance` on demand per request (no restart
+needed) and serves `GET /api/diarization/{doc_id}`. The
 player then shows a **Speakers** tab (per-speaker lanes + a playhead synced to
 the video, click-to-seek); until the table is built it reads "Diarization not
 built for this video." Labels (`SPEAKER_00…`) are anonymous and stable only
@@ -332,7 +330,6 @@ backend  →  documents table → media_blob (Blob V2 External URI → MP4 on di
 ## Inspect the dataset directly
 
 ```bash
-# Use the populated dataset — ./transcripts.lance is empty on this machine.
 DB=transcripts_v2.lance
 
 # chunks table (text + metadata)
@@ -391,7 +388,7 @@ vector leg; falls back to `q`), `n` (results, default 20, clamped 1..200),
 `extraid`, `where` (raw SQL WHERE, ANDed with the structured filters), and
 `prefilter` (default `True`).
 
-The service core (`backend/search/service.py:run_search`) is framework-free: it
+The service core (`services/search/services/service.py::run_search`) is framework-free: it
 takes the Lance handles plus the two vLLM client getters as callables, and the
 routers wire it to the request via dependency injection.
 
@@ -447,11 +444,12 @@ commands (the HF kernels API changed); the bundled FlashAttention 2 works.
 
 - **Image search is frame similarity, not face/identity recognition.** It finds
   visually similar video frames; it does not identify who is in them.
-- **Speakers are anonymous per-video** — per-video speaker diarization exists
-  (who-spoke-when; the **Speakers** tab in the player, `speaker_turns.lance`,
-  `GET /api/diarization`), but labels (`SPEAKER_00…`) are stable only *within*
-  one video. There is no cross-video speaker identity and no link between who is
-  on screen and who is speaking.
+- **Speaker naming is still open** — cross-video voice search + identity
+  clusters ARE shipped (WeSpeaker turn voiceprints, `GET /api/voice/similar`,
+  hit-card/timeline voice search, `speaker_cluster` on hits — see
+  [docs/VOICE.md](docs/VOICE.md)), but clusters are unnamed
+  (`speakers.speaker_name` all-NULL) and there is no link between who is on
+  screen and who is speaking.
 - **The reranker is text-only** — it scores transcript text against the query
   and ignores the image and the vectors.
 - **`all` fusion (up to 4 legs) is equal-weight RRF** — there is no per-leg
@@ -462,5 +460,3 @@ commands (the HF kernels API changed); the bundled FlashAttention 2 works.
 ## Author
 
 [Borg93](https://github.com/Borg93)
-</content>
-</invoke>

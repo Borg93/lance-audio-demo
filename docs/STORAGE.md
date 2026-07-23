@@ -26,7 +26,7 @@ A `blob_field` column **requires** `data_storage_version="2.2"`. Today only
 `documents` (`media_blob`, `thumbnail`) and `chunk_frames` (`frame_blob`) carry
 blob columns; `chunks` no longer does (frames moved to `chunk_frames`), but every
 table is pinned to `"2.2"` for consistency. That constraint shapes how
-`ingest/ingest.py` and `media/frames.py` write their first dataset
+`ingest/ingest.py` and `modalities/av/frames.py` write their first dataset
 (see [§ Why `lance.write_dataset` not `create_table`](#why-lancewrite_dataset-not-create_table)).
 
 ---
@@ -126,7 +126,7 @@ media the DB holds. Notable columns:
 - `text_embedding` (`FixedSizeList<float32, 2048>`, nullable) — the
   semantic-search vector. **Not in the base schema**: `ratch feature text_embedding`
   attaches it after ingest with `dataset.add_columns(...)` (Lance data
-  evolution, via `upsert_scan_column` in `ratch.features.engine`), so ingest
+  evolution, via `upsert_scan_column` in `ratch.core.engine`), so ingest
   never writes a placeholder column.
 - `frame_embedding` (`FixedSizeList<float32, 2048>`, nullable) — a **second
   vector column**, the *chunk-level* image vector for the image-atlas. It is the
@@ -207,7 +207,7 @@ Full post-mortem in [INVESTIGATION.md](INVESTIGATION.md).
 One row per diarized speaker turn ([`SPEAKER_TURNS_SCHEMA`](../src/ratch/model/schema.py),
 columns `doc_id`, `turn_id`, `speaker_label`, `start`, `end`). Written by
 `ratch extract-speaker-turns` (`write_speaker_turns` in
-[`src/ratch/media/diarize.py`](../src/ratch/media/diarize.py)) — `turn_id` is the
+[`src/ratch/runners/diarize/diarize.py`](../src/ratch/runners/diarize/diarize.py)) — `turn_id` is the
 per-video `enumerate` index over that video's turns. It is **append-only** on the
 same `"2.2"` storage version (`SPEAKER_TURNS_STORAGE_VERSION`) and is read on
 demand by the backend diarization router (`GET /api/diarization/{doc_id}` in
@@ -258,7 +258,7 @@ ratch uses exactly **two** of these tiers, on purpose:
 
 A `blob_field` (or `pa.json_()`) column **cannot** be built with
 `pa.array(values, type=...)` — that raises a schema mismatch. The writers in
-`ingest/ingest.py` and `media/frames.py` special-case this: every non-blob
+`ingest/ingest.py` and `modalities/av/frames.py` special-case this: every non-blob
 column is built per its declared field type, and blob columns are wrapped with
 `lance.blob_array(...)`:
 
@@ -268,7 +268,7 @@ media_col = blob_array(cols.pop("media_blob"))   # ["file://…", "hf://…", �
 thumb_col = blob_array(cols.pop("thumbnail"))    # [b"\xff\xd8…", None, …]
 ```
 
-`media/frames.py` does the same for `frame_blob`
+`modalities/av/frames.py` does the same for `frame_blob`
 (`"frame_blob": blob_array([f.jpeg_bytes for f in good])`).
 
 ### Why `lance.write_dataset` not `create_table`
@@ -313,7 +313,7 @@ flowchart TD
     J --> K["206 Partial Content<br/>Content-Range, Accept-Ranges: bytes"]
 ```
 
-Key facts grounded in `services/viewer/api/v1/endpoints/media.py` and `services/viewer/api/v1/endpoints/media.py`:
+Key facts grounded in `services/viewer/api/v1/endpoints/media.py` and `services/viewer/services/clips.py`:
 
 - Blobs are read by **`ds.take_blobs(column, ids=[rowid])`**. `ids` are *stable
   logical row ids* that survive deletes and compaction; positional `indices` are
@@ -394,7 +394,10 @@ flowchart LR
     ANN --> Q3
 ```
 
-`SearchMode` (`services/search/services/spec.py`) has **seven** modes:
+The mode set (`services/search/services/spec.py`) is **type-driven and open**:
+`mode` is a plain string, and any embedding column the descriptor declares is
+independently searchable (`available_modes` reports what the corpus backs; an
+unavailable mode degrades to `[]`). On this corpus that yields seven bindings:
 `fts`, `semantic`, `visual`, `scene`, `scene_fts`, `hybrid`, and `all`. The
 `frame_embedding` IVF_PQ index on `chunk_frames` backs `mode=visual` and the
 frame leg of `mode=all`. The caption-backed modes — `scene` (cosine over
@@ -440,7 +443,7 @@ cheap to filter on.
 
 ### IVF_PQ cosine vector index
 
-Built by `ensure_vector_index` (in `ratch.features.engine`, called from
+Built by `ensure_vector_index` (in `ratch.core.engine`, called from
 `ratch feature text_embedding`, `ratch feature frame_embedding`, and
 `ratch compact` when it rebuilds indexes — see [`src/ratch/cli/`](../src/ratch/cli/)):
 

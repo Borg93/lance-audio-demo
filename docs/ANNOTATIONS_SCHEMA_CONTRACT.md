@@ -2,20 +2,21 @@
 
 > The `annotations` Lance table is a **shared table with two writers**. This is the exact
 > per-column contract so the lance-ns side knows what *it* writes vs what *we* write, and
-> so nobody redefines the other's columns. Grounded in `backend/media_api/annotate.py`
-> `_EMPTY_SCHEMA` (the table today) + the training/AL additions from `TRAINING_LINEAGE.md`.
+> so nobody redefines the other's columns. Grounded in `services/annotator/annotations/schema.py`
+> `EMPTY_SCHEMA` (the table today) + the training/AL additions from `TRAINING_LINEAGE.md`.
 
 ## The two writers
 
-- **US — the human write path** (`save_annotations`, interactive → `merge_insert` = one
-  atomic version): human-authored content + human provenance + audit.
+- **US — the human write path** (`save_annotations` in `services/annotator/annotations/save.py`,
+  interactive → `merge_insert` = one atomic version): human-authored content + human
+  provenance + audit.
 - **THEM — lance-ns batch/training derivers** (silver/gold stages as lance-ray jobs;
   predictions → rows): model provenance + scores + the training-loop columns.
 - **Replace-protects-humans:** a deriver's write is predicated
   `WHERE source LIKE 'model:%' AND status='prediction'`, so re-running a model **never
   clobbers a human-accepted/edited row.** (Contract to confirm on the lance-ns side.)
 
-## Columns TODAY (`_EMPTY_SCHEMA`, live + round-tripping) + identity
+## Columns TODAY (`EMPTY_SCHEMA`, live + round-tripping) + identity
 
 | Column | Type | Written by | When | Owner |
 |---|---|---|---|---|
@@ -50,7 +51,7 @@
 | `logits` | list\<f32\> or blob | **THEM** (deriver) | distributional uncertainty | **lance-ns** |
 | `encoder_embedding` | list\<f32\> or blob | **THEM** (batch encode: SAM/DINO) | interactive SAM decode-per-click; diversity AL | **lance-ns** |
 
-**Consequence:** we do **not** add the bottom-4 to our `_EMPTY_SCHEMA` — they're lance-ns's to
+**Consequence:** we do **not** add the bottom-4 to our `EMPTY_SCHEMA` — they're lance-ns's to
 define (name/type/semantics), and guessing wrong = migration-to-match-theirs, not migration
 avoided. `created_at`/`updated_at` are the only additions that are ours (our write path stamps
 them). Everything else is already in the table.

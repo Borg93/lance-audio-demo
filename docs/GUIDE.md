@@ -1,6 +1,6 @@
 # ratch — Architecture & Onboarding Guide
 
-> A developer's map of `lance-audio`. The [README](README.md) is the quickstart
+> A developer's map of `lance-audio`. The [README](../README.md) is the quickstart
 > (how to install and run); this guide is the **why and how** — the mental
 > model, the data flow, the design decisions, and where to look for things.
 > For the running task list see [TODO.md](TODO.md); for the bigger forward-looking
@@ -21,11 +21,11 @@ video frames, and the media URIs — lives in **one Lance database**; there are 
 sidecar JSON files or disk walks at query time.
 
 **Deep-dive docs** (this guide is the overview; these go deep with diagrams):
-- [`docs/PIPELINE.md`](docs/PIPELINE.md) — the ASR pipeline & models (easytranscriber / easyaligner, KB-Whisper, wav2vec2, MMS-LID).
-- [`docs/STORAGE.md`](docs/STORAGE.md) — how ratch uses Lance (Blob V2 tiers, JSONB, IVF_PQ / FTS).
-- [`docs/EMBEDDINGS.md`](docs/EMBEDDINGS.md) — Qwen3-VL embeddings + reranking over vLLM.
+- [`docs/PIPELINE.md`](PIPELINE.md) — the ASR pipeline & models (easytranscriber / easyaligner, KB-Whisper, wav2vec2, MMS-LID).
+- [`docs/STORAGE.md`](STORAGE.md) — how ratch uses Lance (Blob V2 tiers, JSONB, IVF_PQ / FTS).
+- [`docs/EMBEDDINGS.md`](EMBEDDINGS.md) — Qwen3-VL embeddings + reranking over vLLM.
 - [`docs/VOICE.md`](VOICE.md) — speaker voiceprints + cross-video voice search (pyannote WeSpeaker, `/api/voice`).
-- [`docs/INVESTIGATION.md`](docs/INVESTIGATION.md) — root-cause analysis of the Lance indexation + vLLM crash issues.
+- [`docs/INVESTIGATION.md`](INVESTIGATION.md) — root-cause analysis of the Lance indexation + vLLM crash issues.
 
 ---
 
@@ -64,7 +64,7 @@ flowchart LR
 ```
 
 > Both the CLI batch path and the backend serving path call the **same**
-> `src/ratch/vllm/embedding.py` client (the "shared seam", §7) → the same
+> `src/ratch/clients/embedding.py` client (the "shared seam", §7) → the same
 > out-of-process vLLM servers.
 
 - **Write side** = `src/ratch/` (the `ratch` Typer CLI + the ingest/extract
@@ -72,9 +72,7 @@ flowchart LR
 - **Read side** = `services/{viewer,search}` (FastAPI) + `frontend/apps/media` (SvelteKit). Run online,
   mostly CPU; only the embedding step needs a GPU and that lives in a **separate
   vLLM process** reached over HTTP, so FTS-only use works with no GPU at all.
-- **`src/ratch/vllm/embedding.py` is the one module both sides share** — see §7.
-- **`demo/` is unrelated** — a standalone in-browser (transformers.js/WebGPU)
-  transcription playground. It shares zero code with ratch. See §10.
+- **`src/ratch/clients/embedding.py` is the one module both sides share** — see §7.
 
 ---
 
@@ -159,7 +157,7 @@ erDiagram
     }
 ```
 
-See [`docs/STORAGE.md`](docs/STORAGE.md) for the full Lance storage deep-dive.
+See [`docs/STORAGE.md`](STORAGE.md) for the full Lance storage deep-dive.
 
 **Why `chunk_frames` is a separate table** (the single most important schema
 fact): Lance 4.0's `merge_insert` crashes its encoder when backfilling blob
@@ -243,7 +241,7 @@ flowchart TD
 > built** (`make captions` = `feature caption` + `caption_embedding`, needs the
 > Gemma server on `:8003`): `chunk_frames.caption` + `caption_embedding` are fully
 > populated, so the `scene` / `scene_fts` modes return hits. Detailed pipeline +
-> models: [`docs/PIPELINE.md`](docs/PIPELINE.md).
+> models: [`docs/PIPELINE.md`](PIPELINE.md).
 
 The corpus seed is a local, gitignored `video_batcher.csv`
 (`referenskod;namn;extraid;bildid`, ~1576 rows, never committed); `ratch download`
@@ -280,7 +278,7 @@ flowchart TD
     P -->|JSON| UI["HitList / HitCard → click → PlayerPane"]
 ```
 
-**The seven search modes** (`backend/search/spec.py::SearchMode`):
+**The seven search modes** (`services/search/services/spec.py`):
 
 | Mode | Backs onto | What runs |
 |---|---|---|
@@ -297,10 +295,10 @@ flowchart TD
 key, not chained. `prefilter` (`spec.prefilter`, default True) is applied only to
 the `chunks`-table legs (`fts` / vector / `hybrid`); the frame legs
 (`visual` / `scene`) filter **after** ranking, in `_frames_to_chunk_hits`. The
-cross-encoder rerank (`src/ratch/vllm/reranker.py`) reads **only** the transcript
+cross-encoder rerank (`src/ratch/clients/reranker.py`) reads **only** the transcript
 `text` column over the top `rerank_n` hits and is a no-op for image-only queries.
 
-Detailed embedding/serving flow: [`docs/EMBEDDINGS.md`](docs/EMBEDDINGS.md).
+Detailed embedding/serving flow: [`docs/EMBEDDINGS.md`](EMBEDDINGS.md).
 
 ### Playback (Range streaming)
 
@@ -322,7 +320,7 @@ extract-speaker-turns` runs [`pyannote/speaker-diarization-community-1`](https:/
 **in-process** (pyannote.audio is in the main venv — no isolated worker, no vLLM
 server; GPU-accelerated when available, ~90 s/video, crash-resumable at video
 granularity) and appends each video's turns to the `speaker_turns` table. On the
-read side, `GET /api/diarization/{doc_id}` (`backend/diarization/router.py`,
+read side, `GET /api/diarization/{doc_id}` (`services/viewer/api/v1/endpoints/diarization.py`,
 mounted by `create_app`) reads `speaker_turns.lance` on demand and returns
 `{built, doc_id, turns[], speakers[]}` — `built: false` when the table or the doc
 is absent. The frontend's **"Speakers"** tab in the player
@@ -344,77 +342,63 @@ they distinguish speakers within one recording, never across the corpus.
 ## 6. Where things live (navigation map)
 
 ```
-src/ratch/                Python pipeline — the WRITE side + search/embedding library
-├── cli/                 Typer app: subcommands (the operator entry point)
-├── __init__.py            library public API (re-exports model / ingest / retrieval)
-├── model/                 DATA CONTRACTS
-│   ├── datamodel.py        Pydantic v2 models mirroring easytranscriber JSON
-│   └── schema.py           PyArrow/Lance schemas (incl. CHUNK_FRAMES_SCHEMA) + storage version
-├── ingest/                WRITE PATH
-│   ├── ingest.py           JSON → chunks + documents tables; FTS/scalar indexes
-│   └── audio.py            source-path resolution + media URI / MIME composition
-├── media/                 FFMPEG / DOWNLOAD side-steps
-│   ├── frames.py           ffmpeg frame extraction + write_chunk_frames (thread-pool batcher)
-│   ├── diarize.py          in-process pyannote diarization → write_speaker_turns (one video at a time)
-│   ├── thumbnails.py       per-file thumbnail / waveform generation (ffmpeg)
-│   └── download.py         bulk media download from a video_batcher CSV (httpx async)
-├── asr/                   UPSTREAM ASR wrappers (in-process pipeline STAGE)
-│   ├── transcribe.py       easytranscriber pipeline wrapper (Whisper/wav2vec2)
-│   └── detect_language.py  MMS-LID / Whisper language detection + sort into <lang>/
-├── vllm/                  CLIENTS to remote vLLM servers (shared by CLI + backend)
+src/ratch/                 model-free Ray Data orchestration over Lance (the pipeline)
+├── cli/                   Typer app: subcommands (the operator entry point)
+├── clients/               HTTP clients to remote vLLM servers (shared by CLI + services)
 │   ├── base.py             VLLMTransport: shared httpx pool + concurrent fan-out
 │   ├── embedding.py        VLLMEmbeddingClient + EmbeddingClient Protocol — SHARED SEAM
 │   ├── reranker.py         cross-encoder: VLLMReranker + QwenVLReranker (Lance adapter)
-│   ├── caption.py          image caption client
-│   ├── summarize.py        text summary client
-│   ├── image.py            pure helpers: l2_normalize, image_to_data_url
-│   └── schemas.py          Pydantic transport-boundary models
-├── features/             DATA-EVOLUTION engine (type-agnostic column upserts)
-│   ├── engine.py           upsert_scan_column / upsert_blob_column / ensure_vector_index
-│   ├── columns.py          embed_text_column / embed_frame_column / summary_column /
-│   │                       caption_column / embed_caption_column / chunk_frame_embedding_column
-│   │                       + the FEATURES registry (text_embedding, frame_embedding, summary,
-│   │                       caption, caption_embedding, atlas, atlas_visual, atlas_caption, topics)
-│   ├── projection.py       EVōC fit → atlas_x/y/cluster (text) + atlas_img_* (visual)
-│   └── topic_tree.py       build_topic_tree / topic_layer_columns (nested topic hierarchy)
-└── retrieval/             READ PATH
-    ├── search.py           FTS query + pure parsing/formatting helpers (timecode, …)
-    └── qwen3_vl_reranker.jinja  vLLM chat template for the reranker server
+│   ├── caption.py / summarize.py / image.py / schemas.py
+├── core/                  the Ray seams (kernel — imports no modality/client code)
+│   ├── dataset.py          create/append/overwrite with the lance-media invariants
+│   ├── driver.py           Ray Data drivers: lance_ray.read_lance → warm-actor map_batches
+│   ├── engine.py           upsert_scan_column / blob attach / index helpers
+│   ├── registry.py         Stage — the declarative stage record (Stage.runner binding)
+│   ├── runners.py          RunnerContext + resolve_runner_actor + per-runner runtime_env
+│   └── jobs.py             the Ray Jobs seam (run_runner; mirrors lance-ns ray_submit)
+├── features/              composition roots: FEATURES registry (columns.py), Ray AV
+│                          append stages (ray_av.py), STAGES declarations (stages.py),
+│                          EVōC projection, topic_tree
+├── ingest/                JSON → chunks + documents tables; FTS/scalar indexes; audio.py
+├── modalities/av/         PURE compute: ffmpeg frames/thumbnails/wav transcode,
+│                          download, cluster — no models
+├── model/                 DATA CONTRACTS: schema.py (PyArrow/Lance) + datamodel.py (Pydantic)
+├── retrieval/             FTS query + pure helpers + the reranker chat template
+└── lineage.py             Stage-aware OpenLineage emission (uses common lancekit primitives)
 
-backend/                   FastAPI package (the read-side serving app)
-├── app.py                 create_app() factory wiring routers (probes/search/media/system/atlas/topics/diarization/graph) + lifespan
-├── state.py               app state / Lance handles
-├── deps.py                FastAPI dependencies
-├── clients.py             vLLM client wiring for the backend
-├── warmup.py              cache warm-up run by the lifespan
-├── core/                  config / exceptions / handlers / lifespan / middleware / probes (the layered FastAPI template)
-├── schemas/               Pydantic response models (atlas/diarization/graph/health/search/system/topics)
-├── search/                /api/search router + search core
-├── media/                 /api/media /thumbnail /chunk-frame router
-├── atlas/                  /api/atlas/{status,points,chunk,chunks} router (the map view)
-├── topics/                 /api/topics router (topic hierarchy → topics.lance)
-├── graph/                  /api/graph router (entity graph: /status //cypher //search //entity //subgraph)
-├── diarization/            /api/diarization/{doc_id} router (Speakers-tab timeline; reads speaker_turns)
-└── system/                health / system router
+runners/                   EVERY MODEL'S HOME — one dir per model, own pyproject env
+├── asr/                   easytranscriber transcribe + detect_language
+├── diarize/               pyannote diarization: diarize.py + actor.py (compute_factory)
+├── voiceprint/            WeSpeaker turn embeddings: voiceprint.py + actor.py
+├── topics/                Toponymy: worker.py (Ray Job entrypoint) + deployment.py (Serve)
+└── kg/                    LightRAG knowledge-graph scripts (job-only)
 
-frontend/                  primary SvelteKit 2 / Svelte 5 SPA (the viewer UI)
-├── src/lib/api.ts         typed, Zod-validated client for the backend (the ONLY data boundary)
-├── src/routes/+page.svelte single stateful orchestrator (search/browse/layout/pagination)
-├── src/lib/components/     presentational components (SearchBar, HitCard, PlayerPane, …)
-├── src/lib/feature-flags.svelte.ts  $state singleton (suppress chunk-frame 404 storms)
-└── server.ts              Bun static server + /api/* reverse proxy (Range-aware)
+services/                  the split FastAPI backend (lance-ns services/ shape)
+├── common/                shared kernel: lancekit (descriptor/predicate/reader/writer/
+│                          blobs/lineage), core (config/exceptions/RFC-9457 handlers),
+│                          schemas, state.py, deps.py
+├── viewer/    :8101       read plane — media/blobs (Range/206), transcripts, datasets,
+│                          atlas, graph, topics, voice, diarization
+├── search/    :8102       retrieval — FTS/vector/hybrid over declared bindings, encoders, rerank
+└── annotator/ :8103       write plane — annotations (merge_insert + 409), assist, jobs
 
-demo/                      SEPARATE in-browser transformers.js/WebGPU demo (see §10)
+frontend/                  turborepo (bun workspaces)
+├── apps/media/            viewer zone (SvelteKit) + server.ts (per-domain /api + /annotate proxy)
+│   └── e2e/               the three browser E2E suites (annotator/temporal/read-plane)
+├── apps/annotator/        annotator zone (kit.paths.base=/annotate) — the write-plane UI
+└── packages/              @lance/engine (annotation model, plain TS), @lance/labeling
+                           (LabelOp axes), @lance/ui, @lance/api, @lance/config
+
 Makefile                   end-to-end developer commands (source of truth for how it runs)
-pyproject.toml             uv package, [multimodal] + [atlas] (evoc/numpy/scikit-learn) extras, ruff/ty/pytest config
-tests/                     pytest: unit (pure logic) + dataset-gated backend smoke
+pyproject.toml             uv project: [multimodal]/[atlas]/[models] extras, ruff/ty/pytest config
+tests/                     pytest suite (see TESTING.md) — no dataset, no GPU, no network
 ```
 
 ---
 
-## 7. The shared seam: `vllm/` clients
+## 7. The shared seam: `clients/` (vLLM)
 
-This is the most important coupling fact for onboarding. The `vllm/` clients
+This is the most important coupling fact for onboarding. The `clients/` vLLM clients
 — `VLLMEmbeddingClient` (`embedding.py`, the bi-encoder) and `VLLMReranker`
 (`reranker.py`, the cross-encoder) — are used by **two** consumers with different
 concurrency needs:
@@ -425,7 +409,7 @@ concurrency needs:
 - **Backend serving path** (`/api/search`): one query at a time, lazily connects,
   and lets `httpx.HTTPError` propagate so the API layer can translate it into a
   single structured **503** ("embedding service unavailable"). The error boundary
-  lives in `backend/search/service.py` (`run_search` wraps the embed calls),
+  lives in `services/search/services/service.py` (`run_search` wraps the embed calls),
   **not** in the client — keep it that way.
 
 A planned async-per-query path for the backend (see [TODO.md](TODO.md)) must
@@ -433,10 +417,10 @@ A planned async-per-query path for the backend (see [TODO.md](TODO.md)) must
 
 Two subtleties worth knowing:
 - **Reranker double-scaffolding:** the model-card prefix/suffix framing is
-  duplicated between the `_PREFIX`/`_SUFFIX` constants in `vllm/reranker.py`
+  duplicated between the `_PREFIX`/`_SUFFIX` constants in `clients/reranker.py`
   (which build `/v1/rerank` strings) and `retrieval/qwen3_vl_reranker.jinja` (the chat
   template the server applies). They must stay in sync; treat edits as risky.
-- **Image pinning:** `_IMAGE_SIDE = 392` square center-crop (`vllm/image.py`) is a
+- **Image pinning:** `_IMAGE_SIDE = 392` square center-crop (`clients/image.py`) is a
   vLLM warmup-buffer workaround. vLLM sizes the Qwen3-VL deepstack buffer once at
   warmup, so every runtime image must yield the same vision-token count or the
   engine dies with `num_tokens > buffer`. Sending each image at exactly the area
@@ -458,7 +442,7 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
   and list fields use `Field(default_factory=list)` — never bare `= []`, which
   would share one mutable list across instances.
 - **Lazy *module* imports from CLI commands / the backend.** The heavy modules
-  (`lance`, `torch`-backed ASR, the `vllm/` clients) are imported inside
+  (`lance`, `torch`-backed ASR, the `clients/` vLLM clients) are imported inside
   the function body that needs them, so `ratch --help` stays instant and the
   optional `[multimodal]`/transcribe extras stay optional. Within those modules
   imports are normal top-level — the optionality comes from *the module not being
@@ -470,7 +454,7 @@ These are choices that look odd until you know why. Don't "fix" them blindly.
 - **Eager DB open inside `create_app`, plus a lifespan.** The read-only Lance
   handles are opened eagerly in `create_app` (so a bare `TestClient(create_app(db))`
   still has `app.state.resources` — no pool to dispose, no async driver), but a
-  lifespan IS wired (`backend/core/lifespan.py`): it only warms caches + flips the
+  lifespan IS wired (`services/common/core/lifespan.py`): it only warms caches + flips the
   `/readyz` readiness flags, which a lifespan-less TestClient rightly skips. Cost:
   `create_app` still needs a real dataset (it raises if `chunks` is missing), which
   is exactly what the TestClient smoke test exercises.
@@ -530,15 +514,15 @@ The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
   (text), `atlas_img_x/y/cluster` (visual), and `atlas_cap_x/y/cluster` (caption) —
   plus the `topic_l*` / `doc_topic` topic columns. The presence of the `*_x` column
   is the "is this space built?" signal.
-- **The backend router** (`backend/atlas/router.py`, mounted by `create_app`),
+- **The backend router** (`services/viewer/api/v1/endpoints/atlas.py`, mounted by `create_app`),
   prefix `/api/atlas`:
   - `GET /status?space=text|visual|caption` — which spaces are built + the requested
     space's non-null row count (reports every space's presence so the UI can gate a
-    Text/Visual/Caption toggle — `backend/schemas/atlas.py`).
+    Text/Visual/Caption toggle — `services/common/schemas/atlas.py`).
   - `GET /points?space=` — one Apache Arrow IPC stream (binary, parse-free): float16
     x/y coords + dictionary-encoded `cluster` / `language` / `namn` / topic keys + a
     doc-id dictionary, cached per (space, dataset version). No 2048-d vectors and no
-    per-point text. (`backend/atlas/points.py::build_points`)
+    per-point text. (`services/viewer/services/points.py::build_points`)
   - `GET /chunk/{doc_id}/{speech_id}/{chunk_id}` — the full hit for one chunk
     (text + alignments + paths), lazy-fetched when a point is selected.
   - `POST /chunks` — full hits for a batch of chunk keys (capped at 1000) for the
@@ -549,41 +533,20 @@ The **Atlas** is a shipped subsystem that projects the 145,175 chunks down to a
 
 ---
 
-## 10. The `demo/` app — a separate subsystem
-
-`demo/` is a **standalone, in-browser** audio-transcription playground built on
-**transformers.js + ONNX Runtime Web** running Whisper/KB-Whisper on **WebGPU**
-(WASM fallback), in a Web Worker. It supports realtime mic/tab capture and batch
-file transcription, exports txt/srt/json/wav, and builds to static HTML for
-Hugging Face Spaces. **It shares no code, types, or deps with ratch** and targets
-a totally different runtime (browser, not server/GPU/vLLM).
-
-Treat it as a quarantined playground — it should not be held to the core's
-standards/urgency. Architecture notes if you do touch it:
-- One Web Worker is shared by three consumers (`+page.svelte` lifecycle,
-  `RealtimePanel` + `BatchPanel` inference) over one `postMessage` channel,
-  disambiguated by a `jobId` convention — an implicit, untyped protocol (a
-  candidate for a typed message contract; see [TODO.md](TODO.md)).
-- The whole app only mounts if `navigator.gpu` exists; `webgpu.ts` does the
-  auto/force/fallback logic.
-- Run it: `cd demo && bun install && bun run dev` (needs Chrome/Edge 113+).
-
----
-
-## 11. Developer workflow
+## 10. Developer workflow
 
 ### Toolchain (mandated by the `writing-python` / `writing-typescript` skills)
 
 ```bash
 # Python — from the repo root
-uv sync --group dev          # install runtime + dev deps (pytest, httpx)
-uvx ruff check src backend tests        # lint  (config in pyproject.toml; lint-only — see note)
-uvx ruff check --fix src backend tests  # autofix
+uv sync --extra multimodal --extra atlas   # runtime + the non-model extras the suite needs
+uvx ruff check src services runners tests   # lint  (config in pyproject.toml)
+uvx ruff check --fix src services runners tests  # autofix
 uvx ty check                            # type-check
-uv run pytest                           # tests (unit always; backend smoke if dataset present)
+uv run pytest tests/ -m "not slow"      # the full suite — no dataset/GPU/network needed
 uv run ratch --help                    # CLI smoke
 
-# Frontend (and demo) — from frontend/ (or demo/)
+# Frontend — from frontend/
 bun install
 bun run check                # svelte-kit sync + svelte-check (the type gate)
 bun run build                # static SPA into build/
@@ -598,9 +561,9 @@ bun run build                # static SPA into build/
 
 | Surface | Command | Bar |
 |---|---|---|
-| Python lint | `uvx ruff check src backend tests` | 0 issues |
+| Python lint | `uvx ruff check src services runners tests` | 0 issues |
 | Python types | `uvx ty check` | 0 diagnostics |
-| Python tests | `uv run pytest` | all pass (backend smoke auto-skips without a local dataset) |
+| Python tests | `uv run pytest tests/ -m "not slow"` | all pass |
 | CLI | `uv run ratch --help` | exit 0 |
 | Frontend types | `cd frontend && bun run check` | 0 errors / 0 warnings |
 | Frontend build | `cd frontend && bun run build` | succeeds |
@@ -610,20 +573,19 @@ bun run build                # static SPA into build/
 - `tests/test_units.py` — pure logic, runs everywhere: `timecode`, `_parse_range`
   (HTTP Range), `_build_where_clause` (SQL predicate assembly + quote escaping),
   `_rrf_fuse`, query-term extraction.
-- `tests/test_backend_smoke.py` — end-to-end against a real local
-  `transcripts.lance`; **auto-skips** when the dataset isn't present (it's
-  gitignored). Covers FTS, health, documents, thumbnail, Range streaming, and
-  asserts GPU-only modes degrade to a clean **503** (never a 500).
+- the browser E2E suites (`frontend/apps/media/e2e/`, 51 checks) run against
+  the composed split stack — `make services-up` + `bun run dev`, then
+  `bun run test:e2e` in `frontend/apps/media`
 
 ### Running the whole thing
 
-See the [README](README.md) quickstart and the `Makefile` (`make backend`,
+See the [README](../README.md) quickstart and the `Makefile` (`make backend`,
 `make frontend`, `make embed-server-docker`, `make pipeline`, …). The Makefile is
 the authoritative, commented description of how every process fits together.
 
 ---
 
-## 12. Quick "where do I look for…?" index
+## 11. Quick "where do I look for…?" index
 
 | I want to… | Look at |
 |---|---|
@@ -631,11 +593,11 @@ the authoritative, commented description of how every process fits together.
 | Change how transcripts become rows | `src/ratch/ingest/ingest.py` (`flatten_chunks`, `_document_row`) |
 | Add/modify a CLI command | `src/ratch/cli/` |
 | Add/modify a feature column (embed/summary/caption) | `src/ratch/features/columns.py` (+ `features/engine.py`) |
-| Change search behavior / add a mode | `backend/search/service.py` (`run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`) + `backend/search/spec.py` (`SearchMode`) |
-| Touch the Atlas projection / map endpoints | `src/ratch/features/projection.py` (EVōC fit) + `backend/atlas/router.py` (`/api/atlas/*`) |
-| Touch speaker diarization (Speakers tab) | `src/ratch/media/diarize.py` (pyannote → `speaker_turns`) + `backend/diarization/router.py` (`/api/diarization/{doc_id}`) + `frontend/src/lib/components/diarization-timeline.svelte` |
-| Add an API endpoint | the relevant router under `backend/` (`search/`, `media/`, `atlas/`, `system/`) |
-| Change the embedding/rerank wire format | `src/ratch/vllm/embedding.py` (+ `vllm/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
+| Change search behavior / add a mode | `services/search/services/service.py` (`run_search`, `_vector_search`, `_frame_search`, `_rrf_fuse`) + `services/search/services/spec.py` (`SearchMode`) |
+| Touch the Atlas projection / map endpoints | `src/ratch/features/projection.py` (EVōC fit) + `services/viewer/api/v1/endpoints/atlas.py` (`/api/atlas/*`) |
+| Touch speaker diarization (Speakers tab) | `runners/diarize/diarize.py` (pyannote → `speaker_turns`) + `services/viewer/api/v1/endpoints/diarization.py` (`/api/diarization/{doc_id}`) + `frontend/apps/media/src/lib/components/diarization-timeline.svelte` |
+| Add an API endpoint | the relevant service's `api/v1/endpoints/` (viewer/search/annotator) |
+| Change the embedding/rerank wire format | `src/ratch/clients/embedding.py` (+ `clients/reranker.py`, `retrieval/qwen3_vl_reranker.jinja`) |
 | Touch the search UI | `frontend/src/routes/+page.svelte` + `frontend/src/lib/components/` |
 | Change the API client / response shapes | `frontend/src/lib/api.ts` (Zod schemas) |
 | Change how processes are launched | `Makefile` |

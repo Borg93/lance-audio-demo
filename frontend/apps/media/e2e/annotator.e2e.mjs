@@ -4,10 +4,11 @@
  * draw → save → persist. Failures here mean a user-visible feature broke.
  *
  * Preconditions (asserted at start):
- *   - backend at :8000  (`uv run --no-sync ratch --db transcripts_v2.lance serve`) with
- *     MEDIA_ASSIST_URL UNSET — the AI-assist checks rely on the deterministic in-repo
- *     mock (backend/media_api/assist.py); a live model endpoint would be nondeterministic.
- *   - dev server at :5175 (`bun run dev --port 5175` in apps/media)
+ *   - the split services up (`make services-up`: viewer :8101 / search :8102 /
+ *     annotator :8103) with MEDIA_ASSIST_URL UNSET — the AI-assist checks rely on the
+ *     deterministic in-repo mock (services/annotator/api/v1/endpoints/assist.py); a live
+ *     model endpoint would be nondeterministic.
+ *   - the dev proxy at :5175 (`bun run dev` in frontend/ — both zone apps)
  *   - a chromium with WebGPU: default = the ms-playwright cache; override with E2E_CHROME.
  *   - the demo unit (E2E_KEY, default fe00cd746463ad2c/0/19) present in the dataset.
  *

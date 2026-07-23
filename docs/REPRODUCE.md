@@ -44,6 +44,7 @@ make check-deps        # verifies uv + ffmpeg + hf + GPU, prints install hints
 | **NVIDIA GPU** | semantic/visual/scene | a 96 GB card hosts both 2 B vLLM models at 0.45 mem-frac |
 | **Docker** | optional | only for the `*-server-docker` vLLM route (bundles CUDA) |
 | **hf CLI** | Path A + uploads | `pip install "huggingface_hub[cli]" && hf auth login` |
+| **`[models]` extra** | Path B | easytranscriber + torch/torchaudio cu128 (`pyproject.toml`); the transcribe/diarize/voiceprint Make targets pull it via `uv run --extra models` |
 
 **Version pins that matter** (don't drift these without re-reading
 [INVESTIGATION.md](INVESTIGATION.md)):
@@ -70,9 +71,12 @@ make check-deps        # verifies uv + ffmpeg + hf + GPU, prints install hints
 Install Python deps:
 
 ```bash
-make install                       # = uv sync (core: ASR + torch + FastAPI)
+make install                       # = uv sync (core is model-free — no torch)
 # extras are pulled per-command by `uv run --extra …`, or eagerly:
 uv sync --extra multimodal --extra atlas
+# Path B's in-process model stages (transcribe, detect-language, diarization,
+# voiceprints) need the [models] extra (easytranscriber + torch cu128); the
+# Make targets pass `uv run --extra models` for you.
 ```
 
 ---
@@ -374,7 +378,7 @@ curl -sS http://localhost:8101/api/graph/status   # {"built":true,"entities":…
 
 ## Serving the stack
 
-Four processes. The two vLLM servers **must start sequentially** (launching both
+Six processes. The two vLLM servers **must start sequentially** (launching both
 at once trips vLLM's memory-profiling race). One script does it all, health-gated
 and detached:
 
@@ -391,8 +395,10 @@ What it brings up (idempotent — skips any port already healthy):
 |---|---|---|---|
 | vLLM embed | 8001 | `make embed-server` | `VLLM_GPU` (default 0) |
 | vLLM rerank | 8002 | `make rerank-server` | `VLLM_GPU` |
-| FastAPI backend | 8000 | `ratch --db $DB serve` | — |
-| Frontend (Bun) | 5274 | `frontend/server.ts` (prod build, proxies `/api`) | — |
+| Viewer service | 8101 | `ratch --db $DB serve` (= `make services-up`; one command launches all three) | — |
+| Search service | 8102 | ″ | — |
+| Annotator service | 8103 | ″ | — |
+| Frontend (Bun) | 5274 | `frontend/apps/media/server.ts` (prod build, proxies `/api`) | — |
 
 > FTS-only / search-only? You can skip the vLLM servers and run just `make
 > backend` + `make frontend` — semantic/visual/scene degrade to empty, FTS works.
@@ -437,10 +443,10 @@ both stores reject virtual-hosted addressing). Full detail: `docs/RASK_LANDING.m
 ## Final verification (the smoke test)
 
 ```bash
-# all four up?
-for p in 8000 8001 8002 5274; do
+# all six up?
+for p in 8001 8002 8101 8102 8103 5274; do
   printf "%s " $p; curl -s -o /dev/null -w '%{http_code}\n' \
-    "http://127.0.0.1:$p/$([ $p = 8000 ] && echo api/health || ([ $p = 5274 ] && echo '' || echo health))"
+    "http://127.0.0.1:$p/$(case $p in 8001|8002) echo health;; 5274) echo '';; *) echo livez;; esac)"
 done
 
 # every search mode returns hits on the live data
