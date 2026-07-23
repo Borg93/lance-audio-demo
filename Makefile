@@ -422,8 +422,13 @@ atlas-caption:        ## Caption EVōC map (atlas_cap_*) from caption_embedding.
 	uv run --extra atlas ratch --db $(DB) feature atlas --space caption
 atlas-all: atlas atlas-visual atlas-caption  ## All three atlas projections.
 
-topics:               ## Build Swedish topic layers (Toponymy, isolated env; needs atlas map + Gemma :8003 + embed :8001).
-	uv run ratch --db $(DB) feature topics
+# The LOCAL sealed-env convenience: run the topics worker in its own env
+# (runners/topics/pyproject.toml — toponymy pins transformers<5), then derive
+# the hierarchy tree in ratch. The cluster path is `ratch feature topics` with
+# RATCH_RAY_ENABLED=1 (ratch.core.jobs submits the same worker as a Ray Job).
+topics:               ## Build Swedish topic layers (Toponymy, sealed env; needs atlas map + Gemma :8003 + embed :8001).
+	uv run --project runners/topics python -m runners.topics.worker --db $(DB)
+	uv run ratch --db $(DB) feature topic_tree
 
 # ─── Complete feature DAG (everything the serving DB carries) ─────────────────
 # The full multimodal + atlas + topics chain in dependency order. Assumes

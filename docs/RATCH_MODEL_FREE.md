@@ -1,103 +1,76 @@
-# Making ratch model-free — the plan
+# ratch is model-free — the shipped architecture
 
-**Goal:** `ratch` = pure Ray Data orchestration over Lance, **zero model deps**.
-Every model (inference) lives in `runners/<name>/` with its own env + Ray
-Serve deployment; ratch calls it through a thin `ratch/endpoints/<name>.py` client.
+**State (2026-07-23, DONE):** `ratch` = pure Ray Data orchestration over Lance,
+**zero model deps** — `import ratch` loads no torch/easytranscriber/pyannote/
+toponymy/lightrag and not even `ray` (the driver imports it lazily at run time);
+pinned by `tests/test_core_contract.py`. Every model lives in `runners/<name>/`
+with its own env. There are NO endpoint clients and NO subprocess calls in the
+compute paths — the old sealed-subprocess `ratch/endpoints/` stand-in is deleted.
 
-**Why:** once the input is Lance (medallion bronze blob), every model step —
-embed, caption, topics, **and asr/diarize/voiceprint** — is a *deriver stage*
-(`read_lance → map_batches(stage-that-calls-a-Serve-handle) → write column`), not
-a "preprocess the files first" step. ratch's process should never load a model;
-it holds Serve handles and does read→map→write. That IS the lance-ns medallion
-deriver shape.
+## The two ways ratch drives a runner
 
-## The rule (why some things are services and some aren't)
+**1. Per-item models → Ray Data actors (stages).** A `Stage` declares
+`runner="<name>"`; the composition root resolves
+`runners.<name>.actor.compute_factory` + `OUTPUT_SCHEMA` by convention
+(`ratch/core/runners.py::resolve_runner_actor`) and hands the factory to the
+driver's `map_batches` — one warm model per actor. **A new model is one runner
+dir + one Stage entry; the driver and `ray_av` never change** (proof:
+`tests/test_runner_convention.py` drives the real append path with a fake
+runner). The stage-side facts travel as a `RunnerContext` (paths only — the
+runner owns its model config). Runner-backed today: `diarize`, `voiceprint`
+(and `asr` holds the transcribe/detect-language compute the CLI imports).
 
-A model becomes a `runners/*` service when **it runs inference** — full
-stop, in the model-free target. (Pre-merge, the endpoint client keeps a local
-sealed impl so it still runs without a Serve cluster.) Pure compute — ffmpeg
-frames, thumbnails, download, clustering, the stage registry, ingest IO — stays
-in ratch.
+**2. Corpus-global / one-shot models → Ray Jobs.** `ratch/core/jobs.py`
+(`run_runner`) mirrors lance-ns `medallion/services/ray_submit.submit_stage_job`:
+deterministic uuid5 submission id per (runner, token) — a resubmit RE-ATTACHES
+to a running job instead of racing it; a terminal prior job is deleted and
+resubmitted (deviation from lance-ns, documented in the module); the runner's
+env + forwarded `MEDIA_*`/`AWS_*` vars ride in the job's `runtime_env`;
+`metadata={"kind": <runner>}`. `RATCH_RAY_ENABLED=1` submits to the cluster
+(`ray.job_submission.JobSubmissionClient`); off (default) runs the worker
+in-process (`runners/<name>/worker.py::main`, same argv contract). Job-driven
+today: `topics` (`ratch feature topics`); `kg` (its scripts; gains a worker.py
+when it becomes job-submittable). Local sealed-env convenience is Make targets
+(`make topics` = `uv run --project runners/topics python -m runners.topics.worker`),
+never Python `subprocess`.
 
-## Established pattern (done: `topics`, `kg`)
+**The sorting rule is honest, not aesthetic:** `map_batches` streams disjoint
+batches through parallel actors, so a whole-corpus fit (Toponymy clusters the
+entire atlas map; LightRAG builds one graph) structurally cannot be a stage.
+`runners/topics/actor.py` raises its own explanation at resolution time; kg
+ships no actor module and `resolve_runner_actor` points at the jobs seam.
+
+## Layout
 
 ```
 runners/<name>/
-  pyproject.toml     the service's OWN env (conflicting/heavy deps live here)
-  worker.py          the compute (run() + CLI main())
-  deployment.py      the Ray Serve @serve.deployment (merge-time online form)
-  README.md
-ratch/endpoints/<name>.py   Protocol + Local<Name>Client (sealed env) +
-                            Remote<Name>Client (Ray Serve) + get_<name>_client()
+  pyproject.toml     the runner's OWN env (conflicting/heavy deps live here)
+  actor.py           per-item runners: compute_factory(ctx) + OUTPUT_SCHEMA
+  worker.py          job runners: run() + main() (argv contract, Ray Job entrypoint)
+  deployment.py      online form (Ray Serve), where applicable
+src/ratch/core/runners.py   RunnerContext, resolve_runner_actor, runner_env
+src/ratch/core/jobs.py      RunnerJob, JobsSettings, run_runner (the jobs seam)
 ```
 
-## Status (2026-07-21)
+Pure compute stays in ratch: ffmpeg frames/thumbnails/WAV transcode
+(`modalities/av/`, incl. `wav.py::extract_wav_16k_mono` shared by the speech
+runners), ingest IO, the stage registry, retrieval.
 
-**DONE — ratch's CORE is model-free (the headline):** `easytranscriber`/`torch`/
-`torchaudio` moved from `[project.dependencies]` → the `[models]` optional extra;
-the one top-level model import (detect_language) made lazy. Verified: `import ratch`
-loads no torch/easytranscriber, `uv sync` (core) installs no model stack, 635 tests
-pass with only the non-model `multimodal`/`atlas` extras. `topics` + `kg` extracted
-to `runners/*` (Ray Serve template). Model-running Make targets take
-`--extra models`.
+## Envs: dev bridge vs production
 
-**The correct pre-merge state for the actor models:** `asr`/`diarize`/`voiceprint`
-run inside Ray Data actors (per-batch). Their model-free form is the *merge-time*
-Serve-handle call — pre-merge they run **in-process** in the actor via the `[models]`
-extra. Physically relocating them to `runners/*` only pays off once they are
-Ray Serve deployments (needs the merge runtime to build + verify); doing it blind
-here would put subprocess-per-batch in a hot actor loop. So they stay in
-`ratch/modalities/` **behind `[models]`** until merge, when they become Serve
-deployments (template: `topics`/`kg`) and the actors call handles.
+- **Local single-node (dev):** actors share the driver env; the `[models]` extra
+  supplies asr/diarize/voiceprint deps. No per-run pip of torch.
+- **Cluster (dev bridge):** `RATCH_RUNNER_ISOLATION=1` attaches each runner's
+  pip `runtime_env` (built from its pyproject) per stage; jobs always carry it.
+- **Production (merge-time):** per-runner container images on KubeRay worker
+  groups — pip runtime_env is dev-only per Ray docs (torch + cu128 index is
+  specifically painful). Tracked in TODO.
 
-## TODO (remaining = merge-time)
+## Merge-time follow-ups (needs the live cluster)
 
-### Phase 1 — asr  (easytranscriber / transformers 5 / torch)
-- [ ] `runners/asr/` — pyproject (easytranscriber, torch, torchaudio),
-      worker.py (from `modalities/av/asr/{transcribe,detect_language}.py`),
-      deployment.py, README
-- [ ] `ratch/endpoints/asr.py` — `AsrClient` (transcribe + detect-language) with
-      Local (sealed) + Remote (Serve) impls + factory (`MEDIA_ASR_URL`)
-- [ ] rewire `cli/transcribe.py` → the endpoint client; drop the model import
-- [ ] `test_asr_detect.py` → repoint (the classifier logic can stay pure/importable)
-- [ ] verify: `import ratch` needs no easytranscriber; tests green
-
-### Phase 2 — diarize  (pyannote)
-- [ ] `runners/diarize/` (pyannote env) + worker + deployment + README
-- [ ] `ratch/endpoints/diarize.py`
-- [ ] rewire `features/ray_av.py` + `cli/speaker.py`
-- [ ] verify
-
-### Phase 3 — voiceprint  (wespeaker)
-- [ ] `runners/voiceprint/` (wespeaker env) + worker + deployment + README
-- [ ] `ratch/endpoints/voiceprint.py`
-- [ ] rewire `cli/speaker.py` + `features/ray_av.py`; decouple `model/schema.py`
-      (it only needs the embedding DIM constant, not the model)
-- [ ] verify
-
-### Phase 4 — drop the model deps from ratch
-- [ ] remove `easytranscriber`, `torch`, `torchaudio` from `[project] dependencies`
-- [ ] ratch core deps = `ray[data]`, `lance-ray`, `pylance`, `pydantic`, `typer`,
-      `fastapi`, `uvicorn`, `lance-graph`, `pydantic-settings`, `fastmcp`
-- [ ] `uv sync` re-resolves; `import ratch` model-free; grep: no torch/transformers/
-      easytranscriber/pyannote/wespeaker import anywhere under `src/ratch/`
-- [ ] full test suite green
-
-### Phase 5 — docs
-- [ ] `runners/README.md` — the pattern + the rule
-- [ ] update the architecture doc: ratch = Ray Data over Lance; models = services;
-      the deriver-stage-calls-Serve-handle mechanism
-- [ ] mark this TODO done
-
-## Caveats (honest)
-
-- The model **envs can't be installed/run here** (GPU + large downloads). We verify
-  **structure + env-lightening + the endpoint clients + `import ratch` model-free +
-  the test suite** — not live GPU inference.
-- Each phase keeps the tree **green** (`import ratch` + tests) before commit; if
-  Phase 4's dep-drop can't re-resolve cleanly, we stop there and report rather than
-  leave a broken env.
-- `ingest/` stays: it parses easytranscriber's **JSON shape** (a data schema, not a
-  model import) → bronze Lance. In the medallion target, asr-as-deriver writes the
-  transcript column directly and this intermediate JSON step folds away — a merge
-  follow-up, noted not done here.
+- Per-runner images replace pip runtime_envs; retire the `[models]` extra.
+- `runners/{embed,rerank,caption,summarize}/` — the vLLM set joins the shape.
+- The viewer's voice-upload encoder (`services/viewer/services/wespeaker.py`) is
+  the LAST in-process model — becomes a runners/ Serve deployment.
+- asr-as-deriver writes the transcript column directly (folds away the
+  easytranscriber-JSON ingest hop).

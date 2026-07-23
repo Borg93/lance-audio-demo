@@ -1,10 +1,9 @@
 """Ray Serve deployment for the topics model service (the merge-time online form).
 
-This is the ONLINE service ratch calls. Pre-merge, ratch runs the same
-:func:`worker.main` compute in this dir's sealed env via
-``ratch.endpoints.topics.LocalTopicsClient`` (no server needed). At merge, this
-``@serve.deployment`` is what runs — ratch's ``RemoteTopicsClient`` POSTs to it,
-zero change to the calling stage.
+This is the ONLINE form. The batch form is the same :func:`worker.main` compute
+driven as a Ray Job through ``ratch.core.jobs.run_runner`` (or the sealed-env
+Make target locally). At merge this ``@serve.deployment`` serves query-time
+callers; the batch path keeps going through the jobs seam.
 
 Runs ONLY in this service's env (``ray[serve]`` + toponymy, the ``serve`` extra),
 never in ratch's — so it is excluded from ratch's type-check/lint.

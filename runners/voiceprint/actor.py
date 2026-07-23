@@ -1,7 +1,8 @@
 """Ray Data actor factory for the voiceprint runner — the model side of the stage.
 
 Lives in the runner (the model's home) per the runners/ architecture: ratch's
-composition root imports this factory lazily and hands it to
+composition root resolves this module by convention (``Stage.runner="voiceprint"``
+→ ``runners.voiceprint.actor``) and hands ``compute_factory`` to
 ``run_append_rows_stage`` → ``map_batches`` (one warm model per actor). Deps
 resolve from THIS runner's env on the workers (per-stage ``runtime_env`` at
 merge; the ``[models]`` extra on a local single-node run).
@@ -16,29 +17,36 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from ratch.core.dataset import empty_table
+from ratch.model.schema import SPEAKER_EMBEDDINGS_SCHEMA
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from ratch.core.runners import RunnerContext
+
 logger = logging.getLogger(__name__)
 
+OUTPUT_SCHEMA = SPEAKER_EMBEDDINGS_SCHEMA
 
-def _empty(schema: pa.Schema) -> pa.Table:
-    return pa.table({f.name: pa.array([], type=f.type) for f in schema}, schema=schema)
 
-def voiceprint_compute(audio_root: str, turns_uri: str) -> Callable[[pa.Table], pa.Table]:
+def compute_factory(ctx: RunnerContext) -> Callable[[pa.Table], pa.Table]:
     """Doc-level on purpose: WeSpeaker output depends on the duration-sorted
     padding groups inside ``embed_turns``, so each document's turns are read
-    (from ``turns_uri``, actor-side) and embedded together — bit-identical to
-    the engine path."""
+    (from the diarize stage's output table, actor-side) and embedded together —
+    bit-identical to the engine path."""
     import lance
     import numpy as np
 
     from ratch.ingest.audio import resolve_source
-    from ratch.model.schema import SPEAKER_EMBEDDINGS_SCHEMA, VOICE_EMBED_DIM
-    from runners.diarize.diarize import extract_wav_16k_mono
+    from ratch.modalities.av.wav import extract_wav_16k_mono
+    from ratch.model.schema import VOICE_EMBED_DIM
     from runners.voiceprint.voiceprint import TurnSpan, VoiceEncoder
 
     encoder = VoiceEncoder()  # WeSpeaker loads once per actor
+    # Voiceprint's input dependency is diarize's output — the runner knows its
+    # own upstream table, the driver doesn't have to.
+    turns_uri = str((Path(ctx.db_path) / "speaker_turns.lance").resolve())
     turns_ds = lance.dataset(turns_uri)
 
     def compute(batch: pa.Table) -> pa.Table:
@@ -63,9 +71,9 @@ def voiceprint_compute(audio_root: str, turns_uri: str) -> Callable[[pa.Table], 
             if not turns:
                 continue
             try:
-                source = resolve_source(audio_path, Path(audio_root))
+                source = resolve_source(audio_path, Path(ctx.audio_root))
                 if source is None:
-                    raise FileNotFoundError(f"{audio_path} not under {audio_root}")
+                    raise FileNotFoundError(f"{audio_path} not under {ctx.audio_root}")
                 with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
                     extract_wav_16k_mono(source, Path(tmp.name))
                     kept, embeddings = encoder.embed_turns(Path(tmp.name), turns)
@@ -86,9 +94,9 @@ def voiceprint_compute(audio_root: str, turns_uri: str) -> Callable[[pa.Table], 
                         "duration": pa.array([t.duration for t in kept], pa.float32()),
                         "embedding": pa.FixedSizeListArray.from_arrays(flat, VOICE_EMBED_DIM),
                     },
-                    schema=SPEAKER_EMBEDDINGS_SCHEMA,
+                    schema=OUTPUT_SCHEMA,
                 )
             )
-        return pa.concat_tables(tables) if tables else _empty(SPEAKER_EMBEDDINGS_SCHEMA)
+        return pa.concat_tables(tables) if tables else empty_table(OUTPUT_SCHEMA)
 
     return compute

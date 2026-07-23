@@ -24,21 +24,19 @@ this module never takes a token argument.
 from __future__ import annotations
 
 import logging
-import subprocess
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
 from pydantic import BaseModel
 
+from ratch.modalities.av.wav import extract_wav_16k_mono
+
 logger = logging.getLogger(__name__)
 
 
 #: HF model id for the diarization pipeline (validated working in this venv).
 DEFAULT_PIPELINE: str = "pyannote/speaker-diarization-community-1"
-
-#: Sample rate / channel count pyannote's models expect.
-TARGET_SAMPLE_RATE: int = 16_000
 
 
 class SpeakerTurn(BaseModel):
@@ -51,38 +49,6 @@ class SpeakerTurn(BaseModel):
     speaker_label: str
     start: float
     end: float
-
-
-def extract_wav_16k_mono(source: Path, dest: Path, *, timeout: float = 1800.0) -> None:
-    """Transcode ``source`` to a 16 kHz mono WAV at ``dest`` via ffmpeg.
-
-    Raises :class:`RuntimeError` with the ffmpeg stderr tail on failure.
-    """
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(source),
-        "-ar",
-        str(TARGET_SAMPLE_RATE),
-        "-ac",
-        "1",
-        "-f",
-        "wav",
-        str(dest),
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"ffmpeg timed out after {timeout}s on {source}") from e
-    if proc.returncode != 0 or not dest.exists() or dest.stat().st_size == 0:
-        tail = (proc.stderr or b"").decode("utf-8", errors="replace").strip().splitlines()[-3:]
-        raise RuntimeError(
-            f"ffmpeg wav extraction failed (rc={proc.returncode}) on {source}: " + " | ".join(tail)
-        )
 
 
 class Diarizer:

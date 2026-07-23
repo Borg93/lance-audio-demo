@@ -1,47 +1,46 @@
-# `topics` model service — the reference template for `services/models/*`
+# `topics` runner — the reference template for job-driven runners
 
-An **online model service**: ratch's offline compute calls it; it is not part of
-ratch. It exists because Toponymy transitively needs **transformers < 5** while
-ratch resolves **transformers 5.x** — the conflict is resolved by giving this
-service its **own env**, never by leaking deps into ratch.
+A **corpus-global model runner**: ratch drives it as a *job*, never as a
+pipeline stage — Toponymy fits the whole atlas map at once, so there is no
+per-batch compute (`actor.py` raises exactly that explanation). It exists as its
+own dir because Toponymy transitively needs **transformers < 5** while ratch's
+model extra resolves **transformers 5.x** — the conflict is resolved by giving
+this runner its **own env**, never by leaking deps into ratch.
 
-## What lives here (the pattern every `services/models/<name>/` follows)
+## What lives here (the pattern every job-driven `runners/<name>/` follows)
 
 | file | role |
 |---|---|
-| `pyproject.toml` | **this service's env** — the conflicting deps live here and nowhere else |
-| `worker.py` | the compute (`run()` + a CLI `main()`) — the model work |
+| `pyproject.toml` | **this runner's env** — the conflicting deps live here and nowhere else |
+| `worker.py` | the compute (`run()` + a CLI `main()` reading argv) — the Ray Job entrypoint |
+| `actor.py` | the deliberate refusal: corpus-global ⇒ no `map_batches` stage |
 | `deployment.py` | the **Ray Serve** `@serve.deployment` (merge-time online form) |
 | `README.md` | this |
 
-ratch reaches it through **`ratch/endpoints/topics.py`** — a `TopicsClient`
-Protocol with two impls behind one factory:
+ratch reaches it through **`ratch/core/jobs.py`** (`run_runner`) — the same
+seam as lance-ns `medallion ray_submit`:
 
-- `LocalTopicsClient` (pre-merge default): `uv run --project services/models/topics
-  topics-worker --db <db>` — runs `worker.run` in *this* sealed env.
-- `RemoteTopicsClient` (merge): POST to the Ray Serve deployment at
-  `MEDIA_TOPICS_URL`.
-
-`get_topics_client()` picks remote when `MEDIA_TOPICS_URL` is set, else local —
-so the same `ratch feature topics` call works before and after the merge with no
-stage change.
-
-## Run it
+- `RATCH_RAY_ENABLED=1`: submitted as a **Ray Job** — entrypoint
+  `python -m runners.topics.worker --db <db>`, this pyproject's deps in the
+  job's `runtime_env`, deterministic submission id (re-runs re-attach or
+  resubmit, never race).
+- default (no cluster): the worker runs **in-process** — which needs its deps,
+  so the local convenience is the Make target instead:
 
 ```bash
-# pre-merge, sealed env (what ratch does under the hood):
-uv run --project services/models/topics topics-worker --db transcripts_v2.lance
+# local sealed-env run (what `make topics` does — Make-level, no Python subprocess):
+uv run --project runners/topics python -m runners.topics.worker --db transcripts_v2.lance
+uv run ratch --db transcripts_v2.lance feature topic_tree   # the pure-compute follow-up
 
 # at merge, as a Ray Serve deployment (needs the `serve` extra):
-#   serve run services/models/topics/deployment.py:app
-# then point ratch at it:  export MEDIA_TOPICS_URL=http://topics:8000
+#   serve run runners/topics/deployment.py:app
 ```
 
 ## Why this shape
 
-- **ratch stays model-free** — pure Ray Data compute; it holds only the thin
-  endpoint client, imports no model library.
-- **The dep conflict dissolves structurally** — one env per service.
-- **It's the merge target, pre-built** — this dir is one Ray Serve deployment;
-  at merge it drops into lance-ns's Ray cluster, and `.docker/topics.dockerfile`
-  builds its image (RA convention).
+- **ratch stays model-free** — pure Ray Data/Jobs orchestration; it knows the
+  runner's NAME, imports no model library, shells out to nothing.
+- **The dep conflict dissolves structurally** — one env per runner.
+- **It's the merge target, pre-built** — at merge this dir is one Ray Job
+  (batch) + one Serve deployment (online), and `.docker/topics.dockerfile`
+  builds its image (RA convention; pip runtime_env is the dev bridge only).

@@ -34,18 +34,26 @@ binding generalizing today's `client=`), so reading `features/stages.py` tells y
 exactly which stages are runner-backed and which are pure compute. ratch = pure
 orchestration; runners = the models.
 
-**Done (EXECUTED 2026-07-21):** ratch core model-free (`import ratch` loads no
-model; model stack = `[models]` extra for local single-node runs). ALL five models
-live in `runners/`: topics, kg, **asr** (transcribe + detect_language), **diarize**,
-**voiceprint** — each with its own `pyproject.toml` env; diarize + voiceprint have
-`actor.py` (the Ray Data actor factories ratch imports). `Stage.runner=` declared
-on the runner-backed stages (`features/stages.py` is the legible map);
-`ratch/core/runners.py` builds the per-stage `runtime_env` from the runner's
-pyproject and the driver attaches it in `map_batches` when
-`RATCH_RUNNER_ISOLATION=1` (cluster mode; local single-node shares the driver env
-— no per-run pip of torch). `ray_av.py` is pure composition (only the model-free
-ffmpeg frames factory remains). `src/ratch/modalities/av/` holds ONLY pure compute
-(frames/thumbnails/download/cluster). ty fully clean.
+**Done (EXECUTED 2026-07-21, completed 2026-07-23):** ratch core model-free
+(`import ratch` loads no model AND no ray — pinned by `tests/test_core_contract.py`;
+model stack = `[models]` extra for local single-node runs). ALL five models live
+in `runners/` with their own `pyproject.toml` envs. **The jobs seam is in**
+(`ratch/core/jobs.py` mirrors lance-ns `ray_submit.submit_stage_job`:
+deterministic uuid5 submission id, runner env + `MEDIA_*`/`AWS_*` in the job's
+`runtime_env`, `kind` metadata, re-attach/delete-resubmit semantics,
+`RATCH_RAY_ENABLED` in-process fallback — unit-tested vs a fake client) and the
+old sealed-subprocess `ratch/endpoints/` clients are DELETED; `subprocess` is
+gone from `src/ratch/{features,core}` and `runners/` (the ffmpeg WAV transcode
+moved to `modalities/av/wav.py` where the other pure-compute ffmpeg helpers
+live). **Actors resolve by convention** — `Stage.runner` →
+`runners.<name>.actor.compute_factory` + `OUTPUT_SCHEMA`
+(`resolve_runner_actor`); the ray_av bindings dict is gone; a new model = 1
+runner dir + 1 Stage entry, zero driver edits (proof test drives the append path
+with a fake runner on local Ray). Corpus-global runners refuse legibly
+(`runners/topics/actor.py` raises its own explanation; kg is job-only, pointed
+at the jobs seam). Docs: [RATCH_MODEL_FREE.md](RATCH_MODEL_FREE.md) (shipped
+architecture), [RASK_COMPARE.md](RASK_COMPARE.md) (what rask keeps/alters at
+merge), jobs-seam rows in [LANCE_NS_CONFORMANCE.md](LANCE_NS_CONFORMANCE.md).
 
 **📋 Left (merge-time — needs the live Ray cluster to verify):**
 - **Per-runner container images, not pip runtime_envs, in production** (Ray docs:
@@ -58,9 +66,11 @@ ffmpeg frames factory remains). `src/ratch/modalities/av/` holds ONLY pure compu
   runtime_env) stays as the DEV bridge only.
 - `runners/{embed,rerank,caption,summarize}/` — the vLLM set joins the same shape
   (offline actor + online Serve deployment.py; one model, two drivers).
-- Retire the `[models]` extra + the `endpoints/` sealed-subprocess stand-in once
-  runners run isolated on the cluster; `topics`/`kg` gain `actor.py` when they
-  become in-pipeline stages (today they're one-shot workers).
+- Retire the `[models]` extra once runners run isolated on the cluster (the
+  `endpoints/` sealed-subprocess stand-in is already deleted — replaced by the
+  `ratch/core/jobs.py` Ray Jobs seam). `topics`/`kg` stay job-only permanently:
+  corpus-global fits can't be `map_batches` stages (see RATCH_MODEL_FREE.md);
+  kg gains a `worker.py` argv entrypoint when its scripts fold into one job.
 - The viewer's voice-upload encoder (`services/viewer/services/wespeaker.py`) is
   the LAST in-process model (online, lazy imports, `--extra models` pre-merge) —
   becomes a runners/ Serve deployment the annotator/viewer call at merge.

@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 import numpy as np
 from pydantic import BaseModel
 
-from runners.diarize.diarize import TARGET_SAMPLE_RATE, extract_wav_16k_mono
+from ratch.modalities.av.wav import TARGET_SAMPLE_RATE, extract_wav_16k_mono
 
 if TYPE_CHECKING:
     import lancedb

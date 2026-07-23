@@ -39,6 +39,14 @@ justified inline; anything unmarked is a 1:1 correspondence.*
   `column_map`/`measure_stage`/`emit_stage_lineage` and re-exports the primitives for
   its callers). `services/` imports zero pipeline modules — verified by grep.
 
+## Batch compute: `src/ratch` + `runners/` ↔ lance-ns `services/medallion`
+
+| lance-media | lance-ns analog | Notes |
+|---|---|---|
+| `ratch/core/jobs.py` (`run_runner`) | `medallion/services/ray_submit.py` (`submit_stage_job`) | The jobs seam: deterministic submission id per (runner, token) so a resubmit RE-ATTACHES to a running job instead of racing it; runner env in the job's `runtime_env`; `metadata={"kind": …}`; poll-with-tolerance until terminal; `ray_enabled` settings flag with an in-process fallback (their `MEDALLION_RAY_ENABLED` shape). **Deviation (sync SDK):** ratch submits from a CLI, not an async Dapr mover — `ray.job_submission.JobSubmissionClient` instead of async httpx against the REST API. **Deviation (terminal = resubmit):** a SUCCEEDED prior job is also deleted + resubmitted — ratch's trigger is a human asking for a (re)build, theirs is an at-least-once event redelivery. Unit-tested against a fake client (`tests/test_core_jobs.py`). |
+| `Stage.runner` → `runners.<name>.actor.compute_factory` + `OUTPUT_SCHEMA` | medallion deriver stages | Runner-backed stages resolve by convention (`ratch/core/runners.py::resolve_runner_actor`) — a new model is 1 runner dir + 1 Stage entry, zero driver edits (proof: `tests/test_runner_convention.py` drives the real append path with a fake runner on local Ray). Corpus-global runners refuse legibly: `runners/topics/actor.py` raises its own explanation; kg ships no actor module (job-only) and resolution points at the jobs seam. |
+| `runners/<name>/pyproject.toml` → per-stage `runtime_env` | ray-lance image | Dev bridge: `RATCH_RUNNER_ISOLATION=1` attaches the runner's pip env per stage. Production = per-runner container images on KubeRay worker groups (pip runtime_env is dev-only per Ray docs — tracked in TODO). |
+
 ## Frontend: `frontend/` ↔ lance-ns `frontend/`
 
 | lance-media | lance-ns analog | Notes |

@@ -1,9 +1,10 @@
 """Isolated Toponymy topic-modelling worker for ratch (`ratch feature topics`).
 
 Runs in its OWN env (runners/topics/pyproject.toml). Toponymy pins
-``transformers<5``; that constraint lives only in this service's env and never
-enters the ratch project — the whole point of a separate model service. ratch
-calls it through ``ratch.endpoints.topics`` (a thin client), never imports it.
+``transformers<5``; that constraint lives only in this runner's env and never
+enters the ratch project — the whole point of a separate runner. ratch drives
+this worker as a Ray Job through ``ratch.core.jobs.run_runner`` (entrypoint
+``python -m runners.topics.worker``), never imports it.
 
 Pipeline (all reuse of existing artifacts — nothing re-embedded, nothing
 destroyed):
@@ -56,19 +57,25 @@ def _require(schema_names: list[str], db: Path) -> None:
 
 def run(db_path: str, llm_url: str | None = None) -> int:
     """Programmatic entry — the Ray Serve deployment (deployment.py) calls this;
-    it delegates to the CLI ``main()`` so the sealed-CLI path and the served path
-    run identical compute."""
+    it parses through the same CLI contract as ``main()`` so the served path and
+    the CLI run identical compute. Returns the number of chunks written."""
     argv = ["worker", "--db", db_path]
     if llm_url:
         argv += ["--llm-url", llm_url]
     saved, sys.argv = sys.argv, argv
     try:
-        return main()
+        return _build(_parse_args())
     finally:
         sys.argv = saved
 
 
 def main() -> int:
+    """CLI/Ray-Job entry: prints the row count to stdout, returns the exit code."""
+    print(_build(_parse_args()))
+    return 0
+
+
+def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Build Swedish topic layers on chunks via Toponymy.")
     ap.add_argument("--db", required=True, help="Lance DB dir (contains chunks.lance).")
     ap.add_argument("--llm-url", default=os.getenv("MEDIA_TOPICS_LLM_URL", "http://127.0.0.1:8003/v1"))
@@ -83,8 +90,11 @@ def main() -> int:
     ap.add_argument("--min-clusters", type=int, default=6)
     ap.add_argument("--base-min-cluster-size", type=int, default=100)
     ap.add_argument("--max-layers", type=int, default=None)
-    args = ap.parse_args()
+    return ap.parse_args()
 
+
+def _build(args: argparse.Namespace) -> int:
+    """The whole topic build; returns the number of chunks written."""
     # Point the OpenAI client at the local Gemma via env (belt-and-suspenders with
     # the explicit base_url below); the embedder's explicit :8001 still wins for it.
     os.environ["OPENAI_API_KEY"] = "local"
@@ -222,8 +232,7 @@ def main() -> int:
         f"(topic_l0..topic_l{n_layers - 1}) + doc_topic (per-video), BITMAP-indexed",
         file=sys.stderr,
     )
-    print(len(documents))  # stdout: row count for the calling CLI
-    return 0
+    return len(documents)
 
 
 if __name__ == "__main__":

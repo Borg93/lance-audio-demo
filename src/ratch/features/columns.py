@@ -329,25 +329,37 @@ def _run_atlas_caption(
 def _run_topics(
     db_path: Path, opts: FeatureRunOptions, _progress: Callable[[int], None] | None
 ) -> int:
-    """Toponymy topic layers — delegated to the `topics` MODEL SERVICE.
+    """Toponymy topic layers — the topics RUNNER's worker, driven as a job.
 
-    ratch does not import toponymy; it calls the topics endpoint
-    (``ratch.endpoints.topics``). The service (``runners/topics/``) owns
-    the transformers<5 env — isolated from ratch, over HTTP at merge (Ray Serve)
-    or in its sealed env locally. The service writes the ``topic_l*`` columns; we
-    then derive the nested hierarchy JSON here (pure ratch compute). ``opts.url``,
-    if set, overrides the LLM (Gemma) endpoint.
+    ratch never imports toponymy: ``runners/topics/`` owns the transformers<5
+    env, and :func:`ratch.core.jobs.run_runner` submits its worker as a Ray Job
+    (``RATCH_RAY_ENABLED=1``, the runner's env in the job's runtime_env) or runs
+    it in-process. Local sealed-env convenience is ``make topics``. The worker
+    writes the ``topic_l*``/``doc_topic`` columns; the nested hierarchy JSON is
+    then derived here (pure ratch compute). ``opts.url``, if set, overrides the
+    LLM (Gemma) endpoint.
     """
-    from ratch.endpoints.topics import get_topics_client
+    from ratch.core.jobs import RunnerJob, run_runner
 
-    rows = get_topics_client().build(db_path, llm_url=opts.url)
-    # The service wrote the topic_l*/doc_topic columns; derive the nested
-    # hierarchy from them and store it as JSONB in Lance (for the Tree treemap) —
-    # pure ratch compute, no model dep.
+    # Resolved absolute, like every path handed to Ray (ray_av/RunnerContext):
+    # a Ray Job's cwd is the working_dir SNAPSHOT (which excludes *.lance data),
+    # so a relative --db can never be found there. Resolving also canonicalises
+    # the idempotency token — one dataset, one submission id, however spelled.
+    db = str(Path(db_path).resolve())
+    llm_args = ("--llm-url", opts.url) if opts.url else ()
+    run_runner(RunnerJob(runner="topics", entrypoint_args=("--db", db, *llm_args), token=db))
+    return _run_topic_tree(db_path, opts, _progress)
+
+
+def _run_topic_tree(
+    db_path: Path, _opts: FeatureRunOptions, _progress: Callable[[int], None] | None
+) -> int:
+    """The nested topic hierarchy (Tree treemap JSONB) from existing ``topic_l*``
+    columns — pure ratch compute, split out so the sealed-env Make path
+    (worker → ``ratch feature topic_tree``) reaches it without the model step."""
     from .topic_tree import build_topic_tree
 
-    build_topic_tree(db_path)
-    return rows
+    return build_topic_tree(db_path)
 
 
 FEATURES: dict[str, Feature] = {
@@ -406,7 +418,14 @@ FEATURES: dict[str, Feature] = {
         name="topics",
         table="chunks",
         description="Toponymy Swedish topic layers (topic_l0…) named by Gemma 4 over the EVōC atlas "
-        "map — runs in an isolated env so transformers<5 never enters this project.",
+        "map — the topics runner's worker as a Ray Job (or in-process), then the hierarchy tree.",
         run=_run_topics,
+    ),
+    "topic_tree": Feature(
+        name="topic_tree",
+        table="chunks",
+        description="Nested topic hierarchy JSONB from existing topic_l* columns (pure compute — "
+        "the follow-up step after the sealed-env topics worker).",
+        run=_run_topic_tree,
     ),
 }

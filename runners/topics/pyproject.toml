@@ -21,10 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 serve = ["ray[serve]", "fastapi"]
 
-[project.scripts]
-# The sealed-env entry ratch.endpoints.topics.LocalTopicsClient shells out to
-# (`uv run --project services/models/topics topics-worker --db <db>`).
-topics-worker = "worker:main"
-
+# No [project.scripts]: with `package = false` uv never installs this project,
+# so console scripts would not resolve. The two entrypoints are
+# `python -m runners.topics.worker` (Make target / Ray Job) and deployment.py.
 [tool.uv]
 package = false

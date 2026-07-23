@@ -28,3 +28,29 @@ def test_core_imports_no_modalities_or_clients() -> None:
         check=True,
     )
     assert "CORE-CONTRACT OK" in result.stdout
+
+
+_MODEL_FREE_PROBE = """
+import sys
+import ratch
+import ratch.core.jobs
+import ratch.core.runners
+import ratch.features.columns
+models = ("torch", "easytranscriber", "pyannote", "toponymy", "transformers", "lightrag", "ray")
+loaded = [m for m in models if m in sys.modules]
+assert not loaded, f"importing ratch pulled model/heavy deps: {loaded}"
+print("MODEL-FREE OK")
+"""
+
+
+def test_import_ratch_loads_zero_model_deps() -> None:
+    """The runners/ architecture headline: ratch is pure orchestration — importing
+    it (including the jobs seam and the feature registry) loads no model stack,
+    and not even ray (the driver imports it lazily at run time)."""
+    result = subprocess.run(
+        [sys.executable, "-c", _MODEL_FREE_PROBE],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "MODEL-FREE OK" in result.stdout

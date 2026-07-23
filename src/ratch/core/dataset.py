@@ -43,6 +43,12 @@ def _with_descriptor(schema: pa.Schema, descriptor: Mapping[str, Any] | None) ->
     return schema.with_metadata(metadata)
 
 
+def empty_table(schema: pa.Schema) -> pa.Table:
+    """A zero-row table of ``schema`` — the shape actor computes return when a
+    whole batch yields nothing (and what a fresh dataset is created from)."""
+    return pa.table({f.name: pa.array([], type=f.type) for f in schema}, schema=schema)
+
+
 def create_dataset(
     path: str | Path,
     schema: pa.Schema,
@@ -59,12 +65,14 @@ def create_dataset(
     base paths (the documents table's ``file://``/``hf://`` media pointers).
     """
     stamped = _with_descriptor(schema, descriptor)
-    table = pa.table({f.name: pa.array([], type=f.type) for f in stamped}, schema=stamped)
+    table = empty_table(stamped)
     if data is not None:
         table = pa.Table.from_batches(
             data.to_batches() if isinstance(data, pa.Table) else [data], schema=stamped
         )
-    logger.info("creating lance dataset %s (storage %s, stable row ids)", path, DATA_STORAGE_VERSION)
+    logger.info(
+        "creating lance dataset %s (storage %s, stable row ids)", path, DATA_STORAGE_VERSION
+    )
     return lance.write_dataset(
         table,
         str(path),
@@ -99,7 +107,9 @@ def overwrite_dataset(
 ) -> lance.LanceDataset:
     """Replace a dataset's contents, RE-applying every create-time invariant."""
     stamped_schema = _with_descriptor(data.schema, descriptor)
-    logger.info("overwriting lance dataset %s (storage %s, stable row ids)", path, DATA_STORAGE_VERSION)
+    logger.info(
+        "overwriting lance dataset %s (storage %s, stable row ids)", path, DATA_STORAGE_VERSION
+    )
     return lance.write_dataset(
         data.cast(stamped_schema) if descriptor is not None else data,
         str(path),
