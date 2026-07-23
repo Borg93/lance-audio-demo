@@ -1,8 +1,9 @@
 """Ray composition root for the AV append stages (frames / diarize / voiceprint).
 
-Module-level factories for the ``APPEND_ROWS`` stages: each Ray actor builds
-its own warm tool (ffmpeg is subprocess-per-call; pyannote/WeSpeaker load once
-per actor) and turns a batch of source rows into output-table rows. Media bytes
+Pure orchestration: the MODEL actor factories live in their runners
+(``runners/{diarize,voiceprint}/actor.py`` — each Ray actor loads its model once,
+warm per actor) and are imported lazily here; only the model-free ``frames``
+factory (ffmpeg subprocess) stays in this module. Media bytes
 are read from the filesystem inside the actor — per LANCE_MEDIA_MERGE §4.3 only
 the small frame JPEGs ride back through Ray Data blocks.
 
@@ -13,7 +14,6 @@ failures stay reserved for correctness bugs.
 from __future__ import annotations
 
 import logging
-import tempfile
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -84,112 +84,8 @@ def frames_compute(audio_root: str) -> Callable[[pa.Table], pa.Table]:
     return compute
 
 
-def diarize_compute(audio_root: str) -> Callable[[pa.Table], pa.Table]:
-    from ratch.ingest.audio import resolve_source
-    from ratch.modalities.av.diarize import Diarizer
-    from ratch.model.schema import SPEAKER_TURNS_SCHEMA
-
-    diarizer = Diarizer()  # pyannote loads once per actor
-
-    def compute(batch: pa.Table) -> pa.Table:
-        tables: list[pa.Table] = []
-        for doc_id, audio_path in zip(
-            batch["doc_id"].to_pylist(), batch["audio_path"].to_pylist(), strict=True
-        ):
-            try:
-                source = resolve_source(audio_path, Path(audio_root))
-                if source is None:
-                    raise FileNotFoundError(f"{audio_path} not under {audio_root}")
-                turns = diarizer.diarize(source)
-            except Exception as exc:  # noqa: BLE001 — per-item skip is the stage contract
-                logger.warning("diarization failed for %s: %s", doc_id, exc)
-                continue
-            if not turns:
-                continue
-            tables.append(
-                pa.table(
-                    {
-                        "doc_id": pa.array([doc_id] * len(turns), pa.string()),
-                        "turn_id": pa.array(list(range(len(turns))), pa.int32()),
-                        "speaker_label": pa.array([t.speaker_label for t in turns], pa.string()),
-                        "start": pa.array([t.start for t in turns], pa.float32()),
-                        "end": pa.array([t.end for t in turns], pa.float32()),
-                    },
-                    schema=SPEAKER_TURNS_SCHEMA,
-                )
-            )
-        return pa.concat_tables(tables) if tables else _empty(SPEAKER_TURNS_SCHEMA)
-
-    return compute
 
 
-def voiceprint_compute(audio_root: str, turns_uri: str) -> Callable[[pa.Table], pa.Table]:
-    """Doc-level on purpose: WeSpeaker output depends on the duration-sorted
-    padding groups inside ``embed_turns``, so each document's turns are read
-    (from ``turns_uri``, actor-side) and embedded together — bit-identical to
-    the engine path."""
-    import lance
-    import numpy as np
-
-    from ratch.ingest.audio import resolve_source
-    from ratch.modalities.av.diarize import extract_wav_16k_mono
-    from ratch.modalities.av.voiceprint import TurnSpan, VoiceEncoder
-    from ratch.model.schema import SPEAKER_EMBEDDINGS_SCHEMA, VOICE_EMBED_DIM
-
-    encoder = VoiceEncoder()  # WeSpeaker loads once per actor
-    turns_ds = lance.dataset(turns_uri)
-
-    def compute(batch: pa.Table) -> pa.Table:
-        tables: list[pa.Table] = []
-        for doc_id, audio_path in zip(
-            batch["doc_id"].to_pylist(), batch["audio_path"].to_pylist(), strict=True
-        ):
-            rows = turns_ds.to_table(
-                columns=["turn_id", "speaker_label", "start", "end"],
-                filter=f"doc_id = '{doc_id}'",
-            )
-            turns = [
-                TurnSpan(turn_id=int(t), speaker_label=label, start=float(s), end=float(e))
-                for t, label, s, e in zip(
-                    rows["turn_id"].to_pylist(),
-                    rows["speaker_label"].to_pylist(),
-                    rows["start"].to_pylist(),
-                    rows["end"].to_pylist(),
-                    strict=True,
-                )
-            ]
-            if not turns:
-                continue
-            try:
-                source = resolve_source(audio_path, Path(audio_root))
-                if source is None:
-                    raise FileNotFoundError(f"{audio_path} not under {audio_root}")
-                with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
-                    extract_wav_16k_mono(source, Path(tmp.name))
-                    kept, embeddings = encoder.embed_turns(Path(tmp.name), turns)
-            except Exception as exc:  # noqa: BLE001 — per-item skip is the stage contract
-                logger.warning("voiceprint failed for %s: %s", doc_id, exc)
-                continue
-            if not kept:
-                continue
-            flat = pa.array(embeddings.astype(np.float32).reshape(-1), pa.float32())
-            tables.append(
-                pa.table(
-                    {
-                        "doc_id": pa.array([doc_id] * len(kept), pa.string()),
-                        "turn_id": pa.array([t.turn_id for t in kept], pa.int32()),
-                        "speaker_label": pa.array([t.speaker_label for t in kept], pa.string()),
-                        "start": pa.array([t.start for t in kept], pa.float32()),
-                        "end": pa.array([t.end for t in kept], pa.float32()),
-                        "duration": pa.array([t.duration for t in kept], pa.float32()),
-                        "embedding": pa.FixedSizeListArray.from_arrays(flat, VOICE_EMBED_DIM),
-                    },
-                    schema=SPEAKER_EMBEDDINGS_SCHEMA,
-                )
-            )
-        return pa.concat_tables(tables) if tables else _empty(SPEAKER_EMBEDDINGS_SCHEMA)
-
-    return compute
 
 
 def run_append_stage(db_path: str | Path, stage: Stage, *, audio_root: str = "input/sv") -> int:
@@ -204,6 +100,11 @@ def run_append_stage(db_path: str | Path, stage: Stage, *, audio_root: str = "in
     # workers' runtime-env working-dir copy, failing every per-item read.
     audio_root = str(Path(audio_root).resolve())
     turns_uri = str((Path(db_path) / "speaker_turns.lance").resolve())
+
+    # Runner-backed stages: the ACTOR factories live in runners/<name>/actor.py
+    # (the model's home — see Stage.runner); ratch only composes them here.
+    from runners.diarize.actor import diarize_compute
+    from runners.voiceprint.actor import voiceprint_compute
 
     bindings: dict[str, tuple[Callable[[], Callable[[pa.Table], pa.Table]], pa.Schema]] = {
         "extract_frames": (partial(frames_compute, audio_root), CHUNK_FRAMES_SCHEMA),

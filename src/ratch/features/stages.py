@@ -81,6 +81,7 @@ STAGES: dict[str, Stage] = {
         ),
         Stage(
             name="diarize",
+            runner="diarize",
             shape=StageShape.APPEND_ROWS,
             table="documents",
             read_columns=("doc_id", "audio_path"),
@@ -96,6 +97,7 @@ STAGES: dict[str, Stage] = {
         # path bit-for-bit. The actor reads the doc's turns itself.
         Stage(
             name="voiceprint",
+            runner="voiceprint",
             shape=StageShape.APPEND_ROWS,
             table="documents",
             read_columns=("doc_id", "audio_path"),

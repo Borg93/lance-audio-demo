@@ -229,7 +229,7 @@ SPEAKER_TURNS_STORAGE_VERSION: Final = "2.2"
 # `--min-turn-duration` gate, keyed logically by (doc_id, turn_id) — the same
 # key as the matching speaker_turns row. `embedding` is the L2-normalized 256-d
 # output of pyannote community-1's internal WeSpeaker-ResNet34 encoder (see
-# `ratch.modalities.av.voiceprint`; the raw model outputs are NOT unit-norm, the writer
+# `runners.voiceprint.voiceprint`; the raw model outputs are NOT unit-norm, the writer
 # normalizes before storing so cosine kNN is well-defined). `speaker_label` /
 # `start` / `end` / `duration` are denormalised from speaker_turns so a voice
 # kNN hit resolves to its turn without a join. Built offline by

@@ -11,7 +11,7 @@ pin the parts that would *silently mislabel a batch*: vote aggregation, the
 move/dry-run side effects.
 
 Everything that touches a model or ffmpeg is patched at the seam (the symbol as
-imported into ``ratch.modalities.av.asr.detect_language``), so the suite is fast + offline:
+imported into ``runners.asr.detect_language``), so the suite is fast + offline:
 
 - ``_mms_probe`` / ``_whisper_probe`` → a fake probe ``clip -> (lang_raw, prob)``
   we control, so no model is ever loaded.
@@ -27,10 +27,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from runners.asr import detect_language as dl
+from runners.asr.detect_language import detect_and_sort
 
 from ratch.errors import RatchError
-from ratch.modalities.av.asr import detect_language as dl
-from ratch.modalities.av.asr.detect_language import detect_and_sort
 
 # Default model id routes to the *whisper* probe branch; an mms-lid id routes to
 # the *mms* branch. We patch both so either branch yields our fake probe.

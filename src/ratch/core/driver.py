@@ -144,6 +144,8 @@ class _RowsActor:
 
 
 def _map_batches(source: ray.data.Dataset, actor_cls: type, stage: Stage, **ctor: Any) -> ray.data.Dataset:
+    from ratch.core.runners import runner_ray_remote_args
+
     return source.map_batches(
         actor_cls,
         batch_format="pyarrow",
@@ -152,6 +154,9 @@ def _map_batches(source: ray.data.Dataset, actor_cls: type, stage: Stage, **ctor
         num_cpus=stage.actor.num_cpus,
         num_gpus=stage.actor.num_gpus or None,
         fn_constructor_kwargs=ctor,
+        # Runner-backed stages get the runner's env on the workers (cluster mode;
+        # no-op locally) — the driver never carries a model dep.
+        **runner_ray_remote_args(stage.runner),
     )
 
 

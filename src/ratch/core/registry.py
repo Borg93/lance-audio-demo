@@ -71,6 +71,10 @@ class Stage(BaseModel):
     output_table: str | None = None
     media_gate: MediaGate | None = None
     client: str | None = None  # capability name the composition root must bind ("embed", …)
+    # The runners/<name>/ backing this stage's model (None = pure compute). THE
+    # legible map: a stage with runner= runs that runner's actor via map_batches;
+    # its deps come from the runner's env (per-stage runtime_env on a cluster).
+    runner: str | None = None
     actor: ActorConfig = ActorConfig()
 
     @model_validator(mode="after")

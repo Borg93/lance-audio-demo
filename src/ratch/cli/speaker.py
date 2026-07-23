@@ -4,7 +4,7 @@ stages `diarize`/`voiceprint` — `ratch pipeline run` — are the batch path;
 these single-process commands remain for small/ad-hoc runs.)
 
 Each handler parses its options, calls one library function (in
-:mod:`ratch.modalities.av.diarize`, :mod:`ratch.modalities.av.voiceprint`, or
+:mod:`runners.diarize.diarize`, :mod:`runners.voiceprint.voiceprint`, or
 :mod:`ratch.modalities.av.cluster`), and echoes a summary.
 """
 
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 
 if TYPE_CHECKING:
-    from ratch.modalities.av.diarize import SpeakerTurn
+    from runners.diarize.diarize import SpeakerTurn
 
 from ._app import CliContext, _die, _require_table, app
 
@@ -81,9 +81,8 @@ def cmd_extract_speaker_turns(
     the full corpus is slow.
     """
     import lancedb
+    from runners.diarize.diarize import Diarizer, existing_doc_ids, write_speaker_turns
     from tqdm import tqdm
-
-    from ratch.modalities.av.diarize import Diarizer, existing_doc_ids, write_speaker_turns
 
     from ..ingest.audio import resolve_source
 
@@ -242,16 +241,15 @@ def cmd_embed_speaker_turns(
     ``--only-null``. Turns shorter than ``--min-turn-duration`` are skipped.
     """
     import lancedb
-    from tqdm import tqdm
-
-    from ratch.modalities.av.diarize import existing_doc_ids
-    from ratch.modalities.av.voiceprint import (
+    from runners.diarize.diarize import existing_doc_ids
+    from runners.voiceprint.voiceprint import (
         TurnSpan,
         VoiceEncoder,
         embed_videos,
         speaker_embeddings_indexes,
         write_speaker_embeddings,
     )
+    from tqdm import tqdm
 
     from ..ingest.audio import resolve_source
 
@@ -386,8 +384,7 @@ def cmd_build_speakers(ctx: typer.Context) -> None:
     table is tiny, so each run rebuilds it wholesale.
     """
     import lancedb
-
-    from ratch.modalities.av.voiceprint import build_speakers
+    from runners.voiceprint.voiceprint import build_speakers
 
     cfg: CliContext = ctx.obj
     db = lancedb.connect(str(cfg.db))

@@ -197,8 +197,11 @@ class VoiceEncoder:
     """
 
     def __init__(self, *, model: str = DEFAULT_MODEL, device: str = "cpu") -> None:
-        import torch
-        from pyannote.audio import Model
+        # Model deps live OUTSIDE the core env (`--extra models` pre-merge; a
+        # runners/ Serve deployment at merge) — hence the ty ignores on these
+        # lazy imports.
+        import torch  # ty: ignore[unresolved-import]
+        from pyannote.audio import Model  # ty: ignore[unresolved-import]
 
         encoder = Model.from_pretrained(model, subfolder=EMBEDDING_SUBFOLDER)
         if encoder is None:
@@ -222,7 +225,7 @@ class VoiceEncoder:
         the padded frames out of the statistics (pyannote's ``StatsPool``
         interpolates the mask onto the model's frame resolution).
         """
-        import torch
+        import torch  # ty: ignore[unresolved-import]
 
         # The wrapper's samples→frames method; cast because nn.Module.__getattr__
         # types every dynamic attribute as Tensor | Module.

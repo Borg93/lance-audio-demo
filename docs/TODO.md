@@ -34,20 +34,30 @@ binding generalizing today's `client=`), so reading `features/stages.py` tells y
 exactly which stages are runner-backed and which are pure compute. ratch = pure
 orchestration; runners = the models.
 
-**Done:** ratch core model-free (`[models]` extra, lazy imports; `import ratch`
-loads no model); `runners/topics` + `runners/kg` (env + worker + Serve template);
-`ratch/endpoints/` sealed-env clients as the pre-Ray stand-in; `runners/` sits
-beside `services/` (no lance-ns `services/` namespace clash).
+**Done (EXECUTED 2026-07-21):** ratch core model-free (`import ratch` loads no
+model; model stack = `[models]` extra for local single-node runs). ALL five models
+live in `runners/`: topics, kg, **asr** (transcribe + detect_language), **diarize**,
+**voiceprint** — each with its own `pyproject.toml` env; diarize + voiceprint have
+`actor.py` (the Ray Data actor factories ratch imports). `Stage.runner=` declared
+on the runner-backed stages (`features/stages.py` is the legible map);
+`ratch/core/runners.py` builds the per-stage `runtime_env` from the runner's
+pyproject and the driver attaches it in `map_batches` when
+`RATCH_RUNNER_ISOLATION=1` (cluster mode; local single-node shares the driver env
+— no per-run pip of torch). `ray_av.py` is pure composition (only the model-free
+ffmpeg frames factory remains). `src/ratch/modalities/av/` holds ONLY pure compute
+(frames/thumbnails/download/cluster). ty fully clean.
 
-**📋 Left (merge-time, needs the Ray runtime to verify):**
-- `runners/{asr,diarize,voiceprint}/` — move the model code + envs out of
-  `ratch/modalities/av/` (currently in-process behind `--extra models`).
-- Each runner grows `actor.py` (the Ray Data actor class ratch imports).
-- ratch: `Stage.runner=` binding + driver wiring (`map_batches(..., runtime_env=
-  runner_env("asr"))`); retire the `[models]` extra + the endpoints sealed-subprocess
-  path once actors are live.
+**📋 Left (merge-time — needs the live Ray cluster to verify):**
+- Verify `RATCH_RUNNER_ISOLATION=1` on a real cluster (per-stage runtime_env pip
+  resolution + GPU actors) — the wiring is in, unverifiable on one box.
 - `runners/{embed,rerank,caption,summarize}/` — the vLLM set joins the same shape
-  (offline actor + online Serve, one model two drivers).
+  (offline actor + online Serve deployment.py; one model, two drivers).
+- Retire the `[models]` extra + the `endpoints/` sealed-subprocess stand-in once
+  runners run isolated on the cluster; `topics`/`kg` gain `actor.py` when they
+  become in-pipeline stages (today they're one-shot workers).
+- The viewer's voice-upload encoder (`services/viewer/services/wespeaker.py`) is
+  the LAST in-process model (online, lazy imports, `--extra models` pre-merge) —
+  becomes a runners/ Serve deployment the annotator/viewer call at merge.
 
 ### ⏳ Diarization — full-corpus coverage
 - The `make speaker-turns` batch is backfilling `speaker_turns.lance` (resumable,

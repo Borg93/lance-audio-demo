@@ -11,8 +11,7 @@ Run:  uv run pytest tests/test_detect_language.py -v
 from __future__ import annotations
 
 import pytest
-
-from ratch.modalities.av.asr.detect_language import _plan_sample_starts
+from runners.asr.detect_language import _plan_sample_starts
 
 
 class TestPlanSampleStarts:
