@@ -1,6 +1,6 @@
 """Isolated Toponymy topic-modelling worker for ratch (`ratch feature topics`).
 
-Runs in its OWN env (services/models/topics/pyproject.toml). Toponymy pins
+Runs in its OWN env (runners/topics/pyproject.toml). Toponymy pins
 ``transformers<5``; that constraint lives only in this service's env and never
 enters the ratch project — the whole point of a separate model service. ratch
 calls it through ``ratch.endpoints.topics`` (a thin client), never imports it.

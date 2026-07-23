@@ -4,7 +4,7 @@ The graph is extracted from the press-conference transcripts by LightRAG
 (gemma-4-31B entity/relation extraction, Swedish), folded into four Lance
 tables (`kg_entities` / `kg_chunks` / `kg_mentions` / `kg_relationships`), and
 queried **live** by [lance-graph]'s Cypher engine via `GET/POST /api/graph/*`.
-How to (re)build the tables: [`services/models/kg/README.md`](../services/models/kg/README.md).
+How to (re)build the tables: [`runners/kg/README.md`](../runners/kg/README.md).
 
 ## The data model
 

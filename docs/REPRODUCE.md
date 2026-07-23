@@ -332,26 +332,26 @@ print('turns:', ds.count_rows(), '| videos:', len(set(ds.to_table(columns=['doc_
 A Swedish entity/relation graph extracted from the transcripts by **LightRAG**
 (gemma-4-31B), folded into four `kg_*` Lance tables that the `/api/graph` router
 queries live via **lance-graph**'s Cypher engine. **Full guide + knobs:
-[`services/models/kg/README.md`](../services/models/kg/README.md); how to use the graph +
+[`runners/kg/README.md`](../runners/kg/README.md); how to use the graph +
 Cypher cookbook: [`docs/GRAPH.md`](GRAPH.md).** Three steps because LightRAG's
 deps must stay **isolated** from the project venv:
 
 ```bash
 # 1. export chunks → JSONL (project venv)
-uv run python services/models/kg/export_chunks.py --db $DB --out kg_work/chunks.jsonl
+uv run python runners/kg/export_chunks.py --db $DB --out kg_work/chunks.jsonl
 
 # 2. LightRAG extraction (ISOLATED ephemeral env — never the project venv).
 #    Prefer your LOCAL Gemma at :8003 — single-tenant, no network, identical
 #    model to the shared remote. Resumable: re-run after any interruption.
 uv run --no-project --with lightrag-hku --with openai --with tiktoken \
     --with nano-vectordb --with networkx --with numpy \
-    python services/models/kg/build_kg.py --chunks kg_work/chunks.jsonl --work kg_work/rag \
+    python runners/kg/build_kg.py --chunks kg_work/chunks.jsonl --work kg_work/rag \
     --gemma-url http://localhost:8003/v1 --gleaning 0 --persist-interval 300 --dummy-embeddings
 
 # 3. fold LightRAG output → kg_* Lance tables (project venv). DETERMINISTIC:
 #    adapter.py + generic_sv.py clean junk + demote generic group/role/category
 #    nouns to OTHER by pure morphology/blocklist — no LLM, byte-stable re-runs.
-uv run --with networkx python services/models/kg/adapter.py --work kg_work/rag --db $DB
+uv run --with networkx python runners/kg/adapter.py --work kg_work/rag --db $DB
 ```
 
 Gate (tables built + counts):
@@ -364,7 +364,7 @@ curl -sS http://localhost:8101/api/graph/status   # {"built":true,"entities":…
 > with `--num-shards N --shard-index i` into per-shard `--work` dirs, then fold all
 > of them in one step 3 (`adapter.py --work dir0 dir1 … --db $DB`). The flags above
 > (debounced persists + dummy embeddings + `--gleaning 0`) take it from ~8 to ~190
-> docs/min — see `services/models/kg/README.md`.
+> docs/min — see `runners/kg/README.md`.
 >
 > **No restart needed.** The `/api/graph` router's **version-keyed cache** picks up
 > the rewritten `kg_*` tables on the next query — the `/graph` page updates without

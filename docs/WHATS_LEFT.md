@@ -244,8 +244,8 @@ Today inference is **split across two worlds** that don't share a runtime:
   `@batch_udf` with `merge_insert` null-fill for scan-derived columns, and a
   two-pass compute→attach with a **JSONL sidecar checkpoint** for blob-derived
   columns (frame embeds/captions). Orchestration is ad-hoc shell + Makefile
-  targets, with separate one-off scripts (`services/models/topics/worker.py`,
-  `services/models/kg/*`, `scripts/caption_eval.py`). **This is exactly the hand-rolled
+  targets, with separate one-off scripts (`runners/topics/worker.py`,
+  `runners/kg/*`, `scripts/caption_eval.py`). **This is exactly the hand-rolled
   concurrency + resume machinery Ray Data's `map_batches` + actor pool replaces.**
 - **Online** (the read side): the FastAPI backend calls the *same* vLLM servers
   per query for query-vector embedding and reranking. This is already cleanly
@@ -295,8 +295,8 @@ KubeRay CRDs):
   (RayJob) and Serve (RayService) definitions. This Kubernetes layer is the key
   piece that makes the actor model worth adopting at scale, vs. a hand-managed
   local Ray process.
-- **Stop having "separate scripts."** Fold `services/models/topics/worker.py`,
-  `services/models/kg/build_kg.py`, the eval scripts, etc. into the same Ray-driven
+- **Stop having "separate scripts."** Fold `runners/topics/worker.py`,
+  `runners/kg/build_kg.py`, the eval scripts, etc. into the same Ray-driven
   pipeline surface so they're **integrated with the rest of the codebase**
   (shared config, shared dataset handles, shared actors) rather than detached
   entrypoints with their own argument parsing and lifecycle.
@@ -344,7 +344,7 @@ versions, so fragments and superseded manifests pile up on disk.
   Tantivy FTS index** (an oversight: the FTS tail silently goes stale after an
   append) and it's manual + chunks-only.
 - `cleanup_old_versions()` is called in **exactly one place** — the KG adapter
-  (`services/models/kg/adapter.py`, `older_than=timedelta(0)`). **Every other table
+  (`runners/kg/adapter.py`, `older_than=timedelta(0)`). **Every other table
   never GCs**, so old versions accumulate indefinitely.
 
 **What's actually missing — the first-class maintenance story:**
@@ -913,7 +913,7 @@ choices follow once the data and runtime shapes settle.
 > full read of the inference stack (`src/ratch/vllm`, `features`, `ingest`,
 > `cli`, `serve-all.sh`, the Makefile), the backend (`backend/**`), the
 > storage/schema layer (`src/ratch/model/schema.py`, every `lance.write_dataset`
-> / index call), the KG scripts (`services/models/kg/*`), and the SvelteKit frontend.
+> / index call), the KG scripts (`runners/kg/*`), and the SvelteKit frontend.
 > Where a capability already exists in embryo (`/api/columns`, `ratch compact`,
 > the DI'd online embedder, the no-GPU FTS path) it's called out as such, so the
 > roadmap is about *finishing and reshaping* — not pretending the ground is bare.

@@ -1,6 +1,6 @@
 """Client for the `topics` model service (Toponymy topic modelling).
 
-The service lives in ``services/models/topics/`` with its own env (toponymy
+The service lives in ``runners/topics/`` with its own env (toponymy
 pins transformers<5, isolated from ratch). ratch calls it through this client
 and never imports toponymy. Pre-merge: run it in its sealed env
 (``LocalTopicsClient``). At merge: POST to the Ray Serve deployment
@@ -17,7 +17,7 @@ from typing import Protocol
 #: URL of the topics Ray Serve deployment; unset → run locally in the sealed env.
 _TOPICS_URL_ENV = "MEDIA_TOPICS_URL"
 #: The service dir whose pyproject defines the sealed env for the local path.
-_SERVICE_DIR = "services/models/topics"
+_SERVICE_DIR = "runners/topics"
 
 
 class TopicsClient(Protocol):
@@ -29,7 +29,7 @@ class TopicsClient(Protocol):
 class LocalTopicsClient:
     """Pre-merge impl: run the service's worker in ITS sealed env.
 
-    ``uv run --project services/models/topics`` resolves that dir's pyproject
+    ``uv run --project runners/topics`` resolves that dir's pyproject
     (transformers<5 etc.) — the conflicting deps never touch ratch's env. Same
     isolation the vLLM servers get, just process-local instead of over HTTP.
     """

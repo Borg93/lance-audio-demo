@@ -47,7 +47,7 @@ atlas = [
 
 # In-process model stack for running asr/diarize/voiceprint LOCALLY (pre-merge).
 # ratch's CORE is model-free: `import ratch` and the Ray Data orchestration load
-# NO model. At merge these run as `services/models/*` Ray Serve deployments and
+# NO model. At merge these run as `runners/*` Ray Serve deployments and
 # this extra is unneeded; pre-merge `uv sync --extra models` pulls them in for the
 # in-process actor path. Torch pinned to cu128 (driver 570.x -> CUDA 12.8).
 models = [
@@ -93,7 +93,7 @@ torchaudio = [{ index = "pytorch-cu128" }]
 [dependency-groups]
 dev = [
     "pytest>=8.0",
-    # kg-adapter test loads services/models/kg/adapter.py (graph helpers) by path.
+    # kg-adapter test loads runners/kg/adapter.py (graph helpers) by path.
     "networkx>=3.0",
     "httpx>=0.27",
     "pytest-cov>=7.1.0",
@@ -140,4 +140,4 @@ include = ["src", "services", "tests"]
 # The project resolves transformers 5.x (via the ASR/torch stack); toponymy needs
 # transformers<5, and LightRAG is heavy — so these can't share the main env. They
 # are never imported by the typed package — exclude from type-checking.
-exclude = ["services/models"]
+exclude = ["runners"]

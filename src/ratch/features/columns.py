@@ -332,7 +332,7 @@ def _run_topics(
     """Toponymy topic layers — delegated to the `topics` MODEL SERVICE.
 
     ratch does not import toponymy; it calls the topics endpoint
-    (``ratch.endpoints.topics``). The service (``services/models/topics/``) owns
+    (``ratch.endpoints.topics``). The service (``runners/topics/``) owns
     the transformers<5 env — isolated from ratch, over HTTP at merge (Ray Serve)
     or in its sealed env locally. The service writes the ``topic_l*`` columns; we
     then derive the nested hierarchy JSON here (pure ratch compute). ``opts.url``,

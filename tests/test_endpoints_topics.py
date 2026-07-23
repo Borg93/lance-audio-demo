@@ -19,7 +19,7 @@ class TestLocalTopicsClient:
     def test_command_targets_the_service_sealed_env(self) -> None:
         cmd = LocalTopicsClient().command(Path("db.lance"), llm_url="http://x:8003/v1")
         assert cmd[:3] == ["uv", "run", "--project"]
-        assert cmd[3].endswith("services/models/topics")
+        assert cmd[3].endswith("runners/topics")
         assert cmd[4] == "topics-worker"
         assert "--db" in cmd and "db.lance" in cmd
         assert cmd[-2:] == ["--llm-url", "http://x:8003/v1"]

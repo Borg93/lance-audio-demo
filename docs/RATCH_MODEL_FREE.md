@@ -1,7 +1,7 @@
 # Making ratch model-free — the plan
 
 **Goal:** `ratch` = pure Ray Data orchestration over Lance, **zero model deps**.
-Every model (inference) lives in `services/models/<name>/` with its own env + Ray
+Every model (inference) lives in `runners/<name>/` with its own env + Ray
 Serve deployment; ratch calls it through a thin `ratch/endpoints/<name>.py` client.
 
 **Why:** once the input is Lance (medallion bronze blob), every model step —
@@ -13,7 +13,7 @@ deriver shape.
 
 ## The rule (why some things are services and some aren't)
 
-A model becomes a `services/models/*` service when **it runs inference** — full
+A model becomes a `runners/*` service when **it runs inference** — full
 stop, in the model-free target. (Pre-merge, the endpoint client keeps a local
 sealed impl so it still runs without a Serve cluster.) Pure compute — ffmpeg
 frames, thumbnails, download, clustering, the stage registry, ingest IO — stays
@@ -22,7 +22,7 @@ in ratch.
 ## Established pattern (done: `topics`, `kg`)
 
 ```
-services/models/<name>/
+runners/<name>/
   pyproject.toml     the service's OWN env (conflicting/heavy deps live here)
   worker.py          the compute (run() + CLI main())
   deployment.py      the Ray Serve @serve.deployment (merge-time online form)
@@ -38,13 +38,13 @@ ratch/endpoints/<name>.py   Protocol + Local<Name>Client (sealed env) +
 the one top-level model import (detect_language) made lazy. Verified: `import ratch`
 loads no torch/easytranscriber, `uv sync` (core) installs no model stack, 635 tests
 pass with only the non-model `multimodal`/`atlas` extras. `topics` + `kg` extracted
-to `services/models/*` (Ray Serve template). Model-running Make targets take
+to `runners/*` (Ray Serve template). Model-running Make targets take
 `--extra models`.
 
 **The correct pre-merge state for the actor models:** `asr`/`diarize`/`voiceprint`
 run inside Ray Data actors (per-batch). Their model-free form is the *merge-time*
 Serve-handle call — pre-merge they run **in-process** in the actor via the `[models]`
-extra. Physically relocating them to `services/models/*` only pays off once they are
+extra. Physically relocating them to `runners/*` only pays off once they are
 Ray Serve deployments (needs the merge runtime to build + verify); doing it blind
 here would put subprocess-per-batch in a hot actor loop. So they stay in
 `ratch/modalities/` **behind `[models]`** until merge, when they become Serve
@@ -53,7 +53,7 @@ deployments (template: `topics`/`kg`) and the actors call handles.
 ## TODO (remaining = merge-time)
 
 ### Phase 1 — asr  (easytranscriber / transformers 5 / torch)
-- [ ] `services/models/asr/` — pyproject (easytranscriber, torch, torchaudio),
+- [ ] `runners/asr/` — pyproject (easytranscriber, torch, torchaudio),
       worker.py (from `modalities/av/asr/{transcribe,detect_language}.py`),
       deployment.py, README
 - [ ] `ratch/endpoints/asr.py` — `AsrClient` (transcribe + detect-language) with
@@ -63,13 +63,13 @@ deployments (template: `topics`/`kg`) and the actors call handles.
 - [ ] verify: `import ratch` needs no easytranscriber; tests green
 
 ### Phase 2 — diarize  (pyannote)
-- [ ] `services/models/diarize/` (pyannote env) + worker + deployment + README
+- [ ] `runners/diarize/` (pyannote env) + worker + deployment + README
 - [ ] `ratch/endpoints/diarize.py`
 - [ ] rewire `features/ray_av.py` + `cli/speaker.py`
 - [ ] verify
 
 ### Phase 3 — voiceprint  (wespeaker)
-- [ ] `services/models/voiceprint/` (wespeaker env) + worker + deployment + README
+- [ ] `runners/voiceprint/` (wespeaker env) + worker + deployment + README
 - [ ] `ratch/endpoints/voiceprint.py`
 - [ ] rewire `cli/speaker.py` + `features/ray_av.py`; decouple `model/schema.py`
       (it only needs the embedding DIM constant, not the model)
@@ -84,7 +84,7 @@ deployments (template: `topics`/`kg`) and the actors call handles.
 - [ ] full test suite green
 
 ### Phase 5 — docs
-- [ ] `services/models/README.md` — the pattern + the rule
+- [ ] `runners/README.md` — the pattern + the rule
 - [ ] update the architecture doc: ratch = Ray Data over Lance; models = services;
       the deriver-stage-calls-Serve-handle mechanism
 - [ ] mark this TODO done
