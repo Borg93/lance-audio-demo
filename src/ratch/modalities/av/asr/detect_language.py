@@ -28,8 +28,6 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from easytranscriber.audio import read_audio_segment
-
 from ratch.errors import RatchError
 
 from .transcribe import DEFAULT_EMISSIONS_MODEL
@@ -43,6 +41,15 @@ if TYPE_CHECKING:
     LangProbe = Callable[[np.ndarray], tuple[str, float]]
 
 logger = logging.getLogger(__name__)
+
+
+def read_audio_segment(*args, **kwargs):
+    """Lazy shim over easytranscriber's reader — the model stack is a ``[models]``
+    extra, imported only when a segment is actually read, so the pure helpers
+    below (windowing / scoring / sorting) import and test without it."""
+    from easytranscriber.audio import read_audio_segment as _ras
+
+    return _ras(*args, **kwargs)
 
 # Files we actually want to sort. Everything else (images, docs, …) is ignored.
 AUDIO_VIDEO_EXTS: frozenset[str] = frozenset(

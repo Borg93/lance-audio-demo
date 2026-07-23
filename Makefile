@@ -82,7 +82,7 @@ MODEL     ?= KBLab/kb-whisper-large
 VAD       ?= pyannote
 DEVICE    ?= cuda
 transcribe:           ## Run easytranscriber → writes output/alignments/*.json.
-	uv run ratch transcribe \
+	uv run --extra models ratch transcribe \
 		--audio-dir $(AUDIO_DIR) \
 		--language  $(LANGUAGE) \
 		--model     $(MODEL) \
@@ -90,7 +90,7 @@ transcribe:           ## Run easytranscriber → writes output/alignments/*.json
 		--device    $(DEVICE)
 
 detect-language:      ## Sort $(AUDIO_DIR)/*.{mp4,wav,…} into $(AUDIO_DIR)/<lang>/ subfolders.
-	uv run ratch detect-language --audio-dir $(AUDIO_DIR) --device $(DEVICE)
+	uv run --extra models ratch detect-language --audio-dir $(AUDIO_DIR) --device $(DEVICE)
 
 # ─── Download from the Riksarkivet CSV (resumable, concurrent) ──────────────
 download:             ## Bulk-download videos listed in $(METADATA_CSV) → $(AUDIO_DIR).
@@ -141,7 +141,7 @@ reindex-fts:          ## Rebuild the FTS index with a different language/config 
 # silero VAD for reproducibility — override to use pyannote.
 pipeline:             ## Transcribe + thumbnail + ingest for $(LANGUAGE) on GPU $(GPU).
 	@echo "── 1/3 transcribe ──────────────────────────────────────────────"
-	CUDA_VISIBLE_DEVICES=$(GPU) uv run ratch transcribe \
+	CUDA_VISIBLE_DEVICES=$(GPU) uv run --extra models ratch transcribe \
 		--audio-dir $(AUDIO_DIR) --language $(LANGUAGE) --vad $(VAD) \
 		--output-root $(OUTPUT_ROOT)
 	@echo "── 2/3 thumbnails ──────────────────────────────────────────────"
@@ -167,7 +167,7 @@ pipeline-sharded: shards  ## Transcribe all $(SHARDS) shards in parallel (one GP
 	@echo "Launching $(SHARDS) transcribe processes (one per GPU)."
 	@echo "Watch progress with: tail -f $(OUTPUT_ROOT)/shard{0..$$(($(SHARDS)-1))}.log"
 	@for i in $$(seq 0 $$(($(SHARDS)-1))); do \
-		CUDA_VISIBLE_DEVICES=$$i nohup uv run ratch transcribe \
+		CUDA_VISIBLE_DEVICES=$$i nohup uv run --extra models ratch transcribe \
 			--audio-dir $(AUDIO_DIR)/shard$$i --language $(LANGUAGE) --vad $(VAD) \
 			--output-root $(OUTPUT_ROOT) \
 			> $(OUTPUT_ROOT)/shard$$i.log 2>&1 & \
@@ -388,13 +388,13 @@ embed-chunk-frames:   ## Embed each chunk's frame → frame_embedding + IVF_PQ i
 	uv run --extra multimodal ratch --db $(DB) feature frame_embedding --url $(EMBED_URL)
 
 speaker-turns:        ## Diarize each video → speaker_turns.lance (who-spoke-when; needs pyannote + cached HF token).
-	uv run ratch --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+	uv run --extra models ratch --db $(DB) extract-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
 
 embed-speaker-turns:  ## Per-turn WeSpeaker 256-d voiceprints → speaker_embeddings.lance (GPU; shardable).
-	uv run ratch --db $(DB) embed-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
+	uv run --extra models ratch --db $(DB) embed-speaker-turns --audio-root $(AUDIO_DIR) $(if $(LIMIT),--limit $(LIMIT),)
 
 build-speakers:       ## Duration-weighted centroid per (doc, label) → speakers.lance.
-	uv run ratch --db $(DB) build-speakers
+	uv run --extra models ratch --db $(DB) build-speakers
 
 cluster-speakers:     ## Seeded EVōC over speakers → speaker_cluster (cross-video identities; needs atlas extra).
 	uv run --extra atlas ratch --db $(DB) cluster-speakers --seed 42 --validate

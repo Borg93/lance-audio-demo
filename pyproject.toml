@@ -15,11 +15,6 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "python-multipart>=0.0.9",
-    # Transcription stack. Torch pinned to a cu128 build: driver 570.x supports
-    # up to CUDA 12.8, and cu130 wheels fail to initialize ("driver too old").
-    "easytranscriber",
-    "torch==2.11.0+cu128",
-    "torchaudio==2.11.0+cu128",
     "pydantic-settings>=2.14.1",
     "fastmcp[apps]>=3.4.2",
     "lance-graph>=0.5.4",
@@ -48,6 +43,17 @@ atlas = [
     "evoc>=0.3.1",
     "numpy>=1.26",
     "scikit-learn>=1.1",
+]
+
+# In-process model stack for running asr/diarize/voiceprint LOCALLY (pre-merge).
+# ratch's CORE is model-free: `import ratch` and the Ray Data orchestration load
+# NO model. At merge these run as `services/models/*` Ray Serve deployments and
+# this extra is unneeded; pre-merge `uv sync --extra models` pulls them in for the
+# in-process actor path. Torch pinned to cu128 (driver 570.x -> CUDA 12.8).
+models = [
+    "easytranscriber",
+    "torch==2.11.0+cu128",
+    "torchaudio==2.11.0+cu128",
 ]
 
 # vLLM is NOT a project extra: its torch/torchaudio pins conflict with our
@@ -87,6 +93,8 @@ torchaudio = [{ index = "pytorch-cu128" }]
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    # kg-adapter test loads services/models/kg/adapter.py (graph helpers) by path.
+    "networkx>=3.0",
     "httpx>=0.27",
     "pytest-cov>=7.1.0",
 ]
