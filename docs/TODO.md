@@ -14,6 +14,30 @@ This file replaces the old root `TODO.md` (a closed-item changelog) and `todo2.m
 
 ## In flight
 
+### ⏳ ratch model-free — finish the runners/ extraction (merge-time)
+*Full plan + rationale: [RATCH_MODEL_FREE.md](RATCH_MODEL_FREE.md). Pick up here.*
+
+**Done (this session, on main):** ratch's CORE is model-free — `easytranscriber`/
+`torch`/`torchaudio` are a `[models]` optional extra, the one top-level model import
+(`detect_language`) is lazy; `import ratch` + the Ray Data path load no model. Model
+services live in top-level **`runners/<name>/`** (own env + `deployment.py` Ray Serve
++ README), called via **`ratch/endpoints/<name>.py`** (Protocol + Local[sealed] +
+Remote[Serve] + factory). **`runners/topics`** and **`runners/kg`** are extracted as
+the template. `runners/` sits beside `services/` (NOT under it) so it can't clash with
+lance-ns `services/{catalog,lineage,medallion,compaction}` at merge.
+
+**📋 Left (merge-time — needs the Ray Serve runtime to build + verify):**
+- Extract **asr / diarize / voiceprint** → `runners/{asr,diarize,voiceprint}/` as Ray
+  Serve deployments, replicating `runners/topics` (pyproject env + `deployment.py` +
+  `ratch/endpoints/<name>.py` client). They run **per-batch inside Ray Data actors**,
+  so their model-free form is the Serve-handle call — pre-merge they run in-process via
+  `--extra models` (that's why they're deferred; extracting blind would put subprocess-
+  per-batch in a hot actor loop, and there's no GPU/Serve here to verify).
+- Then remove `[models]` from ratch entirely + `grep` no torch/easytranscriber/pyannote/
+  wespeaker under `src/ratch/`.
+- The vLLM model set (embed/rerank/caption/summarize) also becomes `runners/*` at merge
+  (endpoint clients already env-URL-agnostic in `ratch/clients/`).
+
 ### ⏳ Diarization — full-corpus coverage
 - The `make speaker-turns` batch is backfilling `speaker_turns.lance` (resumable,
   ~2–4 min/video on a shared GPU → ~1–2 days for all ~1,576). Shipped + live for
