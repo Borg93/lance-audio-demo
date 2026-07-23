@@ -14,29 +14,40 @@ This file replaces the old root `TODO.md` (a closed-item changelog) and `todo2.m
 
 ## In flight
 
-### ⏳ ratch model-free — finish the runners/ extraction (merge-time)
-*Full plan + rationale: [RATCH_MODEL_FREE.md](RATCH_MODEL_FREE.md). Pick up here.*
+### ⏳ runners/ = every model's home; ratch drives them (USER-DECIDED architecture)
+*Full plan: [RATCH_MODEL_FREE.md](RATCH_MODEL_FREE.md). Pick up here.*
 
-**Done (this session, on main):** ratch's CORE is model-free — `easytranscriber`/
-`torch`/`torchaudio` are a `[models]` optional extra, the one top-level model import
-(`detect_language`) is lazy; `import ratch` + the Ray Data path load no model. Model
-services live in top-level **`runners/<name>/`** (own env + `deployment.py` Ray Serve
-+ README), called via **`ratch/endpoints/<name>.py`** (Protocol + Local[sealed] +
-Remote[Serve] + factory). **`runners/topics`** and **`runners/kg`** are extracted as
-the template. `runners/` sits beside `services/` (NOT under it) so it can't clash with
-lance-ns `services/{catalog,lineage,medallion,compaction}` at merge.
+**The decided model (2026-07-21):** `runners/<name>/` owns EVERY conflicting-env /
+heavy model — **offline AND online**. A runner is the model's home: its env
+(`pyproject.toml`) + its **actor code**. How it's driven is orthogonal:
 
-**📋 Left (merge-time — needs the Ray Serve runtime to build + verify):**
-- Extract **asr / diarize / voiceprint** → `runners/{asr,diarize,voiceprint}/` as Ray
-  Serve deployments, replicating `runners/topics` (pyproject env + `deployment.py` +
-  `ratch/endpoints/<name>.py` client). They run **per-batch inside Ray Data actors**,
-  so their model-free form is the Serve-handle call — pre-merge they run in-process via
-  `--extra models` (that's why they're deferred; extracting blind would put subprocess-
-  per-batch in a hot actor loop, and there's no GPU/Serve here to verify).
-- Then remove `[models]` from ratch entirely + `grep` no torch/easytranscriber/pyannote/
-  wespeaker under `src/ratch/`.
-- The vLLM model set (embed/rerank/caption/summarize) also becomes `runners/*` at merge
-  (endpoint clients already env-URL-agnostic in `ratch/clients/`).
+- **offline batch** — ratch's Ray Data stages IMPORT the runner's actor class and
+  run it via `map_batches(RunnerActor, runtime_env=<that runner's env>)`. Ray's
+  per-stage `runtime_env` resolves the conflicting deps ON THE WORKERS; ratch's
+  driver env never carries a model. (This replaces the pre-merge sealed-subprocess
+  path in `ratch/endpoints/` — subprocess-per-batch must never sit in an actor loop.)
+- **online** — the same runner exposes `deployment.py` (Ray Serve) for query-time /
+  interactive use (embed, rerank, assist).
+
+**The clarity rule:** ratch's `Stage` declares its runner EXPLICITLY (a `runner=`
+binding generalizing today's `client=`), so reading `features/stages.py` tells you
+exactly which stages are runner-backed and which are pure compute. ratch = pure
+orchestration; runners = the models.
+
+**Done:** ratch core model-free (`[models]` extra, lazy imports; `import ratch`
+loads no model); `runners/topics` + `runners/kg` (env + worker + Serve template);
+`ratch/endpoints/` sealed-env clients as the pre-Ray stand-in; `runners/` sits
+beside `services/` (no lance-ns `services/` namespace clash).
+
+**📋 Left (merge-time, needs the Ray runtime to verify):**
+- `runners/{asr,diarize,voiceprint}/` — move the model code + envs out of
+  `ratch/modalities/av/` (currently in-process behind `--extra models`).
+- Each runner grows `actor.py` (the Ray Data actor class ratch imports).
+- ratch: `Stage.runner=` binding + driver wiring (`map_batches(..., runtime_env=
+  runner_env("asr"))`); retire the `[models]` extra + the endpoints sealed-subprocess
+  path once actors are live.
+- `runners/{embed,rerank,caption,summarize}/` — the vLLM set joins the same shape
+  (offline actor + online Serve, one model two drivers).
 
 ### ⏳ Diarization — full-corpus coverage
 - The `make speaker-turns` batch is backfilling `speaker_turns.lance` (resumable,
