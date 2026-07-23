@@ -322,7 +322,7 @@ def _search_all(ctx: SearchContext) -> list[dict[str, Any]]:
             continue
         try:
             rankings.append(_vector_leg(ctx, binding, vec, n=spec.n * 3))
-        except Exception:  # noqa: BLE001 — a wrong-dim / unbuilt leg just drops
+        except Exception:
             logger.warning("vector leg %r dropped from 'all' search", binding.column, exc_info=True)
 
     fused = rrf_fuse(rankings, key_fields=target.key_fields)

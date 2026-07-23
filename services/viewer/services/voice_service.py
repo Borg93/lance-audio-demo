@@ -360,7 +360,7 @@ def _attach_captions(handle: DatasetHandle, bindings: VoiceBindings, hits: list[
             )
             .to_pylist()
         )
-    except Exception:  # noqa: BLE001 — caption is decorative on a hit; never fail a search
+    except Exception:
         logger.warning("caption attach failed", exc_info=True)
         return
     by_key = {
@@ -399,7 +399,7 @@ def _attach_speaker_clusters(
             )
             .to_pylist()
         )
-    except Exception:  # noqa: BLE001 — the cluster id is decorative on a hit; never fail a search
+    except Exception:
         logger.warning("speaker_cluster attach failed", exc_info=True)
         return
     by_key = {(r[_TURN_DOC], r[_TURN_SPEAKER]): r[_SPEAKER_CLUSTER] for r in rows}

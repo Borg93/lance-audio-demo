@@ -131,7 +131,7 @@ def resolve_target(handle: DatasetHandle) -> SearchTarget:
             continue
         try:
             tables[binding.table] = handle.db.open_table(binding.table)
-        except Exception:  # noqa: BLE001 — one missing leg table must not kill fts/semantic
+        except Exception:
             logger.warning("vector-binding table %s failed to open", binding.table, exc_info=True)
 
     alignments_column: str | None = None

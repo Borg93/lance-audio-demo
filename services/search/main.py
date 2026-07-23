@@ -17,11 +17,14 @@ from fastapi import FastAPI
 from common.core.handlers import register_handlers
 from common.core.middleware import register_middleware
 from common.core.probes import router as probes_router
+from common.obs import configure_app_logging
 from common.state import AppState, dataset_handle
 from search.api.v1.router import router as api_router
 from search.core.config import get_search_settings
 
 logger = logging.getLogger(__name__)
+
+configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (lance-ns obs contract)
 
 
 @asynccontextmanager

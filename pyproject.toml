@@ -20,6 +20,13 @@ dependencies = [
     "lance-graph>=0.5.4",
     "ray[data]>=2.56.0",
     "lance-ray>=0.4.2",
+    # OpenTelemetry — same core set as lance-ns (services run under the
+    # opentelemetry-instrument launcher on the cluster; without the launcher +
+    # OTEL_* env these are inert, so local runs are unchanged).
+    "opentelemetry-distro>=0.64b0",
+    "opentelemetry-exporter-otlp>=1.43.0",
+    "opentelemetry-instrumentation-fastapi>=0.64b0",
+    "opentelemetry-instrumentation-httpx>=0.64b0",
 ]
 
 [project.optional-dependencies]

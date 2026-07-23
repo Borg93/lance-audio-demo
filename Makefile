@@ -195,6 +195,17 @@ services-up:          ## Start viewer(:8101) + search(:8102) + annotator(:8103) 
 	  (MEDIA_DB=$(DB) nohup uv run python -c "from $$svc.main import run; run()" > /tmp/lance-$$svc.log 2>&1 &) ; done
 	@sleep 6; for p in 8101 8102 8103; do curl -sf -o /dev/null http://127.0.0.1:$$p/livez && echo ":$$p up" || echo ":$$p DOWN"; done
 
+# The lance-ns observability contract: the SDK activates ONLY under the
+# opentelemetry-instrument launcher (this is how the pods run at merge).
+# Requires a collector: set OTEL_EXPORTER_OTLP_ENDPOINT (+ OTEL_METRICS_EXPORTER=otlp
+# — Python defaults metrics to none). Plain `services-up` stays launcher-free.
+services-up-otel:     ## services-up under the OTel launcher (needs OTEL_EXPORTER_OTLP_ENDPOINT).
+	@test -n "$(OTEL_EXPORTER_OTLP_ENDPOINT)" || (echo "Set OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4317"; exit 2)
+	@for svc in viewer search annotator; do \
+	  (MEDIA_DB=$(DB) OTEL_SERVICE_NAME=lance-media-$$svc OTEL_METRICS_EXPORTER=otlp \
+	   nohup uv run opentelemetry-instrument python -c "from $$svc.main import run; run()" > /tmp/lance-$$svc.log 2>&1 &) ; done
+	@sleep 6; for p in 8101 8102 8103; do curl -sf -o /dev/null http://127.0.0.1:$$p/livez && echo ":$$p up" || echo ":$$p DOWN"; done
+
 services-down:        ## Stop the three services by port.
 	@for p in 8101 8102 8103; do kill $$(lsof -ti :$$p) 2>/dev/null || true; done; echo stopped
 

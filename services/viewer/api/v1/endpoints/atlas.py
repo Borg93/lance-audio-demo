@@ -205,7 +205,7 @@ def _attach_frame_captions(handle: DatasetHandle, rows: list[dict[str, Any]]) ->
             by_key = {hit_key(r): r.get(column) for r in frame_rows}
             for hit in batch:
                 hit[caption_key] = by_key.get(hit_key(hit))
-    except Exception:  # noqa: BLE001 — caption is decorative; never fail a fetch over it
+    except Exception:
         logger.warning("frame caption attach failed", exc_info=True)
 
 

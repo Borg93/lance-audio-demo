@@ -75,7 +75,7 @@ class DatasetHandle(BaseModel):
                 return  # someone refreshed while we waited — their read is current
             try:
                 fresh = table_info(self.table_uri(table), storage_options=self.storage_options)
-            except Exception:  # noqa: BLE001 — freshness is opportunistic, never fatal
+            except Exception:
                 logger.warning("table_info sync failed for %s/%s", self.id, table, exc_info=True)
                 return
             self.descriptor.tables = {**self.descriptor.tables, table: fresh}
