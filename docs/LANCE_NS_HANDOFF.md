@@ -210,3 +210,64 @@ problem+json, server-stamped reviewer round-trip).
 Training, GreptimeDB, and the query engine sequence after. NOTHING product-side
 remains before the merge: the lance-ns session does placement only (chart, Dapr,
 zones, runner images) per the Merge-mechanics section above.
+
+## The merge runbook (execute IN the lance-ns session, in this order)
+
+Constraints that hold throughout: **NO data move** (corpus tables stay on the
+lance-audio box; only annotations live in the catalog) · plain commit messages
+(no Co-Authored-By / Claude-Session trailers) · model deps never enter the
+shared image (runners/*/pyproject → images).
+
+1. **Fold code in — one collision:** `services/common` exists on BOTH sides.
+   Merge ours INTO theirs (`lancekit/`, `core/`, `schemas/`, `state.py`,
+   `deps.py`), checking name-by-name; **delete our `common/obs.py`** (theirs
+   wins by design — just add `viewer`,`search`,`annotator`,`ratch` to their
+   `_APP_LOGGERS`). Then copy `services/{viewer,search,annotator}` as-is (no
+   clashes; the shared image COPYs `services/` — zero dockerfile edits), and
+   `src/ratch` + `runners/` (deferrable; services don't import them).
+2. **Deps** into the ONE `pyproject.toml`: lancedb, python-multipart,
+   lance-graph, lance-namespace-urllib3-client (check pin vs their 0.9);
+   later ray[data] + lance-ray for the pipeline.
+3. **Chart:** Deployment+Service per service (pattern: `medallion.yaml`),
+   `services.<name>: {module: "<name>.main:app", port, daprAppId, replicas}`,
+   Dapr pod annotations, `lance.otelEnv` + `opentelemetry-instrument uvicorn`
+   behind `lance.otelEnabled` (our services already implement the contract).
+4. **Corpus mount (the one placement decision):** hostPath/extraMount the
+   lance-audio data dir into the three pods; `MEDIA_DB` points at it.
+5. **Env flip:** `MEDIA_READ/WRITE_BACKEND=catalog`,
+   `MEDIA_CATALOG_URI=http://<release>-rest-catalog:<port>`.
+6. **Create `annotations` through the catalog + settle the schema while
+   empty** (Q1's rule — the moment is NOW): add `created_at`/`updated_at` to
+   `EMPTY_SCHEMA` + stamp them in the save path; decide the training columns;
+   then create (see `scripts/seed_annotations.py::seed_catalog` for the exact
+   calls: `create?mode=overwrite`, Arrow-IPC stream, `policy/set` after).
+7. **Verify:** bring the fleet up →
+   `MEDIA_CATALOG_URL=<url> uv run pytest tests/test_catalog_live.py
+   tests/test_annotator_catalog_live.py` (from the folded tree) green → wire
+   the two `frontend.apps` zones (`media`, `annotator`; images per their
+   frontends convention) → browser smoke.
+8. **FGA-on rehearsal (the only never-tested path):** enable Dex+OpenFGA
+   values, grant the annotator identity the `writer` rung (create already
+   seeded `owner`), re-run step 7; expect our 403 DomainError translation to
+   surface denials cleanly.
+9. **Later queue:** runner images on KubeRay, vLLM runners, jobs wrapper +
+   assist Serve deployment, catalog-backed version history.
+
+### Paste-ready /goal for the lance-ns session
+
+    MERGE lance-media INTO this repo per docs/LANCE_NS_HANDOFF.md's runbook
+    (from the lance-audio checkout). All conditions hold: 1) code folded —
+    common merged into services/common name-by-name (our obs.py deleted, their
+    _APP_LOGGERS extended), viewer/search/annotator copied, deps in the one
+    pyproject; 2) chart registered — 3 services with Dapr annotations +
+    lance.otelEnv + otel launcher command, 2 frontend.apps zones; 3) corpus
+    hostPath-mounted, NO data migrated — only annotations live in the catalog;
+    4) annotations table created THROUGH the catalog with created_at/updated_at
+    settled into EMPTY_SCHEMA (+ stamped on save) BEFORE first rows; 5) the two
+    live test modules (test_catalog_live, test_annotator_catalog_live) green
+    against the in-cluster catalog URL, shown in the transcript; 6) FGA-on
+    rehearsal green (writer rung granted; a denial renders 403 problem+json);
+    7) their existing test/lint gates stay green; 8) committed with PLAIN
+    messages — no Co-Authored-By/Claude-Session trailers. If blocked on the
+    same error 3 consecutive turns, or after 40 turns, stop and summarize with
+    exact commands + errors.
