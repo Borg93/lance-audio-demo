@@ -15,13 +15,13 @@ from annotator.annotations.schema import ANNOTATIONS_TABLE, SaveResult
 from common.core.exceptions import ConflictError
 from common.lancekit.lineage_emit import emit_save
 from common.lancekit.predicate import isin
+from common.lancekit.reader import open_reader
 from common.lancekit.registry import table_dataset
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    import lance
-
+    from common.core.config import Settings
     from common.lancekit.registry import DatasetHandle
     from common.lancekit.writer import TableWriter
 
@@ -36,11 +36,6 @@ def check_base_version_value(current: int, base_version: int | None) -> None:
         )
 
 
-def check_base_version(ds: lance.LanceDataset, base_version: int | None) -> None:
-    """Optimistic-concurrency check against a dataset's current version."""
-    check_base_version_value(int(ds.version), base_version)
-
-
 def delete_by_ids(writer: TableWriter, ids: Sequence[str]) -> None:
     """Delete rows by id through the writer seam — quoted, injection-guarded."""
     writer.delete(isin("id", ids))
@@ -48,23 +43,26 @@ def delete_by_ids(writer: TableWriter, ids: Sequence[str]) -> None:
 
 def finalize_commit(
     handle: DatasetHandle,
-    ds: lance.LanceDataset,
+    settings: Settings,
     *,
     touched: int,
     unit_key: str,
-    sink: str,
 ) -> SaveResult:
-    """Close out a write: no-op → current version; else re-open the table for the new
-    version, emit the pre-merge OpenLineage RunEvent (at merge the catalog mover emits
-    instead), and report. Sink from settings (log|stdout|none)."""
-    if touched == 0:
-        return SaveResult(saved=0, version=int(ds.version))
-    fresh = table_dataset(handle, ANNOTATIONS_TABLE)
-    emit_save(
-        ds=fresh,
-        table_uri=handle.table_uri(ANNOTATIONS_TABLE),
-        table_name=ANNOTATIONS_TABLE,
-        unit_key=unit_key,
-        sink=sink,
-    )
-    return SaveResult(saved=touched, version=int(fresh.version))
+    """Close out a write: report the post-write version FROM THE READER SEAM and
+    emit the pre-merge OpenLineage RunEvent. In full catalog mode no local table is
+    touched — the version comes from the catalog and the catalog emits the RunEvent
+    for the same write (``effective_lineage_sink`` is ``none`` there)."""
+    table_id = settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
+    fresh = None if settings.rest_catalog_mode else table_dataset(handle, ANNOTATIONS_TABLE)
+    reader = open_reader(dataset=fresh, table_id=table_id, settings=settings)
+    version = reader.table_version()
+    sink = settings.effective_lineage_sink
+    if touched and sink != "none" and fresh is not None:
+        emit_save(
+            ds=fresh,
+            table_uri=handle.table_uri(ANNOTATIONS_TABLE),
+            table_name=ANNOTATIONS_TABLE,
+            unit_key=unit_key,
+            sink=sink,
+        )
+    return SaveResult(saved=touched, version=version)

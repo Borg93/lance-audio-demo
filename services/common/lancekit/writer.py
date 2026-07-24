@@ -191,7 +191,7 @@ class RestCatalogWriteTransport:
 
 def open_writer(
     *,
-    dataset: lance.LanceDataset,
+    dataset: lance.LanceDataset | None,
     table_id: list[str],
     settings: Settings,
 ) -> TableWriter:
@@ -202,6 +202,8 @@ def open_writer(
     when ``MEDIA_CATALOG_URI`` is set, else the in-process :class:`LocalCatalogWriteTransport`.
     """
     if settings.write_backend != "catalog":
+        if dataset is None:
+            raise ValueError("direct write path requires an opened dataset")
         return LanceTableWriter(dataset)
     if settings.catalog_uri:
         transport: CatalogWriteTransport = RestCatalogWriteTransport(
@@ -211,5 +213,7 @@ def open_writer(
             token=settings.catalog_token,
         )
     else:
+        if dataset is None:
+            raise ValueError("in-process catalog fallback requires an opened dataset")
         transport = LocalCatalogWriteTransport(dataset)
     return CatalogTableWriter(transport, list(table_id))

@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     catalog_uri: str | None = Field(default=None, alias="MEDIA_CATALOG_URI")
     catalog_delimiter: str = Field(default="$", alias="MEDIA_CATALOG_DELIMITER")
     catalog_token: str | None = Field(default=None, alias="MEDIA_CATALOG_TOKEN")
+    # The catalog namespace annotation tables live under; unset → the dataset id.
+    catalog_namespace: str | None = Field(default=None, alias="MEDIA_CATALOG_NAMESPACE")
 
     # OpenLineage emission on annotation writes (pre-merge; lance-ns's mover emits at
     # merge). "stdout"/"log" write a spec-2-0-2 RunEvent per save; "none" disables.
@@ -98,6 +100,34 @@ class Settings(BaseSettings):
         if v not in {"stdout", "log", "none"}:
             raise ValueError(f"MEDIA_LINEAGE_SINK must be stdout|log|none, got {v!r}")
         return v
+
+    def catalog_table_id(self, dataset_id: str, table: str) -> list[str]:
+        """The catalog identifier for a dataset's table — settings-derived, never
+        hardcoded: ``MEDIA_CATALOG_NAMESPACE`` when set, else the dataset id.
+
+        Guards the catalog's id grammar: the delimiter inside a segment would
+        silently split the identifier server-side into the wrong namespace/table.
+        """
+        namespace = self.catalog_namespace or dataset_id
+        for segment in (namespace, table):
+            if self.catalog_delimiter in segment:
+                raise ValueError(
+                    f"catalog id segment {segment!r} contains the delimiter "
+                    f"{self.catalog_delimiter!r} — set MEDIA_CATALOG_NAMESPACE to a clean name"
+                )
+        return [namespace, table]
+
+    @property
+    def rest_catalog_mode(self) -> bool:
+        """True when the annotations plane fully routes through a LIVE catalog —
+        both backends flipped AND a URI set. Mixed configurations keep the local
+        table in the loop (pre-merge safety), so paths gate on this, not on the
+        individual flags."""
+        return (
+            bool(self.catalog_uri)
+            and self.read_backend == "catalog"
+            and self.write_backend == "catalog"
+        )
 
     @property
     def effective_lineage_sink(self) -> str:

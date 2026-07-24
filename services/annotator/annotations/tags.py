@@ -13,7 +13,7 @@ from urllib.parse import quote
 import pyarrow as pa
 from fastapi import APIRouter
 
-from annotator.annotations.commit import check_base_version, delete_by_ids, finalize_commit
+from annotator.annotations.commit import check_base_version_value, delete_by_ids, finalize_commit
 from annotator.annotations.schema import (
     ANNOTATIONS_TABLE,
     NewAnnotation,
@@ -26,6 +26,7 @@ from common.core.exceptions import ValidationError
 from common.deps import AuthorDep, DatasetParam, StateDep
 from common.lancekit.descriptor import Declared
 from common.lancekit.keys import validate_doc_key
+from common.lancekit.reader import open_reader
 from common.lancekit.registry import table_dataset
 from common.lancekit.writer import open_writer
 from common.state import dataset_handle
@@ -94,15 +95,16 @@ def apply_tags(
     handle = dataset_handle(state, dataset)
     declared = handle.descriptor.declared
     check_keys_arity(declared, [*body.adds, *body.removes])
-    ds = table_dataset(handle, ANNOTATIONS_TABLE)  # raises NotFoundError if unseeded
+    ds = None if state.settings.rest_catalog_mode else table_dataset(handle, ANNOTATIONS_TABLE)
     # Optimistic concurrency degrades to table-GLOBAL for a cross-unit batch; optional +
-    # last-write-wins per deterministic id is the pragmatic contract.
-    check_base_version(ds, body.base_version)
+    # last-write-wins per deterministic id is the pragmatic contract. Version + schema
+    # come from the reader seam so catalog mode checks against the catalog's truth.
+    table_id = state.settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
+    reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings)
+    check_base_version_value(reader.table_version(), body.base_version)
 
-    delta = tag_rows(body.adds, declared, author=author, schema=ds.schema)
-    writer = open_writer(
-        dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
-    )
+    delta = tag_rows(body.adds, declared, author=author, schema=reader.schema)
+    writer = open_writer(dataset=ds, table_id=table_id, settings=state.settings)
     touched = 0
     if delta.num_rows:
         # INSERT-ONLY (not upsert): a tag that already exists is left untouched, so a
@@ -122,10 +124,9 @@ def apply_tags(
 
     result = finalize_commit(
         handle,
-        ds,
+        state.settings,
         touched=touched,
         unit_key=f"tags:{len(body.adds)}+{len(body.removes)}",
-        sink=state.settings.effective_lineage_sink,
     )
     if touched:
         logger.info(

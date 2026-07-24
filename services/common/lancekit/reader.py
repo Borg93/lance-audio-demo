@@ -71,6 +71,8 @@ class TableReader(Protocol):
 
     def count_rows(self, filter: str | None = None) -> int: ...
 
+    def table_version(self) -> int: ...
+
     @property
     def schema(self) -> pa.Schema: ...
 
@@ -100,6 +102,9 @@ class LanceTableReader:
 
     def count_rows(self, filter: str | None = None) -> int:
         return self._ds.count_rows(filter)
+
+    def table_version(self) -> int:
+        return int(self._ds.version)
 
     @property
     def schema(self) -> pa.Schema:
@@ -328,7 +333,7 @@ class RestCatalogTransport:
 
 def open_reader(
     *,
-    dataset: lance.LanceDataset,
+    dataset: lance.LanceDataset | None,
     table_id: list[str],
     settings: Settings,
 ) -> TableReader:
@@ -342,6 +347,8 @@ def open_reader(
     paths and is unused by the REST path.
     """
     if settings.read_backend != "catalog":
+        if dataset is None:
+            raise ValueError("direct read path requires an opened dataset")
         return LanceTableReader(dataset)
     if settings.catalog_uri:
         transport: CatalogTransport = RestCatalogTransport(
@@ -350,6 +357,8 @@ def open_reader(
             token=settings.catalog_token,
         )
     else:
+        if dataset is None:
+            raise ValueError("in-process catalog fallback requires an opened dataset")
         transport = LocalCatalogTransport(dataset)
     return CatalogTableReader(transport, list(table_id))
 

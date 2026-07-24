@@ -184,6 +184,29 @@ auth/FGA off = their default) and the whole loop passed through OUR transports:
   our own emit no-ops on the catalog path (`Settings.effective_lineage_sink` —
   asserted in the test) so runs are never double-counted.
 
-Training, GreptimeDB, and the query engine sequence after; the annotator service's
-full catalog-mode save path (wiring `table_version()` into its wire GET) is the
-next increment on our side.
+**Milestone 2 — PROVEN 2026-07-24 (service-level catalog mode):** the REAL
+annotator service booted with `MEDIA_READ/WRITE_BACKEND=catalog` and the whole
+product ran through the catalog — the wire GET's `X-Annotations-Version` and the
+save/tags 409 check now source from the reader seam's `table_version()` (the
+catalog's version primitive; the live service showed catalog v1 while the local
+table sat at v570), the save's carry-forward read comes from the catalog table,
+and the browser suites passed in that mode (annotator 19/19 + temporal 18/18;
+E2E seeding routes through the catalog via `seed_catalog` — `create?mode=overwrite`).
+Direct mode stays byte-identical (full 51 green) and remains the default. The
+catalog table id is settings-derived (`MEDIA_CATALOG_NAMESPACE`, else the dataset
+id). Scope note: the version-HISTORY surface (`/versions` listing + `?version=N`
+time-travel) stays direct/local pre-merge by design — the catalog's version
+routes adopt it at merge; every wire response now carries
+`X-Annotations-Version-Source: catalog|direct|local` so the two version
+number-spaces can never be silently mixed. Adversarially reviewed (10 confirmed
+findings applied): the wire GET reads the version BEFORE the rows (fail-safe
+TOCTOU direction — an interleaved commit yields a spurious 409, never a silent
+lost update), full catalog mode opens NO local table on any route (a
+catalog-only deployment serves the catalog's truth or degrades explicitly), and
+the catalog id grammar is guarded against delimiter collisions. Evidence:
+`tests/test_annotator_catalog_live.py` (the real FastAPI app, 409 as
+problem+json, server-stamped reviewer round-trip).
+
+Training, GreptimeDB, and the query engine sequence after. NOTHING product-side
+remains before the merge: the lance-ns session does placement only (chart, Dapr,
+zones, runner images) per the Merge-mechanics section above.

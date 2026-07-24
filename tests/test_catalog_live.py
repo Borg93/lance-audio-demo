@@ -41,7 +41,10 @@ pytestmark = pytest.mark.skipif(
 
 #: The milestone-1 annotations schema: descriptor identity + the 25 contract
 #: columns + the settle-while-empty additions (t_start/t_end/frame_idx already
-#: sit in the contract; created_at/updated_at are the additions).
+#: sit in the contract). created_at/updated_at are FIXTURE-ONLY here: they enter
+#: EMPTY_SCHEMA (and get stamped by the service) at the merge's table-create,
+#: per the handoff's settle-while-empty rule — the service today neither has nor
+#: writes them.
 SCHEMA = pa.schema(
     [
         ("doc_id", pa.string()),

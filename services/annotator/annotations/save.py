@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 import pyarrow as pa
 from fastapi import APIRouter
 
-from annotator.annotations.commit import check_base_version, delete_by_ids, finalize_commit
+from annotator.annotations.commit import check_base_version_value, delete_by_ids, finalize_commit
 from annotator.annotations.schema import (
     ANNOTATIONS_TABLE,
     EDITABLE_FIELDS,
@@ -24,6 +24,7 @@ from annotator.annotations.schema import (
 )
 from common.deps import AuthorDep, DatasetParam, StateDep
 from common.lancekit.keys import chunk_key_filter, validate_doc_key
+from common.lancekit.reader import open_reader
 from common.lancekit.registry import table_dataset
 from common.lancekit.writer import open_writer
 from common.state import dataset_handle
@@ -66,11 +67,19 @@ def save_annotations(
     handle = dataset_handle(state, dataset)
     declared = handle.descriptor.declared
     doc_id = validate_doc_key(declared, doc_id)
-    ds = table_dataset(handle, ANNOTATIONS_TABLE)  # raises NotFoundError if absent
-    check_base_version(ds, body.base_version)
+    # Full catalog mode never opens the local replica (the catalog 404s absent
+    # tables through the error translation); any other config keeps local resolution.
+    ds = None if state.settings.rest_catalog_mode else table_dataset(handle, ANNOTATIONS_TABLE)
+    # The version check AND the carry-forward read both go through the reader seam:
+    # in catalog mode the catalog table is the truth (patching against a stale local
+    # copy would resurrect old fields), and the 409 compares the version the client
+    # loaded against the same source the wire GET served it from.
+    table_id = state.settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
+    reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings)
+    check_base_version_value(reader.table_version(), body.base_version)
 
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
-    current = ds.to_table(filter=where)
+    current = reader.to_table(filter=where)
 
     # edits (patch existing) + inserts (new shapes) commit in ONE merge_insert; the
     # source is the union, keyed by id — matched ⇒ update, unmatched ⇒ insert.
@@ -96,9 +105,7 @@ def save_annotations(
 
     # Writes flow through the writer seam (direct default = byte-identical; catalog
     # merge_insert/delete at merge, which yields OpenFGA + OpenLineage for free).
-    writer = open_writer(
-        dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
-    )
+    writer = open_writer(dataset=ds, table_id=table_id, settings=state.settings)
     touched = 0
     if delta.num_rows:
         writer.merge_upsert(delta, "id")
@@ -109,10 +116,9 @@ def save_annotations(
 
     result = finalize_commit(
         handle,
-        ds,
+        state.settings,
         touched=touched,
         unit_key=f"{doc_id}/{speech_id}/{chunk_id}",
-        sink=state.settings.effective_lineage_sink,
     )
     if touched:
         logger.info(

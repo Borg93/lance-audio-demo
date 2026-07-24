@@ -52,32 +52,67 @@ def annotations(
     handle = dataset_handle(state, dataset)
     declared = handle.descriptor.declared
     doc_id = validate_doc_key(declared, doc_id)
-    try:
-        ds = table_dataset(handle, ANNOTATIONS_TABLE)
-    except NotFoundError:
-        # No annotations table yet — serve an empty stream so the client renders 0.
-        return Response(
-            content=ipc_stream(EMPTY_SCHEMA.empty_table()),
-            media_type=ARROW_STREAM,
-            headers={"Cache-Control": "no-store", "X-Annotations-Version": "0"},
-        )
+    settings = state.settings
+    # In full catalog mode the catalog table is the truth — the local replica is
+    # not opened at all (a catalog-only deployment must not 404 on a missing local
+    # directory). Any other configuration keeps today's local resolution.
+    ds = None
+    if version is not None or not settings.rest_catalog_mode:
+        try:
+            ds = table_dataset(handle, ANNOTATIONS_TABLE)
+        except NotFoundError:
+            # No annotations table yet — serve an empty stream so the client renders 0.
+            return _empty_stream_response()
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
     if version is not None:
-        # A historical read is a direct time-travel snapshot (read-only, off the hot
-        # path); the reader seam governs the current read.
+        # A historical read is a direct time-travel snapshot of the LOCAL lineage
+        # (read-only, off the hot path). Pre-merge scope: in catalog mode this is a
+        # DIFFERENT version number-space than the current-read header — the source
+        # header makes that explicit until the catalog's version routes take over.
+        assert ds is not None  # narrowed: the branch above always opened it
         table = checkout(ds, version).to_table(filter=where)
-        served_version = version
-    else:
-        # Reads flow through the reader seam (direct default = byte-identical; catalog
-        # /query at merge) — open_reader was built for exactly this.
-        reader = open_reader(
-            dataset=ds, table_id=[handle.id, ANNOTATIONS_TABLE], settings=state.settings
-        )
+        return _annotations_response(table, version, source="local")
+    # Reads flow through the reader seam (direct default = byte-identical; the
+    # catalog's /query in catalog mode) — and so does the VERSION the client echoes
+    # back on Save. The version is read BEFORE the rows: with monotonic versions an
+    # interleaved commit then yields a spurious 409 on the next save (client
+    # reloads) instead of a header claiming a version whose rows were never served
+    # — the fail-safe direction of the optimistic-concurrency contract.
+    reader = open_reader(
+        dataset=ds,
+        table_id=settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE),
+        settings=settings,
+    )
+    try:
+        served_version = reader.table_version()
         table = reader.to_table(filter=where)
-        served_version = int(ds.version)
-    # The loaded Lance version — the client echoes it on Save for optimistic concurrency.
+    except NotFoundError:
+        # Catalog mode, table not created in the catalog yet — same degrade as a
+        # missing local table: the client renders 0 annotations.
+        return _empty_stream_response()
+    source = "catalog" if settings.rest_catalog_mode else "direct"
+    return _annotations_response(table, served_version, source=source)
+
+
+def _empty_stream_response() -> Response:
+    return Response(
+        content=ipc_stream(EMPTY_SCHEMA.empty_table()),
+        media_type=ARROW_STREAM,
+        headers={"Cache-Control": "no-store", "X-Annotations-Version": "0"},
+    )
+
+
+def _annotations_response(table: pa.Table, version: int, *, source: str) -> Response:
+    """The wire response: rows + the version the client echoes on Save. The
+    ``source`` header names which version number-space the number belongs to
+    (``catalog`` vs the local ``direct``/``local`` lineage) so compare-versions
+    tooling can never silently mix the two pre-merge."""
     return Response(
         content=ipc_stream(table),
         media_type=ARROW_STREAM,
-        headers={"Cache-Control": "no-store", "X-Annotations-Version": str(served_version)},
+        headers={
+            "Cache-Control": "no-store",
+            "X-Annotations-Version": str(version),
+            "X-Annotations-Version-Source": source,
+        },
     )
